@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SKU 采购日志查询</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header"><div><div class="page-kicker">马帮流程 / 通用工具 / 采购日志</div><h1>SKU 采购日志查询</h1></div><div id="taskBadge" class="status-pill idle">待运行</div></header>
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>当前流程</span><strong>采购日志导出</strong><small>马帮 ERP</small></article>
+          <article class="overview-card"><span>SKU 数</span><strong id="skuCount">0</strong><small>已输入 SKU 数量</small></article>
+          <article class="overview-card"><span>查询记录</span><strong id="recordCount">0</strong><small>任务完成后更新</small></article>
+          <article class="overview-card file-card"><span>输出文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+        <section class="layout-grid">
+          <form id="purchaseLogForm" class="surface form-surface">
+            <div class="section-head"><div><h2>SKU 采购日志查询</h2><p>按 SKU 和采购日期范围查询采购日志，并导出 Excel。</p></div><span class="section-badge">通用工具</span></div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+            <div class="form-grid">
+              <label><span>开始日期</span><input id="startDate" type="date" /></label>
+              <label><span>结束日期</span><input id="endDate" type="date" /></label>
+              <label class="sku-field"><span>SKU 列表</span><textarea id="skuText" spellcheck="false" placeholder="一行一个 SKU"></textarea></label>
+            </div>
+            <div class="actions">
+              <button id="runBtn" class="primary" type="submit">开始查询并导出</button>
+              <button id="clearSkuBtn" class="secondary" type="button">清空 SKU</button>
+              <button id="openOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>后台任务实时输出</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260623-log-panel"></script>
+    <script src="../assets/pages/purchase-log.js?v=20260623-multipage"></script>
+  </body>
+</html>

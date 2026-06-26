@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shopee 广告充值</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header"><div><div class="page-kicker">紫鸟流程 / Shopee 广告 / 充值</div><h1>Shopee 广告充值</h1></div><div id="taskBadge" class="status-pill idle">待运行</div></header>
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>当前流程</span><strong>广告充值执行</strong><small>紫鸟浏览器</small></article>
+          <article class="overview-card"><span>匹配店铺</span><strong id="skuCount">0</strong><small>输入或匹配的店铺数</small></article>
+          <article class="overview-card"><span>处理店铺</span><strong id="recordCount">0</strong><small>任务完成后更新</small></article>
+          <article class="overview-card file-card"><span>任务输出</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+        <section class="layout-grid">
+          <form id="shopeeAdsForm" class="surface form-surface">
+            <div class="section-head"><div><h2>Shopee 广告充值</h2><p>选择站点后填写紫鸟账号和店铺名单，执行广告充值。</p></div><span class="section-badge">紫鸟流程</span></div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon ziniao-icon">Z</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a>
+            </div>
+            <div class="form-grid ads-form-main">
+              <label><span>充值站点</span><select id="shopeeAdsSite"></select></label>
+              <label><span>充值方式</span><select id="shopeeAdsMode"><option value="sheet">按钉钉表金额</option><option value="custom">自定义金额</option></select></label>
+              <label class="store-field"><span>店铺名称 <small id="storeInputHint">每行一个店铺名称</small></span><textarea id="shopeeAdsStores" spellcheck="false" placeholder="店铺名称，每行一个&#10;自定义模式：每行 店铺名称 金额"></textarea></label>
+            </div>
+            <div class="form-grid ads-form-params">
+              <label><span>并发店铺数</span><select id="shopeeAdsConcurrent"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label>
+              <label><span>支付等待（秒）</span><input id="shopeeAdsPaymentWait" type="number" min="30" max="300" value="60" /></label>
+              <label><span>浏览器窗口</span><select id="shopeeAdsWindowMode"><option value="normal">正常显示</option><option value="background">后台运行</option></select></label>
+              <label class="checkbox-field"><input id="shopeeAdsSyncDb" type="checkbox" checked /><span>同步店铺数据到数据库</span></label>
+              <label><span>紫鸟客户端</span><div class="input-action"><input id="shopeeAdsClientPath" readonly /><button id="chooseClientPathBtn" class="secondary" type="button">选择</button></div></label>
+              <label><span>驱动目录</span><div class="input-action"><input id="shopeeAdsDriverPath" readonly /><button id="chooseDriverPathBtn" class="secondary" type="button">选择</button></div></label>
+            </div>
+            <div class="actions">
+              <button id="shopeeAdsRunBtn" class="primary" type="submit">开始充值</button>
+              <button id="shopeeAdsSaveBtn" class="secondary" type="button">保存配置</button>
+              <button id="shopeeAdsRefreshBtn" class="secondary" type="button">刷新路径</button>
+              <button id="shopeeAdsOpenLogBtn" class="secondary" type="button" disabled>打开日志目录</button>
+            </div>
+          </form>
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>后台任务实时输出</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260623-log-panel"></script>
+    <script src="../assets/pages/shopee-ads.js?v=20260623-multipage"></script>
+  </body>
+</html>

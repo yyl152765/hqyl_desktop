@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>设置</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260625-settings-ui" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header"><div><div class="page-kicker">系统设置</div><h1>设置</h1></div><div id="taskBadge" class="status-pill idle">设置</div></header>
+        <section class="settings-grid standalone-settings">
+          <section id="accountSettingsCard" class="surface account-settings-surface">
+            <div class="section-head account-section-head">
+              <div><div class="section-eyebrow">ACCOUNT CENTER</div><h2>账号绑定</h2><p>统一管理流程使用的业务账号。密码只在添加时输入，保存后不会返回或显示。</p></div>
+              <div class="account-add-actions"><button id="addMabangAccountBtn" class="primary account-add-button" type="button">＋ 添加马帮账号</button><button id="addZiniaoAccountBtn" class="primary account-add-button" type="button">＋ 添加紫鸟账号</button><button id="addBigsellerAccountBtn" class="primary account-add-button" type="button">＋ 添加 BigSeller 账号</button></div>
+            </div>
+            <div id="mabangProviderCard" class="account-provider-card">
+              <div class="account-provider-summary"><span class="account-provider-logo">M</span><div class="account-provider-copy"><div class="account-provider-title-row"><strong>马帮 ERP</strong><span id="mabangAccountStatus" class="account-status empty">未绑定</span></div><p>菲律宾销量报表、SKU 采购日志等马帮流程共用当前选择的账号。</p></div></div>
+              <div class="account-control-grid"><label class="account-select-field"><span>当前使用账号</span><select id="mabangAccountSelect"></select></label><button id="deleteMabangAccountBtn" class="danger-secondary" type="button" disabled>删除账号</button></div>
+              <div id="mabangAccountDetail" class="account-detail empty"><div class="account-avatar">?</div><div class="account-detail-copy"><small>账号信息</small><strong id="selectedAccountName">尚未绑定账号</strong><span id="selectedAccountUsername">点击“添加马帮账号”开始绑定</span></div><div class="credential-privacy">密码不在页面显示</div></div>
+            </div>
+            <div id="ziniaoProviderCard" class="account-provider-card">
+              <div class="account-provider-summary"><span class="account-provider-logo ziniao-icon">Z</span><div class="account-provider-copy"><div class="account-provider-title-row"><strong>紫鸟浏览器</strong><span id="ziniaoAccountStatus" class="account-status empty">未绑定</span></div><p>Shopee 广告充值等紫鸟流程共用当前选择的账号。</p></div></div>
+              <div class="account-control-grid"><label class="account-select-field"><span>当前使用账号</span><select id="ziniaoAccountSelect"></select></label><button id="deleteZiniaoAccountBtn" class="danger-secondary" type="button" disabled>删除账号</button></div>
+              <div id="ziniaoAccountDetail" class="account-detail empty"><div class="account-avatar">?</div><div class="account-detail-copy"><small>账号信息</small><strong id="selectedZiniaoAccountName">尚未绑定账号</strong><span id="selectedZiniaoAccountUsername">点击“添加紫鸟账号”开始绑定</span></div><div class="credential-privacy">密码不在页面显示</div></div>
+            </div>
+            <div id="bigsellerProviderCard" class="account-provider-card">
+              <div class="account-provider-summary"><span class="account-provider-logo bigseller-icon">B</span><div class="account-provider-copy"><div class="account-provider-title-row"><strong>BigSeller</strong><span id="bigsellerAccountStatus" class="account-status empty">未绑定</span></div><p>产品同步、库存同步等 BigSeller 接口流程共用当前选择的账号。</p></div></div>
+              <div class="account-control-grid"><label class="account-select-field"><span>当前使用账号</span><select id="bigsellerAccountSelect"></select></label><button id="deleteBigsellerAccountBtn" class="danger-secondary" type="button" disabled>删除账号</button></div>
+              <div id="bigsellerAccountDetail" class="account-detail empty"><div class="account-avatar">?</div><div class="account-detail-copy"><small>账号信息</small><strong id="selectedBigsellerAccountName">尚未绑定账号</strong><span id="selectedBigsellerAccountUsername">点击“添加 BigSeller 账号”开始绑定</span></div><div class="credential-privacy">密码不在页面显示</div></div>
+            </div>
+          </section>
+          <section class="surface dingtalk-settings-surface">
+            <div class="section-head"><div><h2>钉钉应用配置</h2><p>用于网红寄样登记同步在线表格。AppKey/AppSecret 保存后只显示掩码或配置状态；操作人姓名会自动到内置用户配置表里校验并绑定 UserID。</p></div><span class="section-badge">DingTalk</span></div>
+            <div class="captcha-settings-body dingtalk-settings-body">
+              <div class="dingtalk-credential-panel">
+                <div class="form-grid captcha-form-grid">
+                  <label><span>钉钉 AppKey</span><input id="dingtalkAppKey" autocomplete="off" placeholder="请输入钉钉应用 AppKey" /></label>
+                  <label><span>钉钉 AppSecret</span><input id="dingtalkAppSecret" type="password" autocomplete="new-password" placeholder="请输入钉钉应用 AppSecret" /></label>
+                </div>
+                <p class="settings-inline-hint">留空保存表示不修改已保存字段；输入后只保存到本机配置，页面回显会自动隐藏敏感部分。</p>
+              </div>
+              <div class="dingtalk-status-panel">
+                <div id="dingtalkUserMapInfo" class="captcha-balance-status dingtalk-user-status">正在加载钉钉用户配置表...</div>
+                <div id="dingtalkSettingsStatus" class="captcha-balance-status">尚未加载钉钉设置</div>
+              </div>
+              <div class="captcha-action-row dingtalk-action-row"><div class="actions"><button id="saveDingtalkSettingsBtn" class="primary" type="button">保存钉钉设置</button></div></div>
+            </div>
+          </section>
+          <section class="surface captcha-settings-surface">
+            <div class="section-head"><div><h2>打码平台</h2><p>配置图鉴账号，供 BigSeller 验证码识别使用，并可随时查询账户余额。</p></div><span class="section-badge">图鉴</span></div>
+            <div class="captcha-settings-body">
+              <div class="form-grid captcha-form-grid">
+                <label><span>平台账号</span><input id="captchaUsername" autocomplete="username" placeholder="请输入图鉴账号" /></label>
+                <label><span>平台密码</span><input id="captchaPassword" type="password" autocomplete="current-password" placeholder="请输入图鉴密码" /></label>
+              </div>
+              <div class="captcha-action-row"><div class="actions"><button id="saveCaptchaSettingsBtn" class="secondary" type="button">保存账号</button><button id="queryCaptchaBalanceBtn" class="primary" type="button">查询余额</button></div><div id="captchaBalanceStatus" class="captcha-balance-status">保存账号后可查询余额</div></div>
+            </div>
+          </section>
+          <section class="surface settings-surface">
+            <div class="section-head"><div><h2>基础配置</h2><p>设置任务输出位置和常用查询参数。</p></div><span class="section-badge">本机</span></div>
+            <div class="form-grid"><label><span>每页数量</span><input id="rowsPerPage" type="number" min="50" max="1000" step="50" /></label><label class="output-field"><span>输出目录</span><div class="input-action"><input id="outputDir" /><button id="chooseDirBtn" class="secondary" type="button">选择</button></div></label></div>
+            <div class="actions"><button id="saveSettingsBtn" class="primary" type="button">保存配置</button></div>
+          </section>
+          <section class="surface update-surface">
+            <div class="section-head"><div><h2>更新中心</h2><p>检查新版本，并在客户端内完成下载与安装。</p></div><button id="checkUpdateBtn" class="secondary compact-btn" type="button">检查</button></div>
+            <div class="update-row"><span>更新源</span><input id="updateManifestUrl" placeholder="https://.../latest.json" /></div>
+            <div id="updateStatus" class="update-status">未配置更新源</div>
+            <div id="updateActionPanel" class="update-action-panel" hidden>
+              <div class="update-release-row"><div><span class="update-release-label">可用版本</span><strong id="availableUpdateVersion">—</strong></div><button id="downloadUpdateBtn" class="primary update-install-button" type="button">下载并安装</button></div>
+              <div id="updateProgressPanel" class="update-progress-panel" hidden><div class="update-progress-copy"><span id="updateProgressText">准备下载</span><strong id="updateProgressPercent">0%</strong></div><div class="update-progress-track"><div id="updateProgressBar" class="update-progress-bar"></div></div></div>
+              <p class="update-install-hint">安装包校验通过后会自动打开安装程序，并关闭当前客户端。</p>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260625-settings-ui"></script>
+    <script src="../assets/pages/settings.js?v=20260625-settings-ui"></script>
+  </body>
+</html>

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BigSeller 同步</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header"><div><div class="page-kicker">BigSeller / Shopee / 产品与库存</div><h1>BigSeller 同步</h1></div><div id="taskBadge" class="status-pill idle">待运行</div></header>
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>同步类型</span><strong id="syncTypeText">同步库存</strong><small>接口提交任务</small></article>
+          <article class="overview-card"><span>商品状态</span><strong id="listingStatusText">在售</strong><small>支持在售 / 售完</small></article>
+          <article class="overview-card"><span>已提交商品</span><strong id="recordCount">0</strong><small>任务完成后更新</small></article>
+          <article class="overview-card file-card"><span>输出文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+        <section class="layout-grid">
+          <form id="bigsellerSyncForm" class="surface form-surface">
+            <div class="section-head"><div><h2>接口同步配置</h2><p>按更新时间升序取第一页数据，库存同步会按 300 条分轮提交；产品同步调用 BigSeller 产品同步接口。</p></div><span class="section-badge">API</span></div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon bigseller-icon">B</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="bigseller">尚未绑定 BigSeller 账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=bigseller">管理账号</a>
+            </div>
+            <div class="form-grid">
+              <label><span>同步类型</span><select id="syncType"><option value="inventory">同步库存</option><option value="product">同步产品</option></select></label>
+              <label><span>商品状态</span><select id="listingStatus"><option value="live">在售</option><option value="soldOut">售完</option></select></label>
+              <label><span>每轮数量</span><input id="pageSize" type="number" min="1" max="300" step="1" value="300" /></label>
+              <label><span>最大轮次 <small>0 表示不限</small></span><input id="maxRounds" type="number" min="0" step="1" value="0" /></label>
+              <label class="output-field"><span>输出目录</span><div class="input-action"><input id="outputDir" /><button id="chooseDirBtn" class="secondary" type="button">选择</button></div></label>
+            </div>
+            <div class="form-note">库存同步会一直同步当前状态的第一页；同步完成后数据按更新时间排到后面，再继续下一轮。</div>
+            <div class="actions">
+              <button id="runBtn" class="primary" type="submit">开始同步</button>
+              <button id="openOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>后台接口任务实时输出</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260623-log-panel"></script>
+    <script src="../assets/pages/bigseller-sync.js?v=20260623-log-panel"></script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+.venv/
+build/
+dist/
+release/
+__pycache__/
+*.pyc
+*.log
+!HQYLAutomation.spec
+.pytest_cache/
+.env
+.env.*
+*.local

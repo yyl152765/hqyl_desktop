@@ -1,0 +1,12 @@
+pywebview>=5.3
+httpx>=0.27
+requests>=2.31
+cryptography>=42.0
+beautifulsoup4>=4.12
+pandas>=2.2
+openpyxl>=3.1
+PyYAML>=6.0
+selenium>=4.35
+psycopg2-binary>=2.9
+alibabacloud-dingtalk>=2.2
+pyinstaller>=6.0

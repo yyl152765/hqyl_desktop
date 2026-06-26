@@ -1,0 +1,130 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>网红寄样登记</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260625-sample-ui" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main sample-registration-main">
+        <header class="page-header sample-page-header"><div><div class="page-kicker">马帮流程 / TikTok / 网红寄样登记</div><h1>网红寄样登记</h1><p>按组长店铺查询马帮样品订单，导出本地文件，并按操作人同步到钉钉在线表格。</p></div><div id="taskBadge" class="status-pill idle">待运行</div></header>
+        <section class="overview-grid sample-overview">
+          <article class="overview-card accent-green"><span>当前流程</span><strong>样品登记导出</strong><small>马帮 ERP</small></article>
+          <article class="overview-card"><span>已配组长</span><strong id="groupCount">0</strong><small>组长数量</small></article>
+          <article class="overview-card"><span>已配店铺</span><strong id="storeCount">0</strong><small>所有组长店铺总和</small></article>
+          <article class="overview-card file-card"><span>导出行数</span><strong id="outputFile">0</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <div class="task-tabs">
+          <button id="tabRun" class="task-tab active" type="button">运行登记</button>
+          <button id="tabConfig" class="task-tab" type="button">组长店铺配置</button>
+        </div>
+
+        <!-- 运行登记 Tab -->
+        <section id="runPanel" class="layout-grid sample-workbench">
+          <form id="runForm" class="surface form-surface sample-run-card">
+            <div class="section-head"><div><h2>运行登记</h2><p>先确认账号和日期，再决定是否同步钉钉；开始后右侧会实时输出日志。</p></div><span class="section-badge">马帮流程</span></div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+
+            <div class="sample-form-section">
+              <div class="sample-step-copy"><span>01</span><div><strong>订单日期</strong><p>决定本次从马帮查询哪一天或哪段日期的样品订单。</p></div></div>
+              <div class="form-grid sample-form-grid">
+                <label><span>日期模式</span>
+                  <select id="dateMode">
+                    <option value="yesterday">昨天</option>
+                    <option value="single">指定日期</option>
+                    <option value="range">日期范围</option>
+                  </select>
+                </label>
+                <label id="singleDateField"><span>指定日期</span><input id="singleDate" type="date" /></label>
+                <label id="startDateField" hidden><span>开始日期</span><input id="startDate" type="date" /></label>
+                <label id="endDateField" hidden><span>结束日期</span><input id="endDate" type="date" /></label>
+              </div>
+            </div>
+
+            <div id="syncSection" class="sample-form-section sample-sync-section">
+              <div class="sample-step-copy"><span>02</span><div><strong>在线表格同步</strong><p>需要同步时，操作人姓名必须能在设置里的钉钉用户配置表中找到。</p></div></div>
+              <div class="form-grid sample-form-grid">
+                <label class="checkbox-field sample-sync-toggle"><input id="enableTargetUpdate" type="checkbox" /><span>同步到在线表格</span></label>
+                <label><span>登记表格 ID</span><input id="targetDocId" placeholder="钉钉在线表格文档 ID" /></label>
+                <label><span>钉钉操作人姓名 <small>姓名需匹配配置表</small></span><input id="dingtalkOperatorName" list="dingtalkOperatorList" placeholder="填写设置里绑定的用户姓名" /></label>
+                <datalist id="dingtalkOperatorList"></datalist>
+              </div>
+            </div>
+
+            <div class="sample-form-section">
+              <div class="sample-step-copy"><span>03</span><div><strong>输出位置</strong><p>本地 Excel 会保存到输出目录，任务完成后可直接打开。</p></div></div>
+              <div class="form-grid sample-form-grid">
+                <label class="output-field"><span>输出目录</span><div class="input-action"><input id="outputDir" /><button id="chooseDirBtn" class="secondary" type="button">选择</button></div></label>
+              </div>
+            </div>
+
+            <div class="actions sample-run-actions">
+              <button id="runBtn" class="primary" type="submit">开始登记</button>
+              <button id="matchBtn" class="secondary" type="button">匹配校验</button>
+              <button id="saveConfigBtn" class="secondary" type="button">保存配置</button>
+              <button id="openOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+          <div class="right-stack sample-log-stack"><section class="surface log-surface sample-log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>后台任务实时输出，方便定位登录、查询、导出和钉钉同步状态。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button">复制日志</button></div><pre id="logBox" class="log-box"></pre></section></div>
+        </section>
+
+        <!-- 组长店铺配置 Tab -->
+        <section id="configPanel" class="layout-grid sample-config-workbench" hidden>
+          <div class="surface form-surface config-panel-surface">
+            <div class="section-head"><div><h2>组长店铺配置</h2><p>维护组长和店铺列表，左侧选择组长，右侧编辑详情。</p></div></div>
+            <div class="config-layout">
+              <div class="config-sidebar">
+                <div class="config-group-list" id="groupList"></div>
+                <div class="config-group-actions">
+                  <button id="addGroupBtn" class="secondary" type="button">＋ 添加组长</button>
+                  <button id="deleteGroupBtn" class="danger-secondary" type="button" disabled>删除选中</button>
+                </div>
+              </div>
+              <div class="config-detail" id="groupDetail">
+                <div class="config-detail-empty" id="detailEmpty">← 选择或添加一个组长</div>
+                <div class="config-detail-form" id="detailForm" hidden>
+                  <label><span>组长名称</span><input id="detailLeader" /></label>
+                  <label><span>目标 Sheet</span><input id="detailTargetSheet" placeholder="留空则使用组长名" /></label>
+                  <label><span>输出文件名</span><input id="detailOutputFileName" placeholder="留空则使用 组长名.xlsx" /></label>
+                  <label class="store-field"><span>店铺列表 <small>每行一个店铺名称</small></span><textarea id="detailStores" spellcheck="false" rows="10" placeholder="店铺名称，每行一个"></textarea></label>
+                  <div class="config-detail-info"><span id="detailStoreCount">0 个店铺</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- 未匹配确认弹窗 -->
+    <div id="unmatchedModal" class="modal-backdrop hidden">
+      <div class="unmatched-dialog">
+        <div class="account-dialog-header">
+          <div><div class="section-eyebrow">STORE MATCH</div><h2>存在未匹配店铺</h2></div>
+          <button id="closeUnmatchedBtn" class="modal-close" type="button">×</button>
+        </div>
+        <div class="unmatched-body">
+          <p>以下店铺未能匹配到马帮店铺，请检查配置或选择跳过继续。</p>
+          <div class="unmatched-table-wrap"><table id="unmatchedTable"><thead><tr><th>组长</th><th>用户填写店铺</th><th>原因</th><th>候选马帮店铺</th></tr></thead><tbody></tbody></table></div>
+        </div>
+        <div class="account-dialog-actions">
+          <button id="unmatchedCancelBtn" class="primary" type="button">返回修改配置</button>
+          <button id="unmatchedSkipBtn" class="secondary" type="button">跳过未匹配并继续</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260625-sample-ui"></script>
+    <script src="../assets/pages/sample-registration.js?v=20260625-sample-ui"></script>
+  </body>
+</html>
+
