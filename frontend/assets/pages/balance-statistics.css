@@ -1,0 +1,15 @@
+.balance-note { margin: 12px 18px 18px; color: var(--muted, #64748b); font-size: 13px; line-height: 1.7; }
+body[data-balance-platform] .layout-grid + .surface { margin-top: 18px; }
+#chooseOutputBtn { white-space: nowrap; }
+.balance-warning { margin: 12px 18px; padding: 12px; border-radius: 8px; background: #fff5e5; color: #8d4b11; white-space: pre-line; overflow-wrap: anywhere; }
+#balanceForm label > small { color: var(--muted, #64748b); font-size: 12px; font-weight: 400; line-height: 1.5; }
+.balance-table-wrap td { max-width: 320px; vertical-align: top; overflow-wrap: anywhere; }
+.balance-table-wrap th { white-space: nowrap; }
+.balance-table-wrap td.balance-amount { min-width: 105px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.balance-table-wrap td.balance-missing { color: #9a5413; }
+.balance-table-wrap td.balance-status-success { color: var(--green, #138a72); }
+.balance-table-wrap td.balance-status-partial, .balance-table-wrap td.balance-status-partial_success { color: #9a5413; }
+.balance-table-wrap td.balance-status-failed { color: #b42318; }
+.balance-evidence { display: flex; flex-wrap: wrap; gap: 6px; min-width: 100px; }
+.balance-table-wrap td:first-child { min-width: 140px; }
+.balance-table-wrap td:last-child { min-width: 200px; white-space: pre-line; }

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>滞销SKU爆款对标</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel-bs-benchmark-20260904" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">BigSeller / Shopee / SKU 对标</div><h1>滞销SKU爆款对标</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>SKU 数</span><strong id="skuCount">0</strong><small id="sourceRowsText">读取所选工作表中的 SKU</small></article>
+          <article class="overview-card"><span>已匹配 SKU</span><strong id="matchedCount">0</strong><small>比较各店最高单商品指标</small></article>
+          <article class="overview-card"><span>未匹配 / 查询失败</span><strong id="unmatchedCount">0 / 0</strong><small>未匹配与失败分别记录</small></article>
+          <article class="overview-card file-card"><span>输出文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid sku-inventory-layout">
+          <form id="benchmarkForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>选择来源与对标指标</h2><p>导入滞销 SKU 表，按浏览量或销量查找各店对标商品。</p></div>
+              <span class="section-badge">BigSeller</span>
+            </div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon bigseller-icon">B</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="bigseller">尚未绑定 BigSeller 账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=bigseller">管理账号</a>
+            </div>
+            <div class="form-grid">
+              <label class="collection-store-field">
+                <span>来源 Excel</span>
+                <div class="input-action" style="grid-template-columns: minmax(0, 1fr) 108px"><input id="sourceFile" placeholder="粘贴 Excel 完整路径，或点击选择 Excel" spellcheck="false" aria-describedby="sourceFileHint" /><button id="chooseFileBtn" class="secondary" type="button" style="white-space: nowrap; padding: 0 10px">选择 Excel</button></div>
+                <small id="sourceFileHint" role="status" aria-live="polite">支持 .xlsx 和 .xls。选好文件后，读取工作表列表并选择需要处理的工作表。</small>
+              </label>
+              <label><span>工作表</span><div class="input-action"><select id="sheetName" disabled><option value="">请先选择 Excel</option></select><button id="inspectFileBtn" class="secondary" type="button">读取</button></div></label>
+              <label><span>对标指标</span><select id="metric"><option value="views" selected>浏览量（Views）</option><option value="sales">销量（Sales）</option></select></label>
+              <label class="output-field"><span>输出目录</span><div class="input-action"><input id="outputDir" placeholder="使用设置中的输出目录，或选择其他目录" /><button id="chooseDirBtn" class="secondary" type="button">选择</button></div></label>
+            </div>
+            <div class="query-rule-note" aria-label="查询规则">
+              <strong>查询规则</strong><span>Shopee 在售商品</span><span>全部店铺</span><span>SKU 模糊搜索（含子SKU）</span><span id="metricRule">每店单商品最高浏览量</span>
+            </div>
+            <div class="form-note" style="margin: 12px 18px 0">对标值取 BigSeller 当前显示的单商品指标，每店取最高值再比较。销量不是店铺销量汇总，也不是某月销量。查询异常会单独标记，不能当作店铺没有数据。</div>
+            <div class="form-note" style="margin: 10px 18px 0">每页最多尝试 4 次；仍失败的 SKU 会等待 30、60、120 秒再补查 3 轮，服务器要求更久时优先等待。成功结果会保存进度；账号或权限异常需处理后继续，不会无限重试。</div>
+            <details style="margin: 16px 18px 0">
+              <summary>从上次进度继续</summary>
+              <label style="display: block; margin-top: 10px"><span>进度文件（可选）</span><div class="input-action"><input id="resumeCheckpoint" placeholder="不填写则开始全新查询" spellcheck="false" aria-describedby="checkpointHint" /><button id="chooseCheckpointBtn" class="secondary" type="button">选择</button></div></label>
+              <p id="checkpointHint" class="form-note">程序中断后，可从输出目录的 BigSeller对标进度 文件夹选择进度文件，已确认的结果会沿用。须使用相同来源 Excel、工作表、指标和账号；更换来源或指标会清空此路径。</p>
+            </details>
+            <div class="actions">
+              <button id="runBtn" class="primary" type="submit">开始对标并导出</button>
+              <button id="openOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+          <div class="right-stack">
+            <section class="surface">
+              <div class="section-head tight"><div><h2>已确认进度</h2><p id="progressText" role="status" aria-live="polite">等待开始对标</p></div><span id="progressCount" class="section-badge">0 / 0</span></div>
+              <div id="queryProgress" class="update-progress-track" role="progressbar" aria-label="SKU 对标进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="margin: 12px 20px 20px"><div id="queryProgressBar" class="update-progress-bar"></div></div>
+            </section>
+            <section class="surface log-surface">
+              <div class="section-head tight"><div><h2>运行日志</h2><p>记录分页查询、店铺匹配与异常原因</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button></div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section id="queryResult" class="surface sku-inventory-result" hidden>
+          <div class="section-head tight"><div><h2>对标结果</h2><p id="resultSummary">暂无结果</p></div><button id="openFileBtn" class="secondary compact-btn" type="button" disabled>打开 Excel</button></div>
+          <div id="previewNotice" class="collection-scope-note" hidden>演示模式：以下内容为界面示例，没有查询 BigSeller，也没有生成 Excel。</div>
+          <div id="failureNotice" class="collection-scope-note" role="status" hidden></div>
+          <div id="retryActions" class="actions" hidden><button id="retryFailedBtn" class="primary" type="button" hidden>继续补查失败项</button></div>
+          <div class="collection-table-wrap sku-inventory-table-wrap">
+            <table aria-label="SKU 爆款对标结果">
+              <thead><tr><th scope="col">SKU</th><th scope="col">最高指标店铺</th><th id="metricColumn" scope="col">最高单商品浏览量</th><th scope="col">匹配店铺数</th><th scope="col">Item ID</th><th scope="col">查询状态</th><th scope="col">说明</th></tr></thead>
+              <tbody id="resultTableBody"></tbody>
+            </table>
+            <div id="resultEmpty" class="developer-empty" hidden>暂无对标结果</div>
+          </div>
+          <div class="sku-inventory-pagination" style="flex-wrap: wrap"><span id="resultLimitNote">页面预览</span><button id="resultPrevBtn" class="secondary compact-btn" type="button">上一页</button><span id="resultPageText">第 1 / 1 页</span><button id="resultNextBtn" class="secondary compact-btn" type="button">下一页</button></div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260904-bs-benchmark-retry"></script>
+    <script src="../assets/pages/bigseller-sku-benchmark.js?v=20260904-bs-benchmark-retry"></script>
+  </body>
+</html>

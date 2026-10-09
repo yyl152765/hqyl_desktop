@@ -251,8 +251,10 @@ def build_process_config(job: BigSellerSyncJob) -> dict[str, Any]:
         "request": base_config.get("request") or {},
         "captcha_service": captcha_config,
         "bigseller_account": {
-            "username": job.username,
-            "password": job.password,
+            # Match BigSeller's web form: trim the account and password before
+            # encrypting/submitting, while preserving whitespace inside them.
+            "username": str(job.username).strip(),
+            "password": str(job.password).strip(),
         },
     }
 

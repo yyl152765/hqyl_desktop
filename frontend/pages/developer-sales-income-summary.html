@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>开发与销售收入汇总导出</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel-20260821-developer-sales-income" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">马帮流程 / 采购流程 / 收入汇总</div><h1>开发与销售收入汇总导出</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>统计口径</span><strong>付款日期 · USD</strong><small>收入-订单金额</small></article>
+          <article class="overview-card"><span>输入姓名</span><strong id="inputDeveloperCount">0</strong><small>一行一个开发员姓名</small></article>
+          <article class="overview-card"><span>汇总人员</span><strong id="developerCount">0 名开发员</strong><small id="salespersonCount">0 名销售员</small></article>
+          <article class="overview-card file-card"><span>输出文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid">
+          <form id="developerSalesIncomeForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>汇总条件</h2><p>按开发员独立 ID 查询商品销量报表，并汇总开发员与销售员的美元收入。</p></div>
+              <span class="section-badge">采购流程</span>
+            </div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+            <div class="form-grid">
+              <label><span>付款开始日期</span><input id="incomeSummaryStartDate" type="date" required /></label>
+              <label><span>付款结束日期</span><input id="incomeSummaryEndDate" type="date" required /></label>
+              <label class="sku-field">
+                <span>开发员姓名 <small>一行一个，只处理马帮中存在的姓名</small></span>
+                <textarea id="developerNames" spellcheck="false" required placeholder="例如：&#10;黄茵茵&#10;刘琴铃"></textarea>
+              </label>
+              <label class="checkbox-field sku-field">
+                <input id="includeAllPeople" type="checkbox" />
+                <span>遍历全部开发员和销售员（姓名输入框将不参与筛选）</span>
+              </label>
+            </div>
+            <div class="query-rule-note">
+              <strong>固定导出规则</strong>
+              <span>日期口径：付款日期</span>
+              <span>币种：美元（USD）</span>
+              <span>指标：收入-订单金额</span>
+              <span>Excel：开发员、销售员两个子表</span>
+            </div>
+            <div class="actions">
+              <button id="incomeSummaryRunBtn" class="primary" type="submit">开始汇总并导出</button>
+              <button id="clearDeveloperNamesBtn" class="secondary" type="button">清空姓名</button>
+              <button id="incomeSummaryOpenOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>人员匹配、逐人统计和文件生成进度</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260821-developer-sales-income"></script>
+    <script src="../assets/pages/developer-sales-income-summary.js?v=20260821-developer-sales-income"></script>
+  </body>
+</html>

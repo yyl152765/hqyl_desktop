@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lazada 月度账单下载</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">紫鸟流程 / Lazada 财务 / 月度账单</div><h1>Lazada 月度账单下载</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>输入店铺</span><strong id="skuCount">0</strong><small>本次填写数量</small></article>
+          <article class="overview-card"><span>匹配店铺</span><strong id="matchedCount">0</strong><small>紫鸟浏览器匹配</small></article>
+          <article class="overview-card"><span>成功下载</span><strong id="recordCount">0</strong><small>按店铺命名账单</small></article>
+          <article class="overview-card file-card"><span>任务输出</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid">
+          <form id="lazadaMonthlyReportForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>下载条件</h2><p>登录 Lazada 店铺，在“我的收入”的月度报告中下载所选月份账单，并以店铺名称保存。</p></div>
+              <span class="section-badge">泰国 · 马来西亚 · 菲律宾</span>
+            </div>
+
+            <div class="flow-account-bar">
+              <span class="flow-account-icon ziniao-icon">Z</span>
+              <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a>
+            </div>
+
+            <div class="form-grid">
+              <label><span>国家</span><select id="lazadaMonthlyCountry" required></select></label>
+              <label><span>账单月份</span><input id="lazadaMonthlyMonth" type="month" required /></label>
+              <label class="store-field"><span>店铺名称 <small>每行一个</small></span><textarea id="lazadaMonthlyStores" spellcheck="false" required placeholder="Lazada 紫鸟店铺名称，每行一个"></textarea></label>
+            </div>
+
+            <div class="form-grid">
+              <label><span>浏览器窗口</span><select id="lazadaMonthlyWindowMode"><option value="normal">正常显示</option><option value="background">后台运行</option></select></label>
+              <label><span>紫鸟客户端</span><div class="input-action"><input id="lazadaMonthlyClientPath" readonly /><button id="lazadaMonthlyChooseClientBtn" class="secondary" type="button">选择</button></div></label>
+              <label class="store-field"><span>输出目录</span><div class="input-action"><input id="lazadaMonthlyOutputDir" readonly /><button id="lazadaMonthlyChooseOutputBtn" class="secondary" type="button">选择</button></div></label>
+            </div>
+
+            <div class="actions">
+              <button id="lazadaMonthlyRunBtn" class="primary" type="submit">开始下载</button>
+              <button id="lazadaMonthlyRefreshBtn" class="secondary" type="button">恢复默认值</button>
+              <button id="lazadaMonthlyOpenOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>店铺登录、月份匹配和文件下载进度</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section class="surface">
+          <div class="section-head tight"><div><h2>店铺结果</h2><p>每个店铺的匹配、下载和文件保存状态</p></div><span id="failedCount" class="section-badge">失败 0</span></div>
+          <div class="collection-table-wrap">
+            <table>
+              <thead><tr><th>店铺</th><th>国家</th><th>月份</th><th>状态</th><th>文件</th><th>说明</th></tr></thead>
+              <tbody id="lazadaMonthlyResultBody"><tr><td colspan="6">尚未运行</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260827-lazada-monthly-report"></script>
+    <script src="../assets/pages/lazada-monthly-report.js?v=20260827-v1"></script>
+  </body>
+</html>

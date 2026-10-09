@@ -5,6 +5,7 @@ import csv
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, DecimalException, InvalidOperation, ROUND_HALF_UP
 from io import StringIO
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -12,7 +13,7 @@ from typing import Any, Callable, Iterable
 from bs4 import BeautifulSoup
 from openpyxl import Workbook
 
-from backend.core.mabang_client import MabangApiError, MabangClient
+from backend.core.mabang_client import MabangApiError, MabangClient, decode_html_page
 
 
 BASE_URL = "https://900853.private.mabangerp.com"
@@ -102,10 +103,6 @@ BASE_FORM_DATA = {
 ProgressCallback = Callable[[str], None]
 
 
-class SalesCsvPeriodMismatch(RuntimeError):
-    pass
-
-
 @dataclass(frozen=True)
 class SalesGroup:
     name: str
@@ -139,8 +136,36 @@ def safe_text(value: object) -> str:
     return "" if value is None else str(value).strip()
 
 
-def get_group_options() -> list[dict[str, str]]:
-    groups = _load_groups_from_mabang_config() or _default_groups()
+def parse_group_options(html: str) -> tuple[SalesGroup, ...]:
+    soup = BeautifulSoup(html, "html.parser")
+    controls = soup.select('input[name="shopLabelIds[]"], select[name="shopLabelIds[]"] option')
+    groups: list[SalesGroup] = []
+    seen: set[str] = set()
+    for control in controls:
+        label_id = safe_text(control.get("value"))
+        label = control if control.name == "option" else control.find_parent("label")
+        name = label.get_text(" ", strip=True) if label else ""
+        if not label_id or label_id in {"0", "-1"} or not name or label_id in seen:
+            continue
+        seen.add(label_id)
+        groups.append(SalesGroup(name=name, shop_label_id=label_id))
+    if not groups:
+        raise MabangApiError("未能读取马帮自定义分类，请确认账号有销量报表权限后重新加载")
+    return tuple(groups)
+
+
+def get_group_options(username: str | None = None, password: str | None = None) -> list[dict[str, str]]:
+    if username is None and password is None:
+        # Keep app-wide startup offline; the report page loads the full account list separately.
+        groups = _load_groups_from_mabang_config() or _default_groups()
+    else:
+        if not username or not password:
+            raise ValueError("请先绑定并选择马帮账号")
+        with MabangClient(BASE_URL) as client:
+            client.login(username, password)
+            response = client.client.get(REPORT_URL, params=REPORT_PARAMS)
+            response.raise_for_status()
+            groups = parse_group_options(decode_html_page(response))
     return [{"id": group.id, "name": group.name, "shop_label_id": group.shop_label_id} for group in groups]
 
 
@@ -167,13 +192,18 @@ def validate_group_sales_payload(payload: dict[str, Any]) -> GroupSalesReportQue
         raise ValueError("请选择输出目录")
 
     selected_ids = _coerce_group_ids(payload.get("group_ids") or payload.get("group_id"))
-    group_map = {group.id: group for group in (_load_groups_from_mabang_config() or _default_groups())}
+    if not selected_ids:
+        raise ValueError("请选择至少一个自定义分类")
+    group_map = {
+        item["id"]: SalesGroup(name=item["name"], shop_label_id=item["id"])
+        for item in get_group_options(username, password)
+    }
     selected_groups = tuple(group_map[group_id] for group_id in selected_ids if group_id in group_map)
     missing_ids = [group_id for group_id in selected_ids if group_id not in group_map]
     if missing_ids:
-        raise ValueError(f"小组不存在: {', '.join(missing_ids)}")
+        raise ValueError(f"自定义分类不存在或当前账号不可见，请重新加载: {', '.join(missing_ids)}")
     if not selected_groups:
-        raise ValueError("请选择至少一个小组")
+        raise ValueError("请选择至少一个自定义分类")
 
     return GroupSalesReportQuery(
         username=username,
@@ -251,6 +281,30 @@ def parse_number(value: str | None) -> float:
         return 0.0
 
 
+def parse_required_decimal(value: str | None, field_name: str, context: str) -> Decimal:
+    text = str(value or "").strip().rstrip("\t").replace(",", "")
+    if not text:
+        raise MabangApiError(f"{context} {field_name}不是有效数字: {value!r}")
+    try:
+        parsed = Decimal(text)
+    except InvalidOperation as exc:
+        raise MabangApiError(f"{context} {field_name}不是有效数字: {value!r}") from exc
+    if not parsed.is_finite():
+        raise MabangApiError(f"{context} {field_name}不是有效数字: {value!r}")
+    return parsed
+
+
+def format_daily_average(quantity: Decimal, expected_days: int) -> str:
+    try:
+        value = (quantity / Decimal(expected_days)).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+    except DecimalException as exc:
+        raise MabangApiError(f"销量报表无法计算平均单天销量: 销售数量={quantity}") from exc
+    return f"{value:.2f}\t"
+
+
 def format_decimal(value: float, places: int = 4) -> str:
     if abs(value) < 0.0000001:
         return "0"
@@ -274,27 +328,40 @@ def normalize_status(value: str) -> str:
     return "正常" if text == "正常销售" else text
 
 
-def normalize_sales_csv(content: bytes) -> bytes:
+def normalize_sales_csv(content: bytes, expected_days: int) -> bytes:
+    if expected_days <= 0:
+        raise ValueError("统计天数必须大于 0")
+
     text = decode_csv_content(content)
     reader = csv.reader(StringIO(text))
     try:
         header = [cell.lstrip("\ufeff") if index == 0 else cell for index, cell in enumerate(next(reader))]
     except StopIteration as exc:
         raise MabangApiError("马帮导出 CSV 没有表头") from exc
+    missing_headers = [column for column in ("SKU", "销售数量") if column not in header]
+    if missing_headers:
+        raise MabangApiError(f"马帮导出 CSV 缺少必需列: {', '.join(missing_headers)}")
 
     output = StringIO()
     writer = csv.writer(output, lineterminator="\n")
     writer.writerow(TARGET_SALES_HEADERS)
     for row in reader:
+        if not row or not any(str(cell or "").strip() for cell in row):
+            continue
         values = row_dict_from_csv(header, row)
-        quantity = parse_number(values.get("销售数量"))
+        row_context = f"SKU={(values.get('SKU') or '-').strip()}"
+        quantity_decimal = parse_required_decimal(values.get("销售数量"), "销售数量", row_context)
+        quantity = float(quantity_decimal)
         order_income = parse_number(values.get("收入-订单金额"))
+        daily_average_value = format_daily_average(quantity_decimal, expected_days)
         average_price_value = values.get("平均销售价格") or (
             f"{format_decimal(order_income / quantity)}\t" if quantity else "0\t"
         )
         normalized = []
         for column in TARGET_SALES_HEADERS:
-            if column == "平均销售价格":
+            if column == "平均单天销量":
+                normalized.append(daily_average_value)
+            elif column == "平均销售价格":
                 normalized.append(average_price_value)
             elif column == "状态":
                 normalized.append(normalize_status(values.get(column, "")))
@@ -302,36 +369,6 @@ def normalize_sales_csv(content: bytes) -> bytes:
                 normalized.append(values.get(column, ""))
         writer.writerow(normalized)
     return ("\ufeff" + output.getvalue()).encode("utf-8")
-
-
-def assert_sales_csv_period(content: bytes, expected_days: int, context: str) -> None:
-    text = decode_csv_content(content)
-    reader = csv.reader(StringIO(text))
-    try:
-        header = [cell.lstrip("\ufeff") if index == 0 else cell for index, cell in enumerate(next(reader))]
-    except StopIteration:
-        return
-    if "销售数量" not in header or "平均单天销量" not in header:
-        return
-
-    checked = 0
-    for row in reader:
-        values = row_dict_from_csv(header, row)
-        if (values.get("SKU") or "").strip() in {"", "合计"}:
-            continue
-        quantity = parse_number(values.get("销售数量"))
-        average = parse_number(values.get("平均单天销量"))
-        if quantity <= 0:
-            continue
-        expected_average = round(quantity / max(expected_days, 1), 2)
-        checked += 1
-        if abs(average - expected_average) > 0.05:
-            raise SalesCsvPeriodMismatch(
-                f"{context} 平均单天销量异常: 销售数量={quantity}, 平均={average}, "
-                f"期望约={expected_average}, 统计天数={expected_days}"
-            )
-        if checked >= 20:
-            return
 
 
 def build_form_data(label_id: str, start_date, end_date) -> dict[str, Any]:
@@ -355,185 +392,6 @@ def build_form_data(label_id: str, start_date, end_date) -> dict[str, Any]:
     return form_data
 
 
-def parse_total_pages(page_html: str) -> int:
-    text = BeautifulSoup(page_html or "", "html.parser").get_text(" ", strip=True)
-    match = re.search(r"(\d+)\s*/\s*(\d+)\s*页", text)
-    if match:
-        return max(1, int(match.group(2)))
-    return 1
-
-
-def table_cell_text(cells: list, index: int) -> str:
-    if index >= len(cells):
-        return ""
-    return cells[index].get_text(" ", strip=True).replace(",", "")
-
-
-def product_cell_values(cell) -> tuple[str, str, str]:
-    sku_tag = cell.find("a", class_=lambda value: value and "viewicon" in value)
-    sku = sku_tag.get_text(strip=True) if sku_tag else ""
-    title_tags = cell.find_all("p", class_=lambda value: value and "ellipsis" in value)
-    chinese_name = title_tags[0].get("title", title_tags[0].get_text(strip=True)) if len(title_tags) >= 1 else ""
-    english_name = title_tags[1].get("title", title_tags[1].get_text(strip=True)) if len(title_tags) >= 2 else ""
-    return sku, chinese_name, english_name
-
-
-def average_price(order_income: str, quantity: str) -> str:
-    quantity_value = parse_number(quantity)
-    if quantity_value <= 0:
-        return "0"
-    return format_decimal(parse_number(order_income) / quantity_value)
-
-
-def table_row_to_target(cells: list) -> list[str]:
-    sku, chinese_name, english_name = product_cell_values(cells[1]) if len(cells) > 1 else ("", "", "")
-    quantity = table_cell_text(cells, 19)
-    order_income = table_cell_text(cells, 21)
-    return [
-        sku,
-        chinese_name,
-        english_name,
-        table_cell_text(cells, 2),
-        "",
-        table_cell_text(cells, 3),
-        normalize_status(table_cell_text(cells, 4)),
-        table_cell_text(cells, 11),
-        table_cell_text(cells, 12),
-        table_cell_text(cells, 13),
-        table_cell_text(cells, 15),
-        table_cell_text(cells, 16),
-        table_cell_text(cells, 17),
-        table_cell_text(cells, 18),
-        quantity,
-        table_cell_text(cells, 20),
-        average_price(order_income, quantity),
-        order_income,
-        table_cell_text(cells, 22),
-        table_cell_text(cells, 23),
-        table_cell_text(cells, 24),
-        table_cell_text(cells, 25),
-        table_cell_text(cells, 26),
-        table_cell_text(cells, 27),
-        table_cell_text(cells, 28),
-        table_cell_text(cells, 29),
-        table_cell_text(cells, 30),
-        table_cell_text(cells, 31),
-        table_cell_text(cells, 32),
-        table_cell_text(cells, 33),
-        table_cell_text(cells, 34),
-        table_cell_text(cells, 35),
-        table_cell_text(cells, 36),
-        table_cell_text(cells, 37),
-        table_cell_text(cells, 38),
-        table_cell_text(cells, 39),
-        table_cell_text(cells, 40),
-        table_cell_text(cells, 41),
-        table_cell_text(cells, 42),
-        table_cell_text(cells, 43),
-        table_cell_text(cells, 44),
-    ]
-
-
-def table_foot_to_target(table_foot: str) -> list[str] | None:
-    soup = BeautifulSoup(table_foot or "", "html.parser")
-    footer_row = soup.find("tr")
-    if not footer_row:
-        return None
-    cells = footer_row.find_all(["td", "th"])
-    quantity = table_cell_text(cells, 19)
-    order_income = table_cell_text(cells, 21)
-    return [
-        "合计",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        table_cell_text(cells, 13),
-        "",
-        "",
-        "",
-        table_cell_text(cells, 18),
-        quantity,
-        table_cell_text(cells, 20),
-        average_price(order_income, quantity),
-        order_income,
-        table_cell_text(cells, 22),
-        table_cell_text(cells, 23),
-        table_cell_text(cells, 24),
-        table_cell_text(cells, 25),
-        table_cell_text(cells, 26),
-        table_cell_text(cells, 27),
-        table_cell_text(cells, 28),
-        table_cell_text(cells, 29),
-        table_cell_text(cells, 30),
-        table_cell_text(cells, 31),
-        table_cell_text(cells, 32),
-        table_cell_text(cells, 33),
-        table_cell_text(cells, 34),
-        table_cell_text(cells, 35),
-        table_cell_text(cells, 36),
-        table_cell_text(cells, 37),
-        table_cell_text(cells, 38),
-        table_cell_text(cells, 39),
-        table_cell_text(cells, 40),
-        table_cell_text(cells, 41),
-        table_cell_text(cells, 42),
-        table_cell_text(cells, 43),
-        table_cell_text(cells, 44),
-    ]
-
-
-def rows_to_csv_bytes(rows: list[list[str]]) -> bytes:
-    output = StringIO()
-    writer = csv.writer(output, lineterminator="\n")
-    writer.writerow(TARGET_SALES_HEADERS)
-    writer.writerows(rows)
-    return ("\ufeff" + output.getvalue()).encode("utf-8")
-
-
-def export_group_csv_by_pagination(
-    client: MabangClient,
-    group: SalesGroup,
-    start_date,
-    end_date,
-) -> bytes:
-    form_data = build_form_data(group.shop_label_id, start_date, end_date)
-    form_data["rowsPerPage"] = DEFAULT_ROWS_PER_PAGE
-    referer = f"{BASE_URL}/index.php?mod=reports.countryReports"
-    rows: list[list[str]] = []
-    total_pages = 1
-    last_payload: dict | None = None
-
-    page = 1
-    while page <= total_pages:
-        form_data["page"] = str(page)
-        payload = client._post_sales_report(
-            url=REPORT_URL,
-            params=REPORT_PARAMS,
-            form_data=form_data,
-            referer=referer,
-        )
-        if not payload.get("success"):
-            raise MabangApiError(f"分页查询失败: {payload}")
-        if page == 1:
-            total_pages = parse_total_pages(payload.get("pageHtml") or "")
-        last_payload = payload
-        soup = BeautifulSoup(payload.get("tableContent") or "", "html.parser")
-        for row in soup.find_all("tr", class_="view-select"):
-            rows.append(table_row_to_target(row.find_all("td")))
-        page += 1
-
-    if rows and last_payload:
-        footer = table_foot_to_target(last_payload.get("tableFoot") or "")
-        if footer:
-            rows.append(footer)
-    return rows_to_csv_bytes(rows)
-
-
 def export_group_csv(
     client: MabangClient,
     output_dir: Path,
@@ -554,16 +412,10 @@ def export_group_csv(
         platform_or_shop="country",
     )
     content = export_file.content
-    try:
-        validate_sales_csv(content, context)
-        assert_sales_csv_period(content, (end_date - start_date).days + 1, context)
-    except SalesCsvPeriodMismatch as exc:
-        _emit(progress, f"{group.name} 导出接口日期口径异常，改用分页兜底: {exc}")
-        content = export_group_csv_by_pagination(client, group, start_date, end_date)
-        validate_sales_csv(content, f"{context}_pagination")
-        assert_sales_csv_period(content, (end_date - start_date).days + 1, f"{context}_pagination")
+    validate_sales_csv(content, context)
 
-    content = normalize_sales_csv(content)
+    expected_days = (end_date - start_date).days + 1
+    content = normalize_sales_csv(content, expected_days)
     validate_sales_csv(content, f"{context}_normalized")
     output_path.write_bytes(content)
     _emit(progress, f"{group.name} CSV 已生成: {output_path.name}")

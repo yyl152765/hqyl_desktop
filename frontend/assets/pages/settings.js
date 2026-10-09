@@ -34,6 +34,16 @@
       username: "selectedBigsellerAccountUsername",
       card: "bigsellerProviderCard",
     },
+    echotik: {
+      label: "EchoTik",
+      select: "echotikAccountSelect",
+      status: "echotikAccountStatus",
+      deleteButton: "deleteEchotikAccountBtn",
+      detail: "echotikAccountDetail",
+      name: "selectedEchotikAccountName",
+      username: "selectedEchotikAccountUsername",
+      card: "echotikProviderCard",
+    },
   };
 
   function renderAccountManager(vendor) {
@@ -342,6 +352,7 @@
       $("addMabangAccountBtn").addEventListener("click", () => HQYL.openAccountDialog("mabang"));
       $("addZiniaoAccountBtn").addEventListener("click", () => HQYL.openAccountDialog("ziniao"));
       $("addBigsellerAccountBtn").addEventListener("click", () => HQYL.openAccountDialog("bigseller"));
+      $("addEchotikAccountBtn").addEventListener("click", () => HQYL.openAccountDialog("echotik"));
       Object.keys(ACCOUNT_MANAGERS).forEach((vendor) => {
         const meta = ACCOUNT_MANAGERS[vendor];
         $(meta.select).addEventListener("change", () => selectAccount(vendor));

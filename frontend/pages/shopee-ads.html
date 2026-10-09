@@ -32,7 +32,9 @@
             </div>
             <div class="form-grid ads-form-params">
               <label><span>并发店铺数</span><select id="shopeeAdsConcurrent"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label>
-              <label><span>支付等待（秒）</span><input id="shopeeAdsPaymentWait" type="number" min="30" max="300" value="60" /></label>
+              <label><span>支付等待（秒）</span><input id="shopeeAdsPaymentWait" type="number" min="30" max="300" value="150" /></label>
+              <label><span>银行卡类型</span><select id="shopeeAdsPaymentCardType"><option value="payoneer" selected>PAYONEER</option><option value="world">WORLD</option></select></label>
+              <label><span>收码模式</span><select id="shopeeAdsSmsMode"><option value="skip" selected>不需要接码</option><option value="required">需要接码</option></select></label>
               <label><span>浏览器窗口</span><select id="shopeeAdsWindowMode"><option value="normal">正常显示</option><option value="background">后台运行</option></select></label>
               <label class="checkbox-field"><input id="shopeeAdsSyncDb" type="checkbox" checked /><span>同步店铺数据到数据库</span></label>
               <label><span>紫鸟客户端</span><div class="input-action"><input id="shopeeAdsClientPath" readonly /><button id="chooseClientPathBtn" class="secondary" type="button">选择</button></div></label>
@@ -58,7 +60,7 @@
       </main>
     </div>
     <div id="toast" class="toast hidden"></div>
-    <script src="../assets/common.js?v=20260623-log-panel"></script>
+    <script src="../assets/common.js?v=20260702-nav-vietnam-income"></script>
     <script src="../assets/pages/shopee-ads.js?v=20260623-multipage"></script>
   </body>
 </html>

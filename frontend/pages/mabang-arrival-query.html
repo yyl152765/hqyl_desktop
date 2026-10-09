@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>马帮到货查询</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">马帮流程 / 仓库调拨 / 到货查询</div><h1>到货查询与导出</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>执行方式</span><strong>HTTP 请求</strong><small>无需启动或操作浏览器</small></article>
+          <article class="overview-card"><span>备注数</span><strong id="remarkCount">0</strong><small>自动去空并去重</small></article>
+          <article class="overview-card"><span>命中批次</span><strong id="batchCount">0</strong><small id="unmatchedSummary">未命中 0 条备注</small></article>
+          <article class="overview-card file-card"><span>输出文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid">
+          <form id="arrivalQueryForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>批量备注</h2><p>按备注逐条查询调拨批次，每条备注独立导出一个 Excel。</p></div>
+              <span class="section-badge">马帮 ERP</span>
+            </div>
+
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span>
+              <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+
+            <div class="form-grid">
+              <label class="sku-field">
+                <span>调拨备注 <small>一行一个；同一备注命中的全部批次都会导出</small></span>
+                <textarea id="arrivalRemarkText" spellcheck="false" required placeholder="例如：&#10;8.24 菲律宾调拨第一车&#10;8.24 菲律宾调拨第二车"></textarea>
+              </label>
+              <label class="output-field">
+                <span>输出目录 <small>文件保存到所选目录\到货查询</small></span>
+                <div class="input-action"><input id="arrivalOutputDir" /><button id="arrivalChooseDirBtn" class="secondary" type="button">选择</button></div>
+              </label>
+            </div>
+
+            <div class="query-rule-note">
+              <strong>固定查询与导出规则</strong>
+              <span>状态：全部</span>
+              <span>搜索内容：备注</span>
+              <span>字段：批次、商品、签收信息全选</span>
+              <span>合并共有项：关闭</span>
+              <span>文件：每条备注独立导出</span>
+            </div>
+
+            <div id="arrivalOutputSummary" class="form-note">尚未生成文件；命名规则：到货查询_时间_搜索备注.xls[x]</div>
+
+            <div class="actions">
+              <button id="arrivalRunBtn" class="primary" type="submit">开始查询并导出</button>
+              <button id="clearRemarksBtn" class="secondary" type="button">清空备注</button>
+              <button id="arrivalOpenOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>登录、逐条查询、批次去重与导出进度</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260825-mabang-arrival-query-multifile"></script>
+    <script src="../assets/pages/mabang-arrival-query.js?v=20260825-mabang-arrival-query-multifile"></script>
+  </body>
+</html>

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>工作台</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260728-dashboard" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main dashboard-main">
+        <header class="page-header dashboard-header">
+          <div><div class="page-kicker">寰球云联 / 自动化工作台</div><h1>业务工具</h1><p>选择需要运行的流程。</p></div>
+          <div class="dashboard-account-summary"><span>已绑定账号</span><strong id="boundAccountCount">0</strong></div>
+        </header>
+
+        <section class="dashboard-toolbar" aria-label="工具筛选">
+          <div class="dashboard-tabs" id="vendorTabs">
+            <button class="dashboard-tab active" type="button" data-vendor="all">全部</button>
+            <button class="dashboard-tab" type="button" data-vendor="mabang">马帮</button>
+            <button class="dashboard-tab" type="button" data-vendor="ziniao">紫鸟</button>
+            <button class="dashboard-tab" type="button" data-vendor="bigseller">BigSeller</button>
+            <button class="dashboard-tab" type="button" data-vendor="echotik">EchoTik</button>
+          </div>
+          <label class="dashboard-search"><span class="sr-only">搜索工具</span><input id="toolSearch" type="search" placeholder="搜索工具" autocomplete="off" /></label>
+        </section>
+
+        <section id="toolGroups" class="dashboard-groups" aria-live="polite"></section>
+        <div id="toolEmpty" class="dashboard-empty" hidden>没有找到匹配的工具</div>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260903-desktop-v0.2.48"></script>
+    <script src="../assets/pages/dashboard.js?v=20260903-desktop-v0.2.48"></script>
+  </body>
+</html>

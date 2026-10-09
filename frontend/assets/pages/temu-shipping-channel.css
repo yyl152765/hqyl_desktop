@@ -1,0 +1,51 @@
+.temu-main { max-width: 1760px; }
+.temu-main .overview-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.temu-layout { display: grid; grid-template-columns: minmax(420px, 1.1fr) minmax(320px, 1fr); gap: 20px; margin-top: 20px; align-items: stretch; }
+.temu-layout > .log-surface { height: 100%; min-height: 460px; max-height: 640px; }
+.temu-layout .form-surface { min-width: 0; }
+.temu-form-body { padding: 0 18px 18px; }
+.temu-form-body .flow-account-bar { margin: 0; }
+.temu-form-body > .actions { padding: 0; margin: 16px 0; }
+.temu-steps { display: flex; flex-wrap: wrap; gap: 12px 20px; padding: 0; margin: 22px 0; list-style: none; color: var(--muted); font-size: 12px; }
+.temu-steps li { display: flex; align-items: center; gap: 7px; }
+.temu-steps b { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; background: var(--green-soft); color: var(--green-strong); }
+.temu-file-actions { margin-top: 10px; }
+.temu-hint { color: var(--muted); font-size: 12px; line-height: 1.65; }
+.temu-rule { margin: 18px 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: #f8faf9; font-size: 12px; line-height: 1.7; }
+.temu-rule strong { color: var(--green-strong); }
+.temu-rule p { margin: 5px 0 0; color: var(--muted); }
+.temu-apply { background: var(--green); }
+.temu-apply:hover { background: var(--green-strong); }
+.temu-apply:disabled { opacity: 1; background: #d3e8e2; color: #4b7568; }
+.temu-progress-head { display: flex; justify-content: space-between; gap: 16px; margin-top: 22px; color: var(--muted); font-size: 12px; }
+.temu-progress-head strong { color: var(--text); white-space: nowrap; }
+.temu-progress { height: 7px; overflow: hidden; border-radius: 8px; background: #e8eeeb; margin-top: 9px; }
+.temu-progress > div { height: 100%; width: 0; background: var(--green); border-radius: inherit; transition: width .2s; }
+.temu-result-surface { margin-top: 20px; padding: 0 18px 18px; }
+.temu-result-surface > .section-head { margin-left: -18px; margin-right: -18px; }
+.temu-notice { padding: 11px 14px; margin: 12px 0; border: 1px solid #bedfd3; border-radius: 8px; background: var(--green-soft); color: var(--green-strong); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.temu-notice.warning { background: #fff8e8; color: #8b5e16; border-color: #efd49a; }
+.temu-table-wrap { max-height: 590px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+.temu-result-table { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 12px; text-align: left; }
+.temu-result-table th { position: sticky; top: 0; z-index: 1; background: #f5f8f6; color: var(--muted); font-weight: 600; }
+.temu-result-table th small { display: block; margin-top: 4px; font-size: 11px; font-weight: 400; }
+.temu-value-change { min-width: 130px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.temu-value-detail { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; white-space: normal; }
+.temu-value-detail.mismatch { color: #b94035; }
+.temu-mismatch-label { display: block; margin-top: 2px; }
+.temu-result-table td, .temu-result-table th { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.temu-result-table th:not(:nth-child(2)):not(:last-child) { white-space: nowrap; }
+.temu-result-table td:nth-child(2) { min-width: 220px; max-width: 360px; overflow-wrap: anywhere; }
+.temu-result-table td:last-child { min-width: 180px; max-width: 450px; overflow-wrap: anywhere; }
+.temu-result-table tbody tr:hover { background: #fafcfb; }
+.temu-result-table .temu-empty { padding: 38px; text-align: center; color: var(--muted); }
+.temu-channel-id { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.temu-state { display: inline-block; white-space: nowrap; padding: 4px 8px; border-radius: 5px; background: #eef1f5; color: #637083; }
+.temu-state.ready, .temu-state.success { background: var(--green-soft); color: var(--green-strong); }
+.temu-state.unchanged { background: #eef1f5; color: #637083; }
+.temu-state.failed { background: #fff0ef; color: #b94035; }
+.temu-state.running { background: #eef3ff; color: #4567a2; }
+.temu-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 14px; }
+.temu-pagination > div { display: flex; gap: 8px; }
+@media (max-width: 1150px) { .temu-layout { grid-template-columns: 1fr; } .temu-layout > .log-surface { height: 310px; min-height: 310px; } }
+@media (max-width: 1120px) { .temu-main .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

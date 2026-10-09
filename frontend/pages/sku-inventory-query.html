@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SKU库存与可售天数查询</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel-20260921-sku-coverage" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">马帮流程 / 通用工具 / SKU仓库库存</div><h1>SKU库存与可售天数查询</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>当前流程</span><strong id="queryModeTitle">爆款／旺款缺失仓库</strong><small id="queryModeSummary">全部东南亚仓，不含中转仓</small></article>
+          <article class="overview-card"><span>SKU 数</span><strong id="skuCount">0</strong><small>查询命中的唯一SKU</small></article>
+          <article class="overview-card"><span>明细记录</span><strong id="recordCount">0</strong><small id="warehouseCount">0 个仓库</small></article>
+          <article class="overview-card file-card"><span>输出文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid sku-inventory-layout">
+          <form id="skuInventoryForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>查询条件</h2><p>选择开发员，查询爆款／旺款缺失的东南亚仓库，或查看库存明细。</p></div>
+              <span class="section-badge">马帮 ERP</span>
+            </div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+            <div class="form-grid compact-form-grid">
+              <label><span>查询内容</span><select id="skuQueryMode"><option value="missing_warehouses">爆款／旺款缺失仓库</option><option value="inventory">SKU库存与可售天数</option></select></label>
+              <label id="livenessField"><span>款式类型</span><select id="skuLivenessTypes"><option value="1,2">爆款＋旺款</option><option value="1">仅爆款</option><option value="2">仅旺款</option></select></label>
+            </div>
+            <div id="skuDateFields" class="form-grid compact-form-grid" hidden>
+              <label><span>SKU创建时间（开始）</span><input id="skuCreatedStartDate" type="date" /></label>
+              <label><span>SKU创建时间（结束）</span><input id="skuCreatedEndDate" type="date" /></label>
+            </div>
+
+            <section class="developer-panel" aria-labelledby="developerPanelTitle">
+              <div class="developer-panel-head">
+                <div><strong id="developerPanelTitle">开发人员</strong><small id="developerSelectionSummary">请先加载开发人员</small></div>
+                <button id="loadDevelopersBtn" class="secondary compact-btn" type="button">加载开发人员</button>
+              </div>
+              <label class="developer-search-field"><span class="sr-only">搜索开发人员</span><input id="developerSearch" type="search" placeholder="按姓名搜索，仅显示名称以“开发”结尾的人员" disabled /></label>
+              <div class="developer-selection-actions">
+                <button id="selectAllDevelopersBtn" class="secondary compact-btn" type="button" disabled>全选当前结果</button>
+                <button id="clearDevelopersBtn" class="secondary compact-btn" type="button" disabled>清空选择</button>
+              </div>
+              <div id="developerChecklist" class="developer-checklist" aria-live="polite">
+                <div class="developer-empty">加载后可搜索并勾选开发人员</div>
+              </div>
+            </section>
+
+            <div id="coverageRuleNote" class="query-rule-note">
+              <strong>缺失仓库查询规则</strong>
+              <span>SKU范围：所选开发员的爆款／旺款，全部创建时间与商品状态</span>
+              <span>仓库范围：全部东南亚仓，不含中转仓</span>
+              <span>优先按仓库所属国家识别，未填写国家时按仓库名称识别</span>
+              <span>缺失口径：该仓库未关联此SKU；已关联但库存为0仍算已覆盖</span>
+              <span>结果按SKU展示缺失仓库；缺失数为0表示已覆盖全部目标仓库</span>
+            </div>
+            <div id="inventoryRuleNote" class="query-rule-note" hidden>
+              <strong>固定查询规则</strong>
+              <span>仓库范围：全部仓库</span>
+              <span>展示粒度：SKU＋仓库</span>
+              <span>筛选条件：可用库存量 &gt; 0，或未发货数 &gt; 0，或在途量 &gt; 0</span>
+            </div>
+
+            <div class="actions">
+              <button id="skuInventoryRunBtn" class="primary" type="submit">开始查询并导出</button>
+              <button id="skuInventoryOpenOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>按开发人员分页查询马帮库存</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section id="skuInventoryResult" class="surface sku-inventory-result" hidden>
+          <div class="section-head tight">
+            <div><h2>查询结果</h2><p id="resultSummary">暂无结果</p></div>
+            <span id="resultLimitNote" class="section-badge">页面预览</span>
+          </div>
+          <p id="warehouseScopeNote" class="query-rule-note" hidden></p>
+          <p id="warehouseScopeWarning" class="query-rule-note" hidden></p>
+          <div class="collection-table-wrap sku-inventory-table-wrap">
+            <table id="skuInventoryTable" class="sku-inventory-table">
+              <thead id="inventoryTableHead" hidden><tr><th>开发人员</th><th>库存SKU</th><th>商品中文名称</th><th>SKU创建时间</th><th>仓库</th><th>仓库ID</th><th>可用库存量</th><th>预测日销量</th><th>当前可售天数</th><th>未发货数</th><th>在途量</th></tr></thead>
+              <thead id="coverageTableHead"><tr><th>开发人员</th><th>库存SKU</th><th>商品中文名称</th><th>款式类型</th><th>缺失仓库</th><th>缺失仓库数</th><th>已关联仓库数</th></tr></thead>
+              <tbody id="skuInventoryTableBody"></tbody>
+            </table>
+            <div id="skuInventoryEmpty" class="developer-empty" hidden>没有符合条件的库存、未发货或在途仓库记录</div>
+          </div>
+          <div id="skuInventoryPagination" class="sku-inventory-pagination" hidden>
+            <button id="skuInventoryPrevBtn" class="secondary compact-btn" type="button">上一页</button>
+            <span id="skuInventoryPageText">第 1 / 1 页</span>
+            <button id="skuInventoryNextBtn" class="secondary compact-btn" type="button">下一页</button>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260921-sku-coverage"></script>
+    <script src="../assets/pages/sku-inventory-query.js?v=20260921-sku-coverage"></script>
+  </body>
+</html>

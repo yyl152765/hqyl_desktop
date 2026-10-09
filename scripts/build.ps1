@@ -3,6 +3,12 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $ReleaseDir = Join-Path $Root "release"
+$OriginalSourceDateEpoch = $env:SOURCE_DATE_EPOCH
+$OriginalPythonHashSeed = $env:PYTHONHASHSEED
+
+# Keep Python bytecode archives and executable headers reproducible across builds.
+$env:SOURCE_DATE_EPOCH = "946684800"
+$env:PYTHONHASHSEED = "0"
 
 if (-not (Test-Path $Python)) {
     $Python = "python"
@@ -15,7 +21,12 @@ try {
         throw "pip install failed with exit code $LASTEXITCODE"
     }
 
-    & $Python -m PyInstaller --noconfirm HQYLAutomation.spec
+    & $Python scripts\build_public_runtime_configs.py
+    if ($LASTEXITCODE -ne 0) {
+        throw "public runtime config generation failed with exit code $LASTEXITCODE"
+    }
+
+    & $Python -m PyInstaller --clean --noconfirm HQYLAutomation.spec
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE"
     }
@@ -43,4 +54,16 @@ try {
 }
 finally {
     Pop-Location
+
+    if ($null -eq $OriginalSourceDateEpoch) {
+        Remove-Item Env:\SOURCE_DATE_EPOCH -ErrorAction SilentlyContinue
+    } else {
+        $env:SOURCE_DATE_EPOCH = $OriginalSourceDateEpoch
+    }
+
+    if ($null -eq $OriginalPythonHashSeed) {
+        Remove-Item Env:\PYTHONHASHSEED -ErrorAction SilentlyContinue
+    } else {
+        $env:PYTHONHASHSEED = $OriginalPythonHashSeed
+    }
 }

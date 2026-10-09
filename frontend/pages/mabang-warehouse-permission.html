@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>马帮仓库权限批量开通</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel-20260818-mabang-permission-selectable" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main mabang-permission-main">
+        <header class="page-header">
+          <div><div class="page-kicker">马帮流程 / 通用工具 / 员工权限</div><h1>仓库权限批量开通</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid permission-overview">
+          <article class="overview-card accent-green"><span>开通权限</span><strong id="permissionTypeCount">3 项</strong><small id="permissionTypeSummary">查看商品、查看订单、查看仓库</small></article>
+          <article class="overview-card"><span>员工数量</span><strong id="employeeCount">0</strong><small>按姓名精确匹配</small></article>
+          <article class="overview-card"><span>已选仓库</span><strong id="warehouseCount">0</strong><small>动态读取马帮仓库</small></article>
+          <article class="overview-card"><span>可开通员工</span><strong id="readyCount">0</strong><small id="statusText">请先加载仓库并完成预览</small></article>
+        </section>
+
+        <section class="permission-layout">
+          <form id="permissionForm" class="surface form-surface permission-form">
+            <div class="section-head">
+              <div><h2>批量开通设置</h2><p>选择需要开通的权限，默认三项全部勾选；未选择的权限保持原样。</p></div>
+              <span class="section-badge">员工数据权限</span>
+            </div>
+
+            <fieldset id="permissionTypePicker" class="permission-type-picker">
+              <legend>选择开通权限</legend>
+              <label><input id="permissionProduct" name="permissionType" type="checkbox" value="product" checked /><span><strong>查看商品</strong><small>按仓库开通，并同步商品父目录（排除 EB 产品）</small></span></label>
+              <label><input id="permissionOrder" name="permissionType" type="checkbox" value="order" checked /><span><strong>查看订单</strong><small>切换为按仓库查看，并开通所选仓库</small></span></label>
+              <label><input id="permissionWarehouse" name="permissionType" type="checkbox" value="warehouse" checked /><span><strong>查看仓库</strong><small>在仓库权限中开通所选仓库</small></span></label>
+            </fieldset>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+
+            <div class="permission-form-grid">
+              <label class="permission-employee-field">
+                <span>员工姓名</span>
+                <textarea id="employeeText" spellcheck="false" placeholder="一行一个员工姓名"></textarea>
+                <small>自动去除空行和重复姓名；同名员工不会自动保存。</small>
+              </label>
+
+              <div class="warehouse-picker" aria-labelledby="warehousePickerLabel">
+                <div class="warehouse-picker-head">
+                  <label><span id="warehousePickerLabel">启用仓库</span><input id="warehouseSearch" type="search" placeholder="搜索仓库名称" disabled /></label>
+                  <div class="warehouse-picker-actions">
+                    <button id="selectFilteredBtn" class="secondary compact-btn" type="button" disabled>全选筛选项</button>
+                    <button id="clearWarehouseBtn" class="secondary compact-btn" type="button" disabled>清空选择</button>
+                  </div>
+                </div>
+                <div id="warehouseList" class="warehouse-list" role="group" aria-label="仓库列表">
+                  <div id="warehouseEmpty" class="warehouse-empty">点击“加载仓库”读取马帮仓库列表</div>
+                </div>
+                <div id="warehouseSelectionHint" class="warehouse-selection-hint">尚未加载仓库</div>
+              </div>
+            </div>
+
+            <div class="actions permission-actions">
+              <button id="loadWarehousesBtn" class="secondary" type="button">加载仓库</button>
+              <button id="previewBtn" class="primary" type="submit">预览检查</button>
+              <button id="applyBtn" class="primary permission-apply-btn" type="button" disabled>开始开通</button>
+            </div>
+          </form>
+
+          <section class="surface log-surface">
+            <div class="section-head tight">
+              <div><h2>运行日志</h2><p>逐员工显示检查和保存进度</p></div>
+              <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+            </div>
+            <pre id="logBox" class="log-box" tabindex="0"></pre>
+          </section>
+        </section>
+
+        <section class="surface permission-result-surface">
+          <div class="section-head tight">
+            <div><h2>预览与执行结果</h2><p>只有“可开通”员工会按操作文档同步并进入保存任务。</p></div>
+            <span id="resultSummary" class="permission-result-summary">暂无结果</span>
+          </div>
+          <div class="permission-table-wrap">
+            <table class="permission-result-table">
+              <thead><tr><th>输入姓名</th><th>匹配员工</th><th>部门 / 手机</th><th>查看商品</th><th>查看订单</th><th>查看仓库</th><th>状态</th><th>说明</th></tr></thead>
+              <tbody id="permissionResultBody"><tr><td class="permission-empty-row" colspan="8">完成预览后将在这里显示员工匹配和权限差异</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260818-mabang-permission-selectable"></script>
+    <script src="../assets/pages/mabang-warehouse-permission.js?v=20260818-mabang-permission-selectable"></script>
+  </body>
+</html>

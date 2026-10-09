@@ -10,6 +10,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
+from backend.config_store import ConfigStore
+
 ProgressCallback = Callable[[str], None]
 
 # ---------------------------------------------------------------------------
@@ -40,7 +42,9 @@ MAX_CONCURRENT_STORES = 4
 DEFAULT_MAX_CONCURRENT_STORES = 2
 MIN_PAYMENT_WAIT_SECONDS = 30
 MAX_PAYMENT_WAIT_SECONDS = 300
-DEFAULT_PAYMENT_WAIT_SECONDS = 60
+DEFAULT_PAYMENT_WAIT_SECONDS = 150
+DEFAULT_PAYMENT_CARD_TYPE = "payoneer"
+PAYMENT_CARD_TYPES = {"payoneer", "world"}
 
 # superbrowser_process 项目根目录（相对于本项目的上一级）
 _SUPERBROWSER_ROOT: str | None = None
@@ -104,6 +108,8 @@ class ShopeeAdsRechargeQuery:
     recharge_mode: str = "sheet"
     custom_recharge_items: tuple[dict[str, str], ...] = ()
     payment_wait_seconds: int = DEFAULT_PAYMENT_WAIT_SECONDS
+    payment_card_type: str = DEFAULT_PAYMENT_CARD_TYPE
+    sms_verification_required: bool = False
     max_concurrent_stores: int = DEFAULT_MAX_CONCURRENT_STORES
     browser_window_mode: str = "normal"
     sync_database: bool = True
@@ -141,6 +147,38 @@ def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:
     if v > hi:
         return hi
     return v
+
+
+def normalize_payment_card_type(value: Any) -> str:
+    card_type = str(value or DEFAULT_PAYMENT_CARD_TYPE).strip().lower()
+    return card_type if card_type in PAYMENT_CARD_TYPES else DEFAULT_PAYMENT_CARD_TYPE
+
+
+def desktop_dingtalk_doc_credentials(app_settings: Any | None = None) -> dict[str, str]:
+    settings = app_settings if app_settings is not None else ConfigStore().load()
+    dingtalk = getattr(settings, "dingtalk", None)
+    return {
+        "app_key": str(getattr(dingtalk, "app_key", "") or "").strip(),
+        "app_secret": str(getattr(dingtalk, "app_secret", "") or ""),
+    }
+
+
+def validate_sheet_dingtalk_credentials(
+    recharge_mode: Any,
+    credentials: dict[str, str],
+) -> None:
+    if str(recharge_mode or "sheet").strip().lower() != "sheet":
+        return
+    missing = []
+    if not str(credentials.get("app_key") or "").strip():
+        missing.append("钉钉 AppKey")
+    if not str(credentials.get("app_secret") or ""):
+        missing.append("钉钉 AppSecret")
+    if missing:
+        raise RuntimeError(
+            "按钉钉表金额充值前，请先在桌面端“设置 > 钉钉应用配置”补齐："
+            + "、".join(missing)
+        )
 
 
 def parse_store_names(value: Any) -> list[str]:
@@ -248,6 +286,8 @@ def validate_shopee_ads_payload(payload: dict[str, Any]) -> ShopeeAdsRechargeQue
         browser_window_mode = "normal"
 
     sync_database = bool(payload.get("sync_database", True))
+    payment_card_type = normalize_payment_card_type(payload.get("payment_card_type"))
+    sms_verification_required = bool(payload.get("sms_verification_required", False))
 
     return ShopeeAdsRechargeQuery(
         site_code=site_code,
@@ -258,6 +298,8 @@ def validate_shopee_ads_payload(payload: dict[str, Any]) -> ShopeeAdsRechargeQue
         recharge_mode=recharge_mode,
         custom_recharge_items=tuple(custom_items),
         payment_wait_seconds=payment_wait,
+        payment_card_type=payment_card_type,
+        sms_verification_required=sms_verification_required,
         max_concurrent_stores=max_concurrent,
         browser_window_mode=browser_window_mode,
         sync_database=sync_database,
@@ -286,6 +328,9 @@ def run_shopee_ads_recharge(
 
     _emit(progress, f"正在构建运行配置...")
 
+    dingtalk_doc_credentials = desktop_dingtalk_doc_credentials()
+    validate_sheet_dingtalk_credentials(job.recharge_mode, dingtalk_doc_credentials)
+
     # 构建 AdsRechargeSettings
     settings = module.AdsRechargeSettings(
         company=job.company,
@@ -304,6 +349,9 @@ def run_shopee_ads_recharge(
         send_notifications=False,
         enable_quota_limit=False,
     )
+    setattr(settings, "payment_card_type", job.payment_card_type)
+    setattr(settings, "sms_verification_required", job.sms_verification_required)
+    setattr(settings, "dingtalk_doc_credentials", dingtalk_doc_credentials)
 
     # 如果没有传入路径，尝试自动解析
     if not settings.client_path or not settings.webdriver_path:
@@ -406,5 +454,7 @@ def save_site_config(site_code: str, payload: dict[str, Any]) -> str:
         send_notifications=False,
         enable_quota_limit=False,
     )
+    setattr(settings, "payment_card_type", normalize_payment_card_type(payload.get("payment_card_type")))
+    setattr(settings, "sms_verification_required", bool(payload.get("sms_verification_required", False)))
 
     return module.save_settings_to_config(settings)

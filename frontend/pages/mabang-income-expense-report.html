@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>马帮收支报表</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div>
+            <div class="page-kicker">马帮流程 / 财务导出 / 发货时间</div>
+            <h1>马帮收支报表</h1>
+          </div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>筛选口径</span><strong>发货时间</strong><small>其他时间条件保持为空</small></article>
+          <article class="overview-card"><span>已选项目</span><strong id="selectionCount">0</strong><small>每个分类或海外仓生成一个 CSV</small></article>
+          <article class="overview-card"><span>数据行数</span><strong id="recordCount">0</strong><small>全部项目合计</small></article>
+          <article class="overview-card file-card"><span>输出文件</span><strong id="fileCount">0 个</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid">
+          <form id="incomeExpenseForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>导出条件</h2><p>店铺自定义分类和海外仓可任选、多选，文件直接保存到平台输出目录。</p></div>
+              <span class="section-badge">马帮 ERP</span>
+            </div>
+
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span>
+              <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+
+            <div class="form-grid">
+              <label><span>发货开始日期</span><input id="incomeExpenseStartDate" type="date" required /></label>
+              <label><span>发货结束日期</span><input id="incomeExpenseEndDate" type="date" required /></label>
+              <label class="group-field">
+                <span>店铺自定义分类</span>
+                <select id="incomeExpenseCategorySelect" multiple size="10" aria-label="店铺自定义分类"></select>
+                <small class="form-note">原有 21 项分类；按住 Ctrl 可多选，也可以不选。</small>
+              </label>
+              <label class="group-field">
+                <span>海外仓</span>
+                <select id="incomeExpenseWarehouseSelect" multiple size="12" aria-label="海外仓"></select>
+                <small class="form-note">使用马帮仓库字段筛选；每次进入均不默认选择仓库，请按需勾选。</small>
+              </label>
+            </div>
+
+            <div class="actions">
+              <button id="incomeExpenseRunBtn" class="primary" type="submit">导出收支报表</button>
+              <button id="selectYacangWarehousesBtn" class="secondary" type="button">选择雅仓三项</button>
+              <button id="selectAllWarehousesBtn" class="secondary" type="button">全选海外仓</button>
+              <button id="selectAllCategoriesBtn" class="secondary" type="button">全选分类</button>
+              <button id="clearSelectionsBtn" class="secondary" type="button">清空选择</button>
+              <button id="incomeExpenseOpenOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>官方文件分片、完整性校验和生成进度</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260902-income-expense-v0.2.47"></script>
+    <script src="../assets/pages/mabang-income-expense-report.js?v=20260930-empty-warehouses"></script>
+  </body>
+</html>

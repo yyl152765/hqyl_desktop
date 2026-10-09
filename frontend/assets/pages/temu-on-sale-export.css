@@ -1,0 +1,7 @@
+.temu-export-note { color: var(--text-secondary, #64748b); font-size: 13px; line-height: 1.7; }
+.temu-output-label { display: grid; gap: 8px; margin: 18px; }
+#exportForm > .temu-export-note { margin: 12px 18px; }
+#exportForm > .temu-export-warning { margin: 12px 18px; }
+.temu-export-warning { padding: 12px; margin-top: 12px; border-radius: 8px; background: #fff5e5; color: #8d4b11; white-space: pre-line; overflow-wrap: anywhere; }
+#storeResults td { vertical-align: top; max-width: 380px; overflow-wrap: anywhere; }
+#storeResults small { display: block; color: var(--text-secondary, #64748b); margin-top: 5px; }

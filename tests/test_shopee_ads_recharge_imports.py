@@ -15,6 +15,7 @@ class ShopeeAdsRechargeImportTests(unittest.TestCase):
         original_root = shopee_ads_recharge._SUPERBROWSER_ROOT
         original_main = sys.modules.pop("main", None)
         try:
+            sys.path = [p for p in sys.path if Path(p).resolve() != SUPERBROWSER_ROOT.resolve()]
             sys.path.insert(0, str(PROJECT_ROOT / "launcher"))
             shopee_ads_recharge._SUPERBROWSER_ROOT = None
 

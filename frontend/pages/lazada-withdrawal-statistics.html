@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lazada 提现统计</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">紫鸟流程 / Lazada 财务 / 提现统计</div><h1>Lazada 提现统计</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>输入店铺</span><strong id="skuCount">0</strong><small>本次填写数量</small></article>
+          <article class="overview-card"><span>匹配店铺</span><strong id="matchedCount">0</strong><small>紫鸟浏览器匹配</small></article>
+          <article class="overview-card"><span>成功店铺</span><strong id="recordCount">0</strong><small>Excel 或账单已上传</small></article>
+          <article class="overview-card file-card"><span>任务输出</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+        <section class="layout-grid">
+          <form id="lazadaWithdrawalForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>统计条件</h2><p>菲律宾、马来抓取提现流水并生成 Excel；泰国下载并校验收入账单。</p></div>
+              <span class="section-badge">钉盘自动归档</span>
+            </div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon ziniao-icon">Z</span>
+              <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a>
+            </div>
+            <div class="form-grid">
+              <label><span>国家</span><select id="lazadaCountry"></select></label>
+              <label><span>开始日期</span><input id="lazadaStartDate" type="date" /></label>
+              <label><span>结束日期</span><input id="lazadaEndDate" type="date" /></label>
+              <label class="store-field"><span>店铺名称 <small>每行一个</small></span><textarea id="lazadaStores" spellcheck="false" placeholder="Lazada 紫鸟店铺名称，每行一个"></textarea></label>
+            </div>
+            <div class="form-grid">
+              <label><span>并发店铺数</span><select id="lazadaConcurrent"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label>
+              <label><span>浏览器窗口</span><select id="lazadaWindowMode"><option value="normal">正常显示</option><option value="background">后台运行</option></select></label>
+              <label><span>紫鸟客户端</span><div class="input-action"><input id="lazadaClientPath" readonly /><button id="chooseClientPathBtn" class="secondary" type="button">选择</button></div></label>
+              <label><span>驱动目录</span><div class="input-action"><input id="lazadaDriverPath" readonly /><button id="chooseDriverPathBtn" class="secondary" type="button">选择</button></div></label>
+            </div>
+            <div class="actions">
+              <button id="lazadaRunBtn" class="primary" type="submit">开始统计</button>
+              <button id="lazadaRefreshBtn" class="secondary" type="button">刷新默认值</button>
+              <button id="lazadaOpenOutputBtn" class="secondary" type="button" disabled>打开结果目录</button>
+            </div>
+          </form>
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>页面校验、下载与上传进度</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+        <section class="surface">
+          <div class="section-head tight"><div><h2>店铺结果</h2><p>状态、产物数量与钉盘路径</p></div><span id="failedCount" class="section-badge">失败 0</span></div>
+          <div class="collection-table-wrap">
+            <table>
+              <thead><tr><th>店铺</th><th>国家</th><th>状态</th><th>产物</th><th>钉盘路径 / 说明</th></tr></thead>
+              <tbody id="lazadaResultBody"><tr><td colspan="5">尚未运行</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260715-lazada-withdrawal"></script>
+    <script src="../assets/pages/lazada-withdrawal-statistics.js?v=20260716-v2"></script>
+  </body>
+</html>

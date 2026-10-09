@@ -36,6 +36,8 @@
       store_names: $("shopeeAdsStores").value,
       max_concurrent_stores: $("shopeeAdsConcurrent").value,
       payment_wait_seconds: $("shopeeAdsPaymentWait").value,
+      payment_card_type: $("shopeeAdsPaymentCardType").value,
+      sms_verification_required: $("shopeeAdsSmsMode").value === "required",
       browser_window_mode: $("shopeeAdsWindowMode").value,
       sync_database: $("shopeeAdsSyncDb").checked,
       client_path: $("shopeeAdsClientPath").value,
@@ -107,7 +109,7 @@
       updateStoreCount();
     },
     setRunning(running) {
-      ["shopeeAdsRunBtn", "shopeeAdsSaveBtn", "shopeeAdsRefreshBtn", "chooseClientPathBtn", "chooseDriverPathBtn"].forEach((id) => { $(id).disabled = running; });
+      ["shopeeAdsRunBtn", "shopeeAdsSaveBtn", "shopeeAdsRefreshBtn", "chooseClientPathBtn", "chooseDriverPathBtn", "shopeeAdsPaymentCardType", "shopeeAdsSmsMode"].forEach((id) => { $(id).disabled = running; });
     },
     resetResult() {
       updateStoreCount();

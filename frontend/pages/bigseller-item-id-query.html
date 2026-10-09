@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BS 商品ID查询</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel-20260826-bs-item-id" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">BigSeller / Shopee / 商品查询</div><h1>BS 商品ID查询</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>SKU 数</span><strong id="skuCount">0</strong><small>自动去重，保留输入顺序</small></article>
+          <article class="overview-card"><span>已匹配商品</span><strong id="matchedCount">0</strong><small>Views 降序第一条</small></article>
+          <article class="overview-card"><span>未匹配 / 查询失败</span><strong id="unmatchedCount">0 / 0</strong><small>未匹配与失败分别记录</small></article>
+          <article class="overview-card file-card"><span>输出文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid sku-inventory-layout">
+          <form id="itemIdQueryForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>批量查询 SKU</h2><p>按 SKU（含子SKU）模糊搜索，取 Views 最高的第一条商品。</p></div>
+              <span class="section-badge">BigSeller</span>
+            </div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon bigseller-icon">B</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="bigseller">尚未绑定 BigSeller 账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=bigseller">管理账号</a>
+            </div>
+            <div class="form-grid">
+              <label class="collection-store-field">
+                <span>SKU 列表</span>
+                <textarea id="skuText" rows="8" spellcheck="false" placeholder="每行一个 SKU，也可从 Excel 粘贴&#10;示例：SKU-001&#10;SKU-002" aria-describedby="skuInputHint skuInputSummary"></textarea>
+                <small id="skuInputHint">支持换行、逗号、分号、Tab 分隔；保留 SKU 内部空格，去除首尾空格。每次最多 5000 个唯一 SKU。</small>
+                <small id="skuInputSummary" aria-live="polite">已输入 0 个唯一 SKU</small>
+              </label>
+              <label class="output-field"><span>输出目录</span><div class="input-action"><input id="outputDir" placeholder="使用设置中的输出目录，或选择其他目录" /><button id="chooseDirBtn" class="secondary" type="button">选择</button></div></label>
+            </div>
+            <div class="query-rule-note" aria-label="固定查询规则">
+              <strong>固定查询规则</strong>
+              <span>Shopee 在售商品 · 全部店铺</span>
+              <span>SKU（含子SKU）</span>
+              <span>Fuzzy Search</span>
+              <span>Views 降序 ↓</span>
+              <span>仅取第一条 Item ID</span>
+            </div>
+            <div class="form-note" style="margin: 12px 18px 0">Excel 仅包含 SKU、Item ID 两列。没有匹配或查询失败的 SKU 会保留，Item ID 留空；原因可在结果预览和日志中查看。Views 相同时取平台返回的第一条。</div>
+            <div class="actions">
+              <button id="runBtn" class="primary" type="submit">开始查询并导出</button>
+              <button id="clearSkuBtn" class="secondary" type="button">清空输入</button>
+              <button id="openOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+
+          <div class="right-stack">
+            <section class="surface">
+              <div class="section-head tight">
+                <div><h2>查询进度</h2><p id="progressText" role="status" aria-live="polite">等待开始查询</p></div>
+                <span id="progressCount" class="section-badge">0 / 0</span>
+              </div>
+              <div id="queryProgress" class="update-progress-track" role="progressbar" aria-label="SKU 查询进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="margin: 12px 20px 20px">
+                <div id="queryProgressBar" class="update-progress-bar"></div>
+              </div>
+            </section>
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>逐条查询 SKU，记录匹配结果与异常</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section id="queryResult" class="surface sku-inventory-result" hidden>
+          <div class="section-head tight">
+            <div><h2>查询结果</h2><p id="resultSummary">暂无结果</p></div>
+            <button id="openFileBtn" class="secondary compact-btn" type="button" disabled>打开 Excel</button>
+          </div>
+          <div id="previewNotice" class="collection-scope-note" hidden>演示模式：以下内容为界面示例，没有查询 BigSeller，也没有生成 Excel。</div>
+          <div id="failureNotice" class="collection-scope-note" role="status" hidden></div>
+          <div class="collection-table-wrap sku-inventory-table-wrap">
+            <table aria-label="SKU 商品ID查询结果">
+              <thead><tr><th scope="col">SKU</th><th scope="col">Item ID</th><th scope="col">查询状态</th><th scope="col">说明（不导出）</th></tr></thead>
+              <tbody id="resultTableBody"></tbody>
+            </table>
+            <div id="resultEmpty" class="developer-empty" hidden>暂无查询结果</div>
+          </div>
+          <div class="sku-inventory-pagination">
+            <span id="resultLimitNote">页面预览</span>
+            <button id="resultPrevBtn" class="secondary compact-btn" type="button">上一页</button>
+            <span id="resultPageText">第 1 / 1 页</span>
+            <button id="resultNextBtn" class="secondary compact-btn" type="button">下一页</button>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260826-bs-item-id-v0.2.42"></script>
+    <script src="../assets/pages/bigseller-item-id-query.js?v=20260826-bs-item-id-v0.2.42"></script>
+  </body>
+</html>

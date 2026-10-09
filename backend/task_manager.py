@@ -20,6 +20,7 @@ class TaskRecord:
     created_at: str = field(default_factory=lambda: _now_text())
     started_at: str = ""
     finished_at: str = ""
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 class TaskManager:
@@ -32,8 +33,9 @@ class TaskManager:
         name: str,
         runner: Callable[[Callable[[str], None]], dict[str, Any]],
         tool: str = "",
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        task = TaskRecord(id=uuid.uuid4().hex, name=name, tool=str(tool or ""))
+        task = TaskRecord(id=uuid.uuid4().hex, name=name, tool=str(tool or ""), context=context or {})
         with self._lock:
             self._tasks[task.id] = task
 
@@ -58,6 +60,7 @@ class TaskManager:
                 "created_at": task.created_at,
                 "started_at": task.started_at,
                 "finished_at": task.finished_at,
+                "context": dict(task.context or {}),
             }
 
     def latest_snapshot(self, tool: str = "") -> dict[str, Any]:
@@ -78,10 +81,15 @@ class TaskManager:
             result = runner(lambda message: self._append_log(task_id, message))
             with self._lock:
                 task = self._tasks[task_id]
-                task.status = "success"
                 task.result = result
                 task.finished_at = _now_text()
-                task.logs.append("任务完成")
+                if isinstance(result, dict) and result.get("is_complete") is False:
+                    task.status = "failed"
+                    task.error = str(result.get("completion_message") or "结果不完整，仍有查询失败项")
+                    task.logs.append(task.error)
+                else:
+                    task.status = "success"
+                    task.logs.append("任务完成")
         except Exception:
             with self._lock:
                 task = self._tasks[task_id]

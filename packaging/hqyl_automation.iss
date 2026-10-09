@@ -1,5 +1,5 @@
 #define MyAppName "寰球云联自动化平台"
-#define MyAppVersion "0.2.5"
+#define MyAppVersion "0.2.66"
 #define MyAppPublisher "HQYL"
 #define MyAppExeName "HQYLAutomation.exe"
 
@@ -24,7 +24,7 @@ WizardStyle=modern
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标："; Flags: unchecked
 
 [Files]
-Source: "..\dist\HQYLAutomation\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\HQYLAutomation\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs notimestamp
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

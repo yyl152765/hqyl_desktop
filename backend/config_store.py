@@ -12,6 +12,7 @@ from typing import Any
 APP_NAME = "HQYLAutomation"
 DEFAULT_ROWS_PER_PAGE = 500
 DEFAULT_UPDATE_MANIFEST_URL = "http://rpa.whhqyl.com.cn/hqyl/latest.json"
+LEGACY_DINGTALK_CONFIG_ENV = "HQYL_LEGACY_DINGTALK_CONFIG"
 LEGACY_UPDATE_MANIFEST_URLS = {
     "http://47.112.20.68/hqyl/latest.json",
 }
@@ -49,8 +50,11 @@ class AppSettings:
     captcha_password: str = ""
     dingtalk: DingTalkSettings = field(default_factory=DingTalkSettings)
     sales_group_ids: list[str] = field(default_factory=list)
+    income_expense_category_ids: list[str] = field(default_factory=list)
+    income_expense_warehouse_keys: list[str] = field(default_factory=list)
     accounts: list[BoundAccount] = field(default_factory=list)
     active_account_ids: dict[str, str] = field(default_factory=dict)
+    vietnam_last_manifest_path: str = ""
 
 
 def _base_app_data_dir() -> Path:
@@ -79,7 +83,8 @@ class ConfigStore:
     """Small JSON config store for desktop settings."""
 
     def __init__(self, config_path: Path | None = None) -> None:
-        self.config_dir = _base_app_data_dir()
+        self._explicit_config_path = config_path is not None
+        self.config_dir = config_path.parent if config_path is not None else _base_app_data_dir()
         self.local_data_dir = _base_local_data_dir()
         self.logs_dir = self.local_data_dir / "logs"
         self.config_path = config_path or self.config_dir / "settings.json"
@@ -91,9 +96,12 @@ class ConfigStore:
     def load(self) -> AppSettings:
         self.ensure_dirs()
         if not self.config_path.exists():
+            legacy_dingtalk = _load_legacy_dingtalk_credentials(
+                include_source_fallback=not self._explicit_config_path,
+            )
             settings = AppSettings(
                 output_dir=str(desktop_path()),
-                dingtalk=_coerce_dingtalk_settings({}, seed_users=True),
+                dingtalk=_coerce_dingtalk_settings(legacy_dingtalk, seed_users=True),
             )
             self.save(settings)
             return settings
@@ -102,8 +110,23 @@ class ConfigStore:
         except Exception:
             payload = {}
         accounts = _coerce_accounts(payload.get("accounts"))
-        dingtalk_seed_users = "dingtalk" not in payload
-        dingtalk = _coerce_dingtalk_settings(payload.get("dingtalk"), seed_users=dingtalk_seed_users)
+        raw_dingtalk = payload.get("dingtalk")
+        dingtalk_seed_users = not isinstance(raw_dingtalk, dict) or not raw_dingtalk.get("users")
+        dingtalk = _coerce_dingtalk_settings(raw_dingtalk, seed_users=dingtalk_seed_users)
+        migrated_dingtalk = False
+        if not dingtalk.app_key or not dingtalk.app_secret:
+            legacy_dingtalk = _load_legacy_dingtalk_credentials(
+                include_source_fallback=not self._explicit_config_path,
+            )
+            legacy_app_key = str(legacy_dingtalk.get("app_key") or "").strip()
+            legacy_app_secret = str(legacy_dingtalk.get("app_secret") or "")
+            if legacy_app_key and legacy_app_secret:
+                dingtalk = DingTalkSettings(
+                    app_key=dingtalk.app_key or legacy_app_key,
+                    app_secret=dingtalk.app_secret or legacy_app_secret,
+                    users=dingtalk.users,
+                )
+                migrated_dingtalk = True
         legacy_username = str(payload.get("username") or "").strip()
         legacy_password = str(payload.get("password") or "")
         if legacy_username and legacy_password and not any(account.vendor == "mabang" for account in accounts):
@@ -116,7 +139,7 @@ class ConfigStore:
                     password=legacy_password,
                 )
             )
-        return AppSettings(
+        settings = AppSettings(
             output_dir=str(payload.get("output_dir") or desktop_path()).strip(),
             rows_per_page=_coerce_rows_per_page(payload.get("rows_per_page")),
             update_manifest_url=_coerce_update_manifest_url(payload.get("update_manifest_url")),
@@ -124,9 +147,19 @@ class ConfigStore:
             captcha_password=str(payload.get("captcha_password") or ""),
             dingtalk=dingtalk,
             sales_group_ids=_coerce_string_list(payload.get("sales_group_ids")),
+            income_expense_category_ids=_coerce_string_list(
+                payload.get("income_expense_category_ids")
+            ),
+            income_expense_warehouse_keys=_coerce_string_list(
+                payload.get("income_expense_warehouse_keys")
+            ),
             accounts=accounts,
             active_account_ids=_coerce_active_account_ids(payload.get("active_account_ids"), accounts),
+            vietnam_last_manifest_path=str(payload.get("vietnam_last_manifest_path") or "").strip(),
         )
+        if migrated_dingtalk:
+            self._write_settings(settings)
+        return settings
 
     def save(self, settings: AppSettings | dict[str, Any]) -> AppSettings:
         self.ensure_dirs()
@@ -144,22 +177,115 @@ class ConfigStore:
                 captcha_password=str(settings.get("captcha_password", current.captcha_password) or ""),
                 dingtalk=dingtalk,
                 sales_group_ids=_coerce_string_list(settings.get("sales_group_ids", current.sales_group_ids)),
+                income_expense_category_ids=_coerce_string_list(
+                    settings.get(
+                        "income_expense_category_ids",
+                        current.income_expense_category_ids,
+                    )
+                ),
+                income_expense_warehouse_keys=_coerce_string_list(
+                    settings.get(
+                        "income_expense_warehouse_keys",
+                        current.income_expense_warehouse_keys,
+                    )
+                ),
                 accounts=accounts,
                 active_account_ids=_coerce_active_account_ids(
                     settings.get("active_account_ids", current.active_account_ids),
                     accounts,
                 ),
+                vietnam_last_manifest_path=str(settings.get("vietnam_last_manifest_path", current.vietnam_last_manifest_path) or "").strip(),
             )
         if not settings.output_dir:
             settings.output_dir = str(desktop_path())
         settings.dingtalk = _coerce_dingtalk_settings(settings.dingtalk)
         settings.accounts = _coerce_accounts(settings.accounts)
         settings.active_account_ids = _coerce_active_account_ids(settings.active_account_ids, settings.accounts)
+        self._write_settings(settings)
+        return settings
+
+    def _write_settings(self, settings: AppSettings) -> None:
         self.config_path.write_text(
             json.dumps(asdict(settings), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        return settings
+
+
+def _legacy_dingtalk_config_candidates(*, include_source_fallback: bool) -> list[Path]:
+    candidates: list[Path] = []
+    env_path = str(os.getenv(LEGACY_DINGTALK_CONFIG_ENV) or "").strip()
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+
+    if getattr(sys, "frozen", False):
+        install_root = Path(sys.executable).resolve().parent
+        candidates.extend(
+            [
+                install_root / "_internal" / "config" / "config.yaml",
+                install_root / "config" / "config.yaml",
+                install_root
+                / "_internal"
+                / "main"
+                / "shopee"
+                / "config"
+                / "Shopee马来广告充值.yaml",
+            ]
+        )
+    elif include_source_fallback:
+        superbrowser_root = Path(__file__).resolve().parents[2] / "superbrowser_process"
+        candidates.extend(
+            [
+                superbrowser_root / "config" / "config.yaml",
+                superbrowser_root
+                / "main"
+                / "shopee"
+                / "config"
+                / "Shopee马来广告充值.yaml",
+            ]
+        )
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        normalized = str(path.resolve())
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(path)
+    return unique
+
+
+def _load_legacy_dingtalk_credentials(*, include_source_fallback: bool) -> dict[str, str]:
+    try:
+        import yaml
+    except ImportError:
+        return {}
+
+    for path in _legacy_dingtalk_config_candidates(
+        include_source_fallback=include_source_fallback
+    ):
+        if not path.is_file():
+            continue
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        dingtalk = payload.get("dingtalk") or {}
+        if not isinstance(dingtalk, dict):
+            continue
+        app = dingtalk.get("app") or {}
+        app_rpa = app.get("rpa") if isinstance(app, dict) else {}
+        doc_config = dingtalk.get("doc_config") or {}
+        for source in (app_rpa, doc_config):
+            if not isinstance(source, dict):
+                continue
+            app_key = str(source.get("app_key") or "").strip()
+            app_secret = str(source.get("app_secret") or "")
+            if app_key and app_secret:
+                return {"app_key": app_key, "app_secret": app_secret}
+    return {}
 
 
 def _coerce_rows_per_page(value: Any) -> int:

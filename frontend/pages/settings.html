@@ -16,7 +16,7 @@
           <section id="accountSettingsCard" class="surface account-settings-surface">
             <div class="section-head account-section-head">
               <div><div class="section-eyebrow">ACCOUNT CENTER</div><h2>账号绑定</h2><p>统一管理流程使用的业务账号。密码只在添加时输入，保存后不会返回或显示。</p></div>
-              <div class="account-add-actions"><button id="addMabangAccountBtn" class="primary account-add-button" type="button">＋ 添加马帮账号</button><button id="addZiniaoAccountBtn" class="primary account-add-button" type="button">＋ 添加紫鸟账号</button><button id="addBigsellerAccountBtn" class="primary account-add-button" type="button">＋ 添加 BigSeller 账号</button></div>
+              <div class="account-add-actions"><button id="addMabangAccountBtn" class="primary account-add-button" type="button">＋ 添加马帮账号</button><button id="addZiniaoAccountBtn" class="primary account-add-button" type="button">＋ 添加紫鸟账号</button><button id="addBigsellerAccountBtn" class="primary account-add-button" type="button">＋ 添加 BigSeller 账号</button><button id="addEchotikAccountBtn" class="primary account-add-button" type="button">＋ 添加 EchoTik 账号</button></div>
             </div>
             <div id="mabangProviderCard" class="account-provider-card">
               <div class="account-provider-summary"><span class="account-provider-logo">M</span><div class="account-provider-copy"><div class="account-provider-title-row"><strong>马帮 ERP</strong><span id="mabangAccountStatus" class="account-status empty">未绑定</span></div><p>菲律宾销量报表、SKU 采购日志等马帮流程共用当前选择的账号。</p></div></div>
@@ -33,9 +33,14 @@
               <div class="account-control-grid"><label class="account-select-field"><span>当前使用账号</span><select id="bigsellerAccountSelect"></select></label><button id="deleteBigsellerAccountBtn" class="danger-secondary" type="button" disabled>删除账号</button></div>
               <div id="bigsellerAccountDetail" class="account-detail empty"><div class="account-avatar">?</div><div class="account-detail-copy"><small>账号信息</small><strong id="selectedBigsellerAccountName">尚未绑定账号</strong><span id="selectedBigsellerAccountUsername">点击“添加 BigSeller 账号”开始绑定</span></div><div class="credential-privacy">密码不在页面显示</div></div>
             </div>
+            <div id="echotikProviderCard" class="account-provider-card">
+              <div class="account-provider-summary"><span class="account-provider-logo echotik-icon">E</span><div class="account-provider-copy"><div class="account-provider-title-row"><strong>EchoTik</strong><span id="echotikAccountStatus" class="account-status empty">未绑定</span></div><p>泰国商品库和商品达人采集流程共用当前选择的账号。</p></div></div>
+              <div class="account-control-grid"><label class="account-select-field"><span>当前使用账号</span><select id="echotikAccountSelect"></select></label><button id="deleteEchotikAccountBtn" class="danger-secondary" type="button" disabled>删除账号</button></div>
+              <div id="echotikAccountDetail" class="account-detail empty"><div class="account-avatar">?</div><div class="account-detail-copy"><small>账号信息</small><strong id="selectedEchotikAccountName">尚未绑定账号</strong><span id="selectedEchotikAccountUsername">点击“添加 EchoTik 账号”开始绑定</span></div><div class="credential-privacy">密码不在页面显示</div></div>
+            </div>
           </section>
           <section class="surface dingtalk-settings-surface">
-            <div class="section-head"><div><h2>钉钉应用配置</h2><p>用于网红寄样登记同步在线表格。AppKey/AppSecret 保存后只显示掩码或配置状态；操作人姓名会自动到内置用户配置表里校验并绑定 UserID。</p></div><span class="section-badge">DingTalk</span></div>
+            <div class="section-head"><div><h2>钉钉应用配置</h2><p>用于 Shopee 按表充值和网红寄样登记同步在线表格。AppKey/AppSecret 保存后只显示掩码或配置状态；操作人姓名会自动到内置用户配置表里校验并绑定 UserID。</p></div><span class="section-badge">DingTalk</span></div>
             <div class="captcha-settings-body dingtalk-settings-body">
               <div class="dingtalk-credential-panel">
                 <div class="form-grid captcha-form-grid">
@@ -80,7 +85,7 @@
       </main>
     </div>
     <div id="toast" class="toast hidden"></div>
-    <script src="../assets/common.js?v=20260625-settings-ui"></script>
+    <script src="../assets/common.js?v=20260702-nav-vietnam-income"></script>
     <script src="../assets/pages/settings.js?v=20260625-settings-ui"></script>
   </body>
 </html>

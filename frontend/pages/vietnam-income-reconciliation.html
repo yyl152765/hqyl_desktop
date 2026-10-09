@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>越南收支报表</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel-vn-final-reconciliation" />
+    <style>
+      :root {
+        --primary-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        --primary-glow: rgba(16, 185, 129, 0.15);
+        --bg-glass: rgba(30, 41, 59, 0.7);
+        --border-glass: rgba(255, 255, 255, 0.08);
+      }
+      
+      .tab-nav {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1.5rem;
+        border-bottom: 1px solid var(--border-glass);
+        padding-bottom: 0.5rem;
+      }
+      
+      .tab-btn {
+        background: transparent;
+        border: none;
+        color: #94a3b8;
+        padding: 0.6rem 1.25rem;
+        font-size: 0.95rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        border-radius: 6px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+      }
+      
+      .tab-btn:hover {
+        color: #f1f5f9;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      
+      .tab-btn.active {
+        color: #10b981;
+        background: rgba(16, 185, 129, 0.08);
+        box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.2);
+      }
+
+      .tab-btn .badge {
+        background: rgba(239, 68, 68, 0.2);
+        color: #ef4444;
+        font-size: 0.75rem;
+        padding: 0.05rem 0.35rem;
+        border-radius: 10px;
+        display: none;
+      }
+      
+      .tab-content {
+        display: none;
+        animation: fadeIn 0.4s ease;
+      }
+      
+      .tab-content.active {
+        display: block;
+      }
+
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(5px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      
+      /* KPI Dashboard Grid */
+      .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+      }
+      
+      .kpi-card {
+        background: #1e293b;
+        border: 1px solid var(--border-glass);
+        border-radius: 12px;
+        padding: 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .kpi-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 3px;
+        height: 100%;
+        background: #475569;
+      }
+
+      .kpi-card.receivable::before { background: #10b981; }
+      .kpi-card.expense::before { background: #ef4444; }
+      .kpi-card.profit::before { background: #10b981; }
+      
+      .kpi-title {
+        font-size: 0.8rem;
+        color: #94a3b8;
+        font-weight: 500;
+      }
+      
+      .kpi-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #f8fafc;
+      }
+
+      .kpi-card strong,
+      #collectionTableBody td {
+        font-variant-numeric: tabular-nums;
+      }
+
+      .is-negative {
+        color: #ef4444 !important;
+      }
+      
+      .kpi-sub {
+        font-size: 0.75rem;
+        color: #64748b;
+      }
+      
+      .kpi-card.profit-rate-card {
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(5, 150, 105, 0.03) 100%);
+        border-color: rgba(16, 185, 129, 0.2);
+      }
+      
+      /* Wizard Step Bar */
+      .wizard-steps {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 2rem;
+        position: relative;
+        background: #1e293b;
+        padding: 1.25rem;
+        border-radius: 12px;
+        border: 1px solid var(--border-glass);
+      }
+      
+      .wizard-steps::before {
+        content: '';
+        position: absolute;
+        top: 36px;
+        left: 10%;
+        width: 80%;
+        height: 2px;
+        background: #334155;
+        z-index: 1;
+      }
+      
+      .wizard-step {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        z-index: 2;
+        cursor: pointer;
+        width: 23%;
+      }
+      
+      .step-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: #0f172a;
+        border: 2px solid #334155;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.9rem;
+        font-weight: bold;
+        color: #64748b;
+        margin-bottom: 0.5rem;
+        transition: all 0.3s ease;
+      }
+      
+      .wizard-step.active .step-icon {
+        background: #10b981;
+        border-color: #10b981;
+        color: #0f172a;
+        box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+      }
+      
+      .wizard-step.completed .step-icon {
+        background: #047857;
+        border-color: #047857;
+        color: #f8fafc;
+      }
+      
+      .step-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #64748b;
+        text-align: center;
+      }
+      
+      .wizard-step.active .step-title {
+        color: #10b981;
+      }
+      
+      .wizard-step.completed .step-title {
+        color: #e2e8f0;
+      }
+      
+      /* Log Drawer */
+      #logDrawer {
+        position: fixed;
+        bottom: 0;
+        right: 0;
+        width: calc(100% - 240px);
+        height: 42px;
+        background: #0f172a;
+        border-top: 1px solid var(--border-glass);
+        z-index: 1000;
+        transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        display: flex;
+        flex-direction: column;
+      }
+      
+      #logDrawer.expanded {
+        height: 320px;
+      }
+      
+      .log-drawer-header {
+        height: 42px;
+        padding: 0 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        cursor: pointer;
+        background: #1e293b;
+        user-select: none;
+      }
+      
+      .log-drawer-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #e2e8f0;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .log-drawer-title i {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #10b981;
+      }
+      
+      .log-drawer-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .log-toggle-btn {
+        background: transparent;
+        border: none;
+        color: #94a3b8;
+        cursor: pointer;
+        font-size: 0.8rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+      }
+      
+      .log-drawer-content {
+        flex: 1;
+        overflow: hidden;
+        display: none;
+        padding: 0.5rem 1rem;
+      }
+      
+      #logDrawer.expanded .log-drawer-content {
+        display: block;
+      }
+
+      .log-drawer-content pre {
+        height: 250px;
+        background: #020617;
+        border: 1px solid var(--border-glass);
+        border-radius: 6px;
+        padding: 0.75rem;
+        margin: 0;
+        overflow-y: auto;
+        font-family: Consolas, monospace;
+        font-size: 0.8rem;
+        color: #34d399;
+      }
+      
+      /* Anomaly item styling */
+      .anomaly-card {
+        background: rgba(239, 68, 68, 0.03);
+        border: 1px solid rgba(239, 68, 68, 0.12);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      
+      .anomaly-card.severity-attention {
+        background: rgba(245, 158, 11, 0.03);
+        border-color: rgba(245, 158, 11, 0.12);
+      }
+      
+      .anomaly-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      
+      .anomaly-tag {
+        font-size: 0.7rem;
+        padding: 0.15rem 0.45rem;
+        border-radius: 4px;
+        font-weight: bold;
+      }
+      
+      .anomaly-tag.blocking { background: rgba(239,68,68,0.2); color: #ef4444; }
+      .anomaly-tag.attention { background: rgba(245,158,11,0.2); color: #f59e0b; }
+
+      /* Step Content wrapper */
+      .step-pane {
+        display: none;
+      }
+
+      .step-pane.active {
+        display: block;
+      }
+
+      .wizard-actions {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 1.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border-glass);
+      }
+
+      /* Sidebar overlay config */
+      .vietnam-reconciliation-main {
+        padding-bottom: 60px; /* Space for log drawer */
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main vietnam-reconciliation-main">
+        <header class="page-header vietnam-page-header">
+          <div>
+            <div class="page-kicker">财务流程 / 越南 Shopee / 收支报表 (<span id="periodText">—</span>)</div>
+            <h1>越南收支报表</h1>
+            <p>基于紫鸟、马帮数据自动化采集归集，生成最终收支月度报表，核对异常及利润率。</p>
+          </div>
+          <div id="taskBadge" class="status-pill idle">待初始化</div>
+        </header>
+
+        <div id="validationBlockedBanner" class="vietnam-report-alert" role="alert" hidden>
+          马帮收支明细与汇总不一致，当前不能生成报表。请重新导出并校验。
+          <button id="retryValidationBtn" type="button">重新导出并校验</button>
+        </div>
+        <div id="primaryGuidance" class="vietnam-report-guidance">
+          <div><strong id="primaryGuidanceTitle">正在读取报表状态</strong><small id="primaryGuidanceHint">请稍候…</small></div>
+          <button id="primaryGuidanceAction" class="primary compact-btn" type="button" hidden></button>
+        </div>
+
+        <!-- Dynamic 3 Tabs Header -->
+        <nav class="tab-nav" aria-label="页面模块">
+          <button id="tabOverview" class="tab-btn active" type="button">📊 报表概览</button>
+          <button id="tabAnomalies" class="tab-btn" type="button">⚠️ 异常核对 <span id="anomalyTabBadge" class="badge">0</span></button>
+          <button id="tabDataPrep" class="tab-btn" type="button">⚙️ 数据准备</button>
+        </nav>
+
+        <!-- TAB 1: REPORT OVERVIEW -->
+        <section id="contentOverview" class="tab-content active">
+          <!-- Overview Cards (Dashboard KPIs) -->
+          <div class="kpi-grid">
+            <div class="kpi-card receivable">
+              <span class="kpi-title">应收货款 (改)</span>
+              <strong id="kpiReceivable">—</strong>
+              <span class="kpi-unit">VND 折合 RMB</span>
+            </div>
+            <div class="kpi-card expense">
+              <span class="kpi-title">综合支出</span>
+              <strong id="kpiExpense">—</strong>
+              <span class="kpi-unit">支出项+退款+联盟+广告</span>
+            </div>
+            <div class="kpi-card">
+              <span class="kpi-title">实际退款金额</span>
+              <strong id="kpiRefund">—</strong>
+              <span class="kpi-unit">马帮退款 + 店铺扣款</span>
+            </div>
+            <div class="kpi-card">
+              <span class="kpi-title">最终广告花费</span>
+              <strong id="kpiAds">—</strong>
+              <span class="kpi-unit">紫鸟实消 - 广告补贴</span>
+            </div>
+            <div class="kpi-card profit-rate-card">
+              <span class="kpi-title">预计净利润</span>
+              <strong id="kpiProfit">—</strong>
+              <span class="kpi-unit">RMB</span>
+            </div>
+            <div class="kpi-card profit-rate-card">
+              <span class="kpi-title">总净利润率</span>
+              <strong id="kpiProfitRate">—</strong>
+              <span class="kpi-unit">总利润 / 总应收</span>
+            </div>
+          </div>
+
+          <div class="grid-2-1">
+            <!-- Stores List in the Current Batch -->
+            <div class="surface">
+              <div class="section-head tight">
+                <div>
+                  <h2>店铺收支明细表</h2>
+                  <p>包含当前批次下所有店铺的明细概览。</p>
+                </div>
+                <button id="openManifestBtn" class="secondary compact-btn" type="button" disabled>打开清单文件</button>
+              </div>
+              <div class="vietnam-report-table-tools">
+                <input id="storeSearchInput" type="search" placeholder="搜索店铺名称" />
+                <select id="storeStatusFilter">
+                  <option value="all">全部状态</option>
+                  <option value="normal">正常</option>
+                  <option value="exception">有异常</option>
+                </select>
+              </div>
+              <div id="collectionMatrixEmpty" class="collection-matrix-empty">暂无批次数据，请先在「数据准备」模块中创建批次。</div>
+              <div id="collectionTableWrap" class="collection-table-wrap" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>店铺名称</th>
+                      <th>订单数</th>
+                      <th><button class="table-sort" type="button" data-sort="adjusted_receivable">应收货款 (改)</button></th>
+                      <th><button class="table-sort" type="button" data-sort="total_expense">综合支出</button></th>
+                      <th>实际退款</th>
+                      <th>最终广告</th>
+                      <th>联盟费用</th>
+                      <th><button class="table-sort" type="button" data-sort="profit">预计利润</button></th>
+                      <th><button class="table-sort" type="button" data-sort="profit_rate">利润率</button></th>
+                      <th>状态</th>
+                    </tr>
+                  </thead>
+                  <tbody id="collectionTableBody"></tbody>
+                  <tfoot id="collectionTableFoot"></tfoot>
+                </table>
+              </div>
+              <div id="storeFilterEmpty" class="collection-matrix-empty" hidden>未找到符合条件的店铺。<button id="clearStoreFiltersBtn" type="button">清除筛选</button></div>
+            </div>
+
+            <!-- Historical Batch Runs -->
+            <div class="surface">
+              <div class="section-head">
+                <div>
+                  <h2>历史批次</h2>
+                  <p>切换查看已处理的历史报表。</p>
+                </div>
+              </div>
+              <div id="historyRunsList" class="history-list">
+                <div class="text-muted text-center" style="padding: 2rem 0;">正在加载历史批次...</div>
+              </div>
+            </div>
+          </div>
+          <section id="resultFilesCard" class="surface vietnam-report-files" hidden>
+            <div class="section-head tight"><div><h2>结果文件</h2><p id="resultFileMeta">报表生成结果与复核入口。</p></div></div>
+            <div id="missingOutputAlert" class="vietnam-report-alert" role="alert" hidden>报表文件已被移动或删除，请重新生成。</div>
+            <div class="vietnam-report-file-summary">
+              <strong id="resultFileName">—</strong>
+              <span id="resultFileStats">—</span>
+            </div>
+            <div class="actions vietnam-report-file-actions">
+              <button id="openOutputFileBtn" class="primary" type="button">打开 Excel 报表</button>
+              <button id="openUnmatchedFileBtn" class="secondary" type="button" hidden>打开未匹配清单</button>
+              <button id="openProcessingLogBtn" class="secondary" type="button">打开处理日志</button>
+              <button id="openResultDirBtn" class="secondary" type="button">打开输出目录</button>
+            </div>
+          </section>
+        </section>
+
+        <!-- TAB 2: ANOMALIES VERIFICATION -->
+        <section id="contentAnomalies" class="tab-content">
+          <div class="surface">
+            <div class="section-head tight">
+              <div>
+                <h2>异常核对与校验</h2>
+                <p>列出数据导出差异、阻断异常以及未匹配成功的原始账单明细。</p>
+              </div>
+              <div style="display: flex; gap: 0.5rem;">
+                <select id="anomalySeverityFilter" class="secondary">
+                  <option value="all">所有级别</option>
+                  <option value="blocking">阻断性异常</option>
+                  <option value="attention">提示性异常</option>
+                </select>
+                <select id="anomalyCategoryFilter" class="secondary">
+                  <option value="all">所有分类</option>
+                  <option value="mabang_validation">马帮收支校验</option>
+                  <option value="missing_profit_rate">缺少利润率</option>
+                  <option value="unmatched_record">未匹配账单</option>
+                  <option value="ziniao_collection">紫鸟采集失败</option>
+                </select>
+              </div>
+            </div>
+            
+            <div id="anomalyList" style="margin-top: 1rem;">
+              <div class="text-muted text-center" style="padding: 3rem 0;">没有发现任何异常数据项。</div>
+            </div>
+
+            <!-- Pagination -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border-glass);">
+              <span id="anomalyCountInfo" class="text-muted" style="font-size: 0.85rem;">第 0 - 0 项，共 0 项</span>
+              <div style="display: flex; gap: 0.5rem;">
+                <button id="prevAnomalyPageBtn" class="secondary compact-btn" type="button" disabled>上一页</button>
+                <button id="nextAnomalyPageBtn" class="secondary compact-btn" type="button" disabled>下一页</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 3: DATA PREPARATION (4-STEP WIZARD) -->
+        <section id="contentDataPrep" class="tab-content">
+          <!-- Wizard Steps Navigator -->
+          <nav class="wizard-steps" aria-label="数据准备步骤">
+            <div class="wizard-step active" data-step="1">
+              <span class="step-icon">1</span>
+              <span class="step-title">创建批次</span>
+              <span class="step-desc">配置参数与店铺</span>
+            </div>
+            <div class="wizard-step" data-step="2">
+              <span class="step-icon">2</span>
+              <span class="step-title">紫鸟原始数据</span>
+              <span class="step-desc">采集补贴与广告费用</span>
+            </div>
+            <div class="wizard-step" data-step="3">
+              <span class="step-icon">3</span>
+              <span class="step-title">马帮明细校验</span>
+              <span class="step-desc">拉取收支与阻断校验</span>
+            </div>
+            <div class="wizard-step" data-step="4">
+              <span class="step-icon">4</span>
+              <span class="step-title">最终报表生成</span>
+              <span class="step-desc">退款合并与利润核对</span>
+            </div>
+          </nav>
+
+          <!-- Step 1: Create/Select Period -->
+          <div id="stepPane1" class="step-pane active">
+            <form id="collectionBatchForm" class="surface">
+              <div class="section-head">
+                <div>
+                  <h2>第一步：初始化月度批次</h2>
+                  <p>设置月份、输出路径和需要处理的越南店铺清单。</p>
+                </div>
+              </div>
+              <div class="form-grid collection-form-grid" style="grid-template-columns: 1fr; gap: 1rem;">
+                <label>
+                  <span>核对月份</span>
+                  <input id="collectionPeriod" type="month" required />
+                </label>
+                <label>
+                  <span>输出位置</span>
+                  <div class="input-action" style="display: flex; gap: 0.5rem;">
+                    <input id="outputDir" style="flex: 1;" required />
+                    <button id="chooseDirBtn" class="secondary" type="button">选择</button>
+                  </div>
+                </label>
+                <label>
+                  <span>越南店铺清单 (每行一个，名称包含“仓发”自动走仓发流程)</span>
+                  <textarea id="storeInput" rows="5" spellcheck="false" placeholder="例如：&#10;张三-越南001&#10;李四-越南002仓发店" required></textarea>
+                </label>
+              </div>
+              <div class="actions" style="margin-top: 1.5rem; display: flex; gap: 0.5rem;">
+                <button id="createRunBtn" class="primary" type="submit">生成/选定采集批次</button>
+                <button id="demoStoresBtn" class="secondary" type="button">填入演示店铺</button>
+                <button id="openRunDirBtn" class="secondary" type="button" disabled>打开批次目录</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Step 2: Ziniao Browser Automation -->
+          <div id="stepPane2" class="step-pane">
+            <div class="surface">
+              <div class="section-head">
+                <div>
+                  <h2>第二步：紫鸟原始数据采集</h2>
+                  <p>调用 Playwright 登录紫鸟平台，采集各店铺对应的四项原始数据源。</p>
+                </div>
+              </div>
+              <div class="flow-account-bar">
+                <span class="flow-account-icon ziniao-icon">Z</span>
+                <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
+                <a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a>
+              </div>
+              
+              <div class="collection-scope-note" style="margin: 1.5rem 0;">
+                <strong>采集项目说明</strong>
+                <ul>
+                  <li>补贴订单：普通店采集正常订单；仓发店采集 Payout 账单对应的补贴金额</li>
+                  <li>费用三项：导出广告消费、联盟费用及广告补贴原始明细</li>
+                </ul>
+              </div>
+
+              <div class="actions" style="display: flex; gap: 0.5rem;">
+                <button id="startSubsidyBtn" class="primary" type="button" disabled>采集补贴订单</button>
+                <button id="startSourcesBtn" class="secondary" type="button" disabled>采集广告/联盟/补贴</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3: Mabang Income Validation -->
+          <div id="stepPane3" class="step-pane">
+            <div class="surface mabang-phase-surface">
+              <div class="section-head">
+                <div>
+                  <h2>第三步：马帮收支数据与核对</h2>
+                  <p>从马帮拉取应收货款、运费等收支信息，并执行阻断校验，防止数据不匹配。</p>
+                </div>
+                <span id="mabangPhaseStatus" class="collection-state pending"><i></i>待运行</span>
+              </div>
+              <div class="flow-account-bar mabang-account-bar">
+                <span class="flow-account-icon">M</span>
+                <span class="flow-account-copy"><small>本次马帮账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+                <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+              </div>
+
+              <div class="mabang-stage-grid">
+                <article><span>ERP 关联店铺</span><strong id="mabangShopCount">—</strong><small>匹配 Shopee-VN</small></article>
+                <article><span>收支明细</span><strong id="mabangDetailStatus">待运行</strong><small>付款日期口径</small></article>
+                <article><span>收支汇总</span><strong id="mabangSummaryStatus">待运行</strong><small>汇总比对</small></article>
+                <article><span>阻断校验</span><strong id="mabangValidationStatus">待运行</strong><small>核对订单数和应收</small></article>
+              </div>
+
+              <div class="mabang-validation-grid" style="margin: 1rem 0; display: flex; gap: 2rem; background: #0f172a; padding: 1rem; border-radius: 8px;">
+                <div><span class="text-muted">订单数差异：</span><strong id="mabangOrderMetric" style="color: #e2e8f0;">—</strong></div>
+                <div><span class="text-muted">应收货款差异：</span><strong id="mabangReceivableMetric" style="color: #e2e8f0;">—</strong></div>
+              </div>
+
+              <div class="actions" style="margin-top: 1.5rem;">
+                <button id="startMabangIncomeBtn" class="primary" type="button" disabled>开始导出收支并校验</button>
+                <small id="mabangIncomeHint" class="btn-hint"></small>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 4: Mabang Refund Merge & Profit Config & Final Generation -->
+          <div id="stepPane4" class="step-pane">
+            <div class="surface final-phase-surface">
+              <div class="section-head">
+                <div>
+                  <h2>第四步：退款合并、利润率与报表生成</h2>
+                  <p>合并马帮三段退款订单数据，并输入店铺上月利润率以计算预计总净利润。</p>
+                </div>
+                <span id="finalPhaseStatus" class="collection-state pending"><i></i>待运行</span>
+              </div>
+
+              <div class="mabang-stage-grid mabang-refund-grid">
+                <article><span>退款 01-10</span><strong id="mabangRefundPart1Status">待运行</strong><small>已发货订单</small></article>
+                <article><span>退款 11-20</span><strong id="mabangRefundPart2Status">待运行</strong><small>已发货订单</small></article>
+                <article><span>退款 21-月底</span><strong id="mabangRefundPart3Status">待运行</strong><small>已发货订单</small></article>
+                <article><span>三段合并</span><strong id="mabangRefundMergedStatus">待运行</strong><small id="mabangRefundMergeMetric">按退款单号合并去重</small></article>
+              </div>
+
+              <div style="margin: 1.5rem 0;">
+                <label style="display: flex; flex-direction: column; gap: 0.5rem;">
+                  <span style="font-weight: 600;">上月店铺利润率配置 <small style="color: #64748b;">(格式: 店铺名称=12.5% 或 店铺名称=0.125，每行一个)</small></span>
+                  <textarea id="profitRateInput" rows="4" spellcheck="false" placeholder="张三-越南001=12.5%&#10;李四-越南002仓发店=8.0%" style="font-family: monospace;"></textarea>
+                </label>
+              </div>
+
+              <div class="actions" style="display: flex; gap: 0.5rem;">
+                <div><button id="startMabangRefundBtn" class="secondary" type="button" disabled>合并马帮退款</button><small id="mabangRefundHint" class="btn-hint"></small></div>
+                <div><button id="startFinalProcessBtn" class="primary" type="button" disabled>生成核对工作簿 (Excel)</button><small id="finalProcessHint" class="btn-hint"></small></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Back/Next Wizard Footer -->
+          <div class="wizard-actions">
+            <button id="prevStepBtn" class="secondary" type="button" disabled>← 上一步</button>
+            <button id="nextStepBtn" class="secondary" type="button" disabled>下一步 →</button>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- Collapsible Log Panel / Bottom Drawer -->
+    <div id="logDrawer" class="surface log-surface">
+      <div id="logDrawerHeader" class="log-drawer-header">
+        <span class="log-drawer-title"><i></i> 运行状态日志终端</span>
+        <div class="log-drawer-actions">
+          <button id="copyLogBtn" class="log-toggle-btn" type="button">复制日志</button>
+          <button id="toggleLogDrawerBtn" class="log-toggle-btn" type="button">展开 ▲</button>
+        </div>
+      </div>
+      <div class="log-drawer-content">
+        <pre id="logBox" tabindex="0"></pre>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260710-nav"></script>
+    <script src="../assets/pages/vietnam-income-reconciliation.js?v=20260711-report-fixes"></script>
+    <script>
+      const tabs = [
+        { btn: document.getElementById('tabOverview'), content: document.getElementById('contentOverview') },
+        { btn: document.getElementById('tabAnomalies'), content: document.getElementById('contentAnomalies') },
+        { btn: document.getElementById('tabDataPrep'), content: document.getElementById('contentDataPrep') }
+      ];
+
+      tabs.forEach(t => {
+        t.btn.addEventListener('click', () => {
+          tabs.forEach(item => {
+            item.btn.classList.remove('active');
+            item.content.classList.remove('active');
+          });
+          t.btn.classList.add('active');
+          t.content.classList.add('active');
+        });
+      });
+
+      let currentStep = 1;
+      const stepPanes = [
+        document.getElementById('stepPane1'),
+        document.getElementById('stepPane2'),
+        document.getElementById('stepPane3'),
+        document.getElementById('stepPane4')
+      ];
+      const stepIndicators = document.querySelectorAll('.wizard-step');
+      const prevStepBtn = document.getElementById('prevStepBtn');
+      const nextStepBtn = document.getElementById('nextStepBtn');
+
+      function updateWizardUI() {
+        stepPanes.forEach((pane, idx) => {
+          if (idx + 1 === currentStep) {
+            pane.classList.add('active');
+          } else {
+            pane.classList.remove('active');
+          }
+        });
+
+        stepIndicators.forEach((ind, idx) => {
+          const stepNum = idx + 1;
+          if (stepNum === currentStep) {
+            ind.classList.add('active');
+            ind.classList.remove('completed');
+          } else if (stepNum < currentStep) {
+            ind.classList.add('completed');
+            ind.classList.remove('active');
+          } else {
+            ind.classList.remove('active', 'completed');
+          }
+        });
+
+        prevStepBtn.disabled = (currentStep === 1);
+        nextStepBtn.disabled = (currentStep === 4);
+      }
+
+      stepIndicators.forEach(ind => {
+        ind.addEventListener('click', () => {
+          currentStep = parseInt(ind.getAttribute('data-step'));
+          updateWizardUI();
+        });
+      });
+
+      prevStepBtn.addEventListener('click', () => {
+        if (currentStep > 1) {
+          currentStep--;
+          updateWizardUI();
+        }
+      });
+
+      nextStepBtn.addEventListener('click', () => {
+        if (currentStep < 4) {
+          currentStep++;
+          updateWizardUI();
+        }
+      });
+
+      const logDrawer = document.getElementById('logDrawer');
+      const toggleLogDrawerBtn = document.getElementById('toggleLogDrawerBtn');
+      const logDrawerHeader = document.getElementById('logDrawerHeader');
+
+      function toggleLogDrawer() {
+        const isExpanded = logDrawer.classList.toggle('expanded');
+        toggleLogDrawerBtn.textContent = isExpanded ? '收起 ▼' : '展开 ▲';
+      }
+
+      logDrawerHeader.addEventListener('click', (e) => {
+        if (e.target.id === 'copyLogBtn') return;
+        toggleLogDrawer();
+      });
+    </script>
+  </body>
+</html>

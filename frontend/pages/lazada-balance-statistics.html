@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lazada 余额统计</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+    <link rel="stylesheet" href="../assets/pages/balance-statistics.css" />
+  </head>
+  <body data-balance-platform="lazada">
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">紫鸟流程 / Lazada 财务</div><h1>Lazada 余额统计</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+        <section class="overview-grid" aria-label="统计概览">
+          <article class="overview-card accent-green"><span>输入店铺</span><strong id="storeCount">0</strong><small>按填写顺序逐店统计</small></article>
+          <article class="overview-card"><span>成功店铺</span><strong id="recordCount">0</strong><small>金额与截图均已取得</small></article>
+          <article class="overview-card"><span>待处理店铺</span><strong id="attentionCount">0</strong><small id="attentionSummary">部分 0 / 失败 0</small></article>
+          <article class="overview-card file-card"><span>统计文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+        <section class="layout-grid">
+          <form id="balanceForm" class="surface form-surface">
+            <div class="section-head"><div><h2>统计条件</h2><p>采集运行时页面的 Income、Balance、Ads 和最新提现的处理中金额。</p></div><span class="section-badge">多站点</span></div>
+            <div class="flow-account-bar"><span class="flow-account-icon ziniao-icon">Z</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span><a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a></div>
+            <div class="form-grid">
+              <label><span>站点</span><select id="balanceCountry" aria-describedby="countryHint"><option value="AUTO">自动识别每家店铺</option><option value="PH">菲律宾</option><option value="MY">马来西亚</option><option value="TH">泰国</option><option value="ID">印度尼西亚</option><option value="VN">越南</option><option value="SG">新加坡</option></select><small id="countryHint">自动识别可在一个批次内处理多个站点。</small></label>
+              <label class="store-field"><span>紫鸟店铺完整名称 <small>每行一个</small></span><textarea id="storeNames" required spellcheck="false" placeholder="输入紫鸟中的完整店铺名称，每行一个"></textarea></label>
+              <label class="store-field"><span>输出目录</span><div class="input-action"><input id="balanceOutputDir" required placeholder="输入或选择本地输出目录" /><button id="chooseOutputBtn" class="secondary" type="button">选择目录</button></div></label>
+            </div>
+            <div id="startIssues" class="balance-warning" role="alert" hidden></div>
+            <div class="actions"><button id="startBtn" class="primary" type="submit" disabled>开始统计</button></div>
+            <p class="balance-note">每次处理一家店，保存四项金额与对应页面截图。按各店原币种记录，并保留负数；未能取得的金额会标明原因。</p>
+          </form>
+          <div class="right-stack"><section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>查看站点识别、页面校验、金额采集和截图进度。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section></div>
+        </section>
+        <section class="surface">
+          <div class="section-head"><div><h2>店铺结果</h2><p id="resultMessage" aria-live="polite">尚未运行。填写店铺和输出目录后开始统计。</p></div><span id="resultCount" class="section-badge">共 0 家</span></div>
+          <div class="actions"><button id="openFileBtn" type="button" class="secondary" disabled>打开统计 Excel</button><button id="openDirectoryBtn" type="button" class="secondary" disabled>打开结果目录</button><button id="retryBtn" type="button" class="secondary" disabled>重试未完成店铺</button></div>
+          <div class="collection-table-wrap balance-table-wrap"><table><thead><tr><th>店铺</th><th>站点 / 币种</th><th>状态</th><th>Income</th><th>Balance</th><th>Ads</th><th>Processing</th><th>采集时间</th><th>截图</th><th>说明</th></tr></thead><tbody id="storeResults"><tr><td colspan="10">尚未运行</td></tr></tbody></table></div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260928-balance"></script>
+    <script src="../assets/pages/balance-statistics.js"></script>
+  </body>
+</html>

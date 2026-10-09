@@ -23,6 +23,7 @@ DEFAULT_POOL_TIMEOUT_SECONDS = 20.0
 
 LOGIN_PAGE_PATH = "/index.htm"
 LOGIN_PATH = "/index.php?mod=main.doLogin&lang=cn"
+LOGIN_FINALIZE_PATH = "/index.php?mod=main.plogin&v=&isMallRpcFinds="
 DEFAULT_SALES_REPORT_EXPORT_INIT_ROWS_PER_PAGE = 20
 DEFAULT_SALES_REPORT_EXPORT_FIELDS = (
     "salesSkuNewId",
@@ -112,8 +113,13 @@ class MabangClient:
         response = self.client.post(
             self._url(LOGIN_PATH),
             data={
+                "isMallRpcFinds": "",
                 "username": username,
                 "password": password,
+                "verifyType": "1",
+                "mobile": "",
+                "acceptSmsMobile": "",
+                "verifyCode": "",
                 "loginEntrance": "1",
                 "timezone": "UTC+8",
             },
@@ -126,7 +132,50 @@ class MabangClient:
         payload = _response_json_dict(response, context="马帮登录")
         if not payload.get("success"):
             raise MabangApiError(f"登录失败: {payload}")
+        finalize_response = self.client.get(self._url(LOGIN_FINALIZE_PATH))
+        finalize_response.raise_for_status()
         self._logged_in = True
+
+    def post_form_json(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        form_data: Any = None,
+        context: str = "马帮请求",
+        referer: str | None = None,
+    ) -> dict[str, Any]:
+        """POST an authenticated form and return a JSON object.
+
+        ``httpx`` does not accept repeated form fields as a list of tuples in
+        every supported version, so repeated values such as
+        ``shopIdMultiple[]`` are encoded explicitly.
+        """
+        if not self._logged_in:
+            raise MabangApiError("马帮客户端当前尚未登录")
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        if referer:
+            headers["Referer"] = self._url(referer)
+        request_kwargs: dict[str, Any] = {"headers": headers}
+        if params is not None:
+            request_kwargs["params"] = params
+        if hasattr(form_data, "items"):
+            response = self.client.post(
+                self._url(path),
+                data=form_data,
+                **request_kwargs,
+            )
+        else:
+            response = self.client.post(
+                self._url(path),
+                content=urlencode(list(form_data or []), doseq=True),
+                **request_kwargs,
+            )
+        response.raise_for_status()
+        return _response_json_dict(response, context=context)
 
     def _url(self, path: str) -> str:
         if path.startswith("http://") or path.startswith("https://"):

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TEMU发货渠道更改</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel-20260910-temu" />
+    <link rel="stylesheet" href="../assets/pages/temu-shipping-channel.css?v=20260916-changes" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main temu-main">
+        <header class="page-header">
+          <div><div class="page-kicker">马帮流程 / 物流授权 / TEMU</div><h1>TEMU发货渠道更改</h1></div>
+          <div id="taskBadge" class="status-pill idle">待导入</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>Excel 有效数据</span><strong id="excelRowCount">0</strong><small id="sheetSummary">长、宽、高、重量</small></article>
+          <article class="overview-card"><span>已开启 TEMU 渠道</span><strong id="channelCount">0</strong><small>本次需设置的 ON 渠道</small></article>
+          <article class="overview-card"><span>已核验渠道</span><strong id="successCount">0</strong><small id="changeCounts">已修改 0 · 无需修改 0</small></article>
+          <article class="overview-card"><span>待处理 / 失败</span><strong id="remainingCount">0 / 0</strong><small id="statusText">请先导入每日随机长宽高 Excel</small></article>
+        </section>
+
+        <section class="temu-layout">
+          <form id="shippingForm" class="surface form-surface">
+            <div class="section-head"><div><h2>导入与设置</h2><p>先核对渠道与 Excel 的对应关系，再批量保存。</p></div><span class="section-badge">cm / g</span></div>
+            <div class="temu-form-body">
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+            <ol class="temu-steps" aria-label="操作步骤"><li><b>1</b>导入 Excel</li><li><b>2</b>查询渠道并预览</li><li><b>3</b>批量设置</li></ol>
+            <label for="inputFile"><span>每日随机长宽高 Excel</span><input id="inputFile" type="text" spellcheck="false" placeholder="选择 .xlsx 文件，或粘贴完整路径" autocomplete="off" /></label>
+            <div class="actions temu-file-actions"><button id="chooseFileBtn" class="secondary" type="button">选择 Excel</button><button id="inspectFileBtn" class="secondary" type="button">读取文件</button></div>
+            <p id="fileHint" class="temu-hint">按工作表原始顺序读取长、宽、高（cm）与重量（g）。</p>
+            <div id="fileWarning" class="temu-notice warning" role="status" hidden></div>
+            <div class="temu-rule"><strong>一个已开启渠道对应一行 Excel</strong><p>仅设置已开启（ON）的 TEMU 渠道，按页面顺序从 Excel 第一组数据开始对应。已关闭（OFF）的渠道直接跳过，不占用 Excel 行。数据不足时无法开始；继续执行会沿用本次对应关系。</p></div>
+            <div class="actions"><button id="previewBtn" class="primary" type="submit" disabled>查询渠道并预览</button><button id="applyBtn" class="primary temu-apply" type="button" disabled>开始批量设置</button></div>
+            <div class="temu-progress-head"><span id="progressText">等待导入文件</span><strong id="progressCount">0 / 0</strong></div>
+            <div id="queryProgress" class="temu-progress" role="progressbar" aria-label="渠道设置进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="queryProgressBar"></div></div>
+            </div>
+          </form>
+
+          <section class="surface log-surface">
+            <div class="section-head tight"><div><h2>运行日志</h2><p>逐渠道显示原值 → 目标值，以及实际读回结果</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button></div>
+            <pre id="logBox" class="log-box" tabindex="0"></pre>
+          </section>
+        </section>
+
+        <section class="surface temu-result-surface">
+          <div class="section-head tight"><div><h2 id="resultTitle">渠道尺寸与重量变化</h2><p id="resultSummary">预览显示 Excel 目标值；执行后显示原值 → 目标值和实际读回值。</p></div><span id="resultPageText" class="temu-hint">第 1 / 1 页</span></div>
+          <div id="resultNotice" class="temu-notice" role="status" hidden></div>
+          <div class="temu-table-wrap">
+            <table class="temu-result-table">
+              <thead><tr><th>顺序</th><th>渠道名称 / ID</th><th>Excel 行</th><th>长 (cm)<small>原值 → 目标值</small></th><th>宽 (cm)<small>原值 → 目标值</small></th><th>高 (cm)<small>原值 → 目标值</small></th><th>重量 (g)<small>原值 → 目标值</small></th><th>状态</th><th>说明</th></tr></thead>
+              <tbody id="resultTableBody"><tr><td colspan="9" class="temu-empty">请先导入每日随机长宽高 Excel</td></tr></tbody>
+            </table>
+          </div>
+          <div class="temu-pagination"><span id="rowCountText" class="temu-hint">共 0 行，每页 50 行</span><div><button id="resultPrevBtn" class="secondary compact-btn" type="button" disabled>上一页</button><button id="resultNextBtn" class="secondary compact-btn" type="button" disabled>下一页</button></div></div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260910-temu"></script>
+    <script src="../assets/pages/temu-shipping-channel.js?v=20260916-changes"></script>
+  </body>
+</html>

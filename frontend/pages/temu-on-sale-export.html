@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TEMU 在售商品导出 · 寰球云联</title>
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+    <link rel="stylesheet" href="../assets/pages/temu-on-sale-export.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">紫鸟流程 / TEMU / 商品管理</div><h1>在售商品导出</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+        <p class="temu-export-note">适用于 TEMU 东南亚店铺。只筛选“在售中”，所有经营站点、已生效与已作废的申报价格行均保留。</p>
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>本批店铺</span><strong id="storeCount">0</strong><small>按填写顺序逐店执行</small></article>
+          <article class="overview-card"><span>已完成店铺</span><strong id="completedCount">0</strong><small id="noDataCount">无数据 0 · 失败 0</small></article>
+          <article class="overview-card"><span>汇总数据行</span><strong id="recordCount">0</strong><small>按 SKU 明细保留全部行</small></article>
+          <article class="overview-card file-card"><span>汇总文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+        <section class="layout-grid">
+          <form id="exportForm" class="surface form-surface">
+            <div class="section-head"><div><h2>本次导出店铺</h2><p>填写完整店铺名和输出目录，点击开始导出即可。</p></div><span class="section-badge">手动运行</span></div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon ziniao-icon">Z</span>
+              <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a>
+            </div>
+            <p id="connectionNotice" class="temu-export-note" role="status">开始后自动使用所选紫鸟账号登录，并按完整店铺名查找店铺。</p>
+            <div class="form-grid">
+              <label><span>紫鸟客户端</span><div class="input-action"><input id="clientPath" readonly /><button id="chooseClientBtn" class="secondary" type="button">选择</button></div></label>
+              <label><span>驱动目录</span><div class="input-action"><input id="driverPath" readonly /><button id="chooseDriverBtn" class="secondary" type="button">选择</button></div></label>
+              <label id="namesPanel" class="store-field"><span>完整店铺名 <small>每行一个，自动去掉重复项和空行</small></span><textarea id="storeNames" spellcheck="false" placeholder="输入紫鸟中的完整店铺名称"></textarea></label>
+            </div>
+            <div id="startIssues" class="temu-export-warning" hidden role="alert"></div>
+            <label class="temu-output-label"><span>输出目录</span><div class="input-action"><input id="exportOutputDir" placeholder="输入或选择本地输出目录" /><button id="chooseOutputBtn" type="button" class="secondary">选择</button></div></label>
+            <div class="actions"><button id="startBtn" class="primary" type="submit" disabled>开始导出</button></div>
+            <p class="temu-export-note">固定一次处理一家店：完成或失败后确认该店已关闭，再打开下一家。每批保留原始文件、汇总 Excel 和进度清单，汇总第一列为紫鸟店铺名。</p>
+          </form>
+          <div class="right-stack">
+            <section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>逐店处理，确认当前店铺关闭后继续下一店。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section>
+          </div>
+        </section>
+        <section class="surface">
+          <div class="section-head"><div><h2>批次结果</h2><p id="resultMessage" aria-live="polite">尚未运行。填写店铺名和输出目录后，点击开始导出。</p></div><span id="batchLabel" class="section-badge">尚无批次</span></div>
+          <div class="actions"><button id="openSummaryBtn" type="button" class="secondary" disabled>打开汇总文件</button><button id="openDirectoryBtn" type="button" class="secondary" disabled>打开输出目录</button><button id="retryBtn" type="button" class="secondary" disabled>重试失败店铺</button></div>
+          <div class="collection-table-wrap"><table><thead><tr><th>店铺名</th><th>状态</th><th>原始行数</th><th>保留行数</th><th>原始文件</th><th>失败原因 / 字段变化</th></tr></thead><tbody id="storeResults"><tr><td colspan="6">尚未运行</td></tr></tbody></table></div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260623-log-panel"></script>
+    <script src="../assets/pages/temu-on-sale-export.js"></script>
+  </body>
+</html>

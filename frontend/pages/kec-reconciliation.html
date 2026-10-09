@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KEC 对账</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel-kec-20260917" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">财务流程 / 海外仓对账</div><h1>KEC 对账</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card"><span>账单仓储费</span><strong id="storageBilledAmount">0.00</strong><small>账单 金额 合计</small></article>
+          <article class="overview-card accent-green"><span>核对仓储费</span><strong id="storageExpectedAmount">0.00</strong><small>实际体积口径</small></article>
+          <article class="overview-card"><span>体积差额</span><strong id="storageVolumeDiff">0.00</strong><small id="storageVolumeDiffNote">账单 Total CBM - 实际体积（CBM）</small></article>
+          <article class="overview-card file-card"><span>输出文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid sku-inventory-layout">
+          <form id="kecReconciliationForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>选择账单与报价表</h2><p>KEC 供应商账单逐项核对，输出多表结果 Excel。</p></div>
+              <span class="section-badge">马帮</span>
+            </div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+            <div class="form-grid">
+              <label class="collection-store-field">
+                <span>KEC 账单 Excel</span>
+                <div class="input-action" style="grid-template-columns: minmax(0, 1fr) 108px"><input id="kecBillFile" placeholder="粘贴账单 Excel 完整路径，或点击选择" spellcheck="false" aria-describedby="kecBillHint" /><button id="kecChooseBillBtn" class="secondary" type="button" style="white-space: nowrap; padding: 0 10px">选择账单</button></div>
+                <small id="kecBillHint" role="status" aria-live="polite">支持 .xlsx。需包含仓储费、卸货费、出库+耗材、退件上架费、杂费等工作表。</small>
+              </label>
+              <label class="collection-store-field">
+                <span>报价表 Excel（可选）</span>
+                <div class="input-action" style="grid-template-columns: minmax(0, 1fr) 108px"><input id="kecQuoteFile" placeholder="留空则使用内置报价规则" spellcheck="false" aria-describedby="kecQuoteHint" /><button id="kecChooseQuoteBtn" class="secondary" type="button" style="white-space: nowrap; padding: 0 10px">选择报价表</button></div>
+                <small id="kecQuoteHint">提供报价表时按表内规则核对，留空则使用程序内置报价。</small>
+              </label>
+              <label class="output-field"><span>输出目录</span><div class="input-action"><input id="kecOutputDir" placeholder="使用设置中的输出目录，或选择其他目录" /><button id="kecChooseDirBtn" class="secondary" type="button">选择</button></div></label>
+            </div>
+            <div class="query-rule-note" aria-label="核算规则">
+              <strong>核算规则</strong><span id="kecBasisRule">仓租费核算基数：实际体积（长 × 宽 × 高 × 数量 × 0.000001）</span><span>库龄：入库日期 → 计费日期 自然日 + 1</span><span>其他费用口径不变</span>
+            </div>
+            <div id="kecBillInfo" class="collection-scope-note" hidden></div>
+            <div id="kecBillWarning" class="collection-scope-note" role="status" hidden></div>
+            <div class="form-note" style="margin: 12px 18px 0">仓租费改以「实际体积」为核算基数：长(CM) × 宽(CM) × 高(CM) × 数量(PCS) × 0.000001，单位为立方米；账单 Total CBM 仅作为对照列保留，不再参与金额计算。缺长宽高或数量的行会单独统计，不会静默按 0 计费。</div>
+            <div class="actions">
+              <button id="kecRunBtn" class="primary" type="submit">开始对账</button>
+              <button id="kecOpenOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight"><div><h2>运行日志</h2><p>记录读取账单、查询马帮订单与各费用表核对进度</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button></div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section id="kecResult" class="surface" hidden>
+          <div class="section-head tight"><div><h2>对账汇总</h2><p id="kecResultSummary">暂无结果</p></div><button id="kecOpenFileBtn" class="secondary compact-btn" type="button" disabled>打开 Excel</button></div>
+          <div class="collection-table-wrap">
+            <table aria-label="KEC 对账汇总">
+              <thead><tr><th scope="col">项目</th><th scope="col">账单金额</th><th scope="col">核对金额</th><th scope="col">差额</th><th scope="col">异常 / 待确认</th></tr></thead>
+              <tbody id="kecSummaryTableBody"></tbody>
+            </table>
+            <div id="kecResultEmpty" class="developer-empty" hidden>暂无对账结果</div>
+          </div>
+          <div id="kecAuxSummary" class="collection-scope-note" hidden></div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260917-kec-reconciliation"></script>
+    <script src="../assets/pages/kec-reconciliation.js?v=20260917-kec-reconciliation"></script>
+  </body>
+</html>

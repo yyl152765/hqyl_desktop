@@ -10,3 +10,32 @@ __pycache__/
 .env
 .env.*
 *.local
+
+# Local environments, editors, caches, and agent scratch files
+.venv*/
+venv/
+.idea/
+.vscode/
+.ruff_cache/
+.codex_tmp/
+.codex-temp/
+.codex_tmp_test.txt
+.workbuddy/
+*.py[cod]
+*.tmp
+*.bak
+
+# Runtime data and internal acceptance evidence
+outputs/
+probe_outputs/
+acceptance_outputs/
+docs/requirements/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+settings.json
+*cookies*.json
+*cookie*.json
+*.pem
+*.key

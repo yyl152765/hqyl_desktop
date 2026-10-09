@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>马帮批量添加开发员</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel-20260818-mabang-permission-selectable" />
+    <style>
+      .developer-permission-main .permission-form-grid { grid-template-columns: 1fr; }
+      .developer-permission-main .permission-employee-field textarea { min-height: 190px; }
+      .developer-operation { margin: 18px 18px 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); }
+      .developer-operation strong { color: var(--muted-strong); font-size: 13px; }
+      .developer-operation p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+      .developer-result-table { min-width: 1180px; }
+      .developer-result-table th:nth-child(1) { width: 110px; }
+      .developer-result-table th:nth-child(2) { width: 170px; }
+      .developer-result-table th:nth-child(3) { width: 160px; }
+      .developer-result-table th:nth-child(4) { width: 130px; }
+      .developer-result-table th:nth-child(5) { width: 145px; }
+      .developer-result-table th:nth-child(6) { width: 125px; }
+      .developer-result-table th:nth-child(7) { width: auto; }
+      .developer-result-table td:last-child { white-space: normal; overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main mabang-permission-main developer-permission-main">
+        <header class="page-header">
+          <div><div class="page-kicker">马帮流程 / 通用工具 / 员工权限</div><h1>批量添加开发员</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid permission-overview">
+          <article class="overview-card accent-green"><span>添加岗位</span><strong>开发员</strong><small>查看商品 · 按商品父目录查看</small></article>
+          <article class="overview-card"><span>员工数量</span><strong id="employeeCount">0</strong><small>按姓名精确匹配</small></article>
+          <article class="overview-card"><span id="readyCountLabel">可保存员工</span><strong id="readyCount">0</strong><small id="statusText">请先输入员工并完成预览</small></article>
+          <article class="overview-card"><span>需要处理</span><strong id="attentionCount">0</strong><small>未找到、同名、停用或失败</small></article>
+        </section>
+
+        <section class="permission-layout">
+          <form id="permissionForm" class="surface form-surface permission-form">
+            <div class="section-head">
+              <div><h2>员工设置</h2><p>预览员工当前岗位和商品查看方式，确认后批量保存。</p></div>
+              <span class="section-badge">员工岗位与商品权限</span>
+            </div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+            <div class="developer-operation">
+              <strong>勾选开发员 → 查看商品 → 库存 SKU → 按商品父目录查看 → 保存修改</strong>
+              <p>保留原有岗位、已选商品父目录、仓库及其他权限。已符合设置的员工自动跳过。</p>
+            </div>
+            <div class="permission-form-grid">
+              <label class="permission-employee-field">
+                <span>员工姓名</span>
+                <textarea id="employeeText" spellcheck="false" placeholder="一行一个员工姓名" aria-describedby="employeeInputHint"></textarea>
+                <small id="employeeInputHint">每批最多 100 人，自动去除空行和重复姓名；同名员工需核实后再处理。修改名单或切换账号后需要重新预览。</small>
+              </label>
+            </div>
+            <div class="actions permission-actions">
+              <button id="previewBtn" class="primary" type="submit">预览检查</button>
+              <button id="applyBtn" class="primary permission-apply-btn" type="button" disabled>批量保存修改</button>
+            </div>
+          </form>
+
+          <section class="surface log-surface">
+            <div class="section-head tight">
+              <div><h2>运行日志</h2><p>逐员工显示检查和保存进度</p></div>
+              <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+            </div>
+            <pre id="logBox" class="log-box" tabindex="0"></pre>
+          </section>
+        </section>
+
+        <section class="surface permission-result-surface">
+          <div class="section-head tight">
+            <div><h2>预览与执行结果</h2><p>核对员工和操作摘要；只有“可保存”员工会进入保存任务。</p></div>
+            <span id="resultSummary" class="permission-result-summary" aria-live="polite">暂无结果</span>
+          </div>
+          <div class="permission-table-wrap">
+            <table class="permission-result-table developer-result-table">
+              <thead><tr><th>输入姓名</th><th>匹配员工</th><th>部门 / 手机</th><th>岗位</th><th>商品查看方式</th><th>状态</th><th>操作摘要 / 说明</th></tr></thead>
+              <tbody id="permissionResultBody"><tr><td class="permission-empty-row" colspan="7">完成预览后将在这里显示员工匹配和待保存的修改</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260903-mabang-developer-permission"></script>
+    <script src="../assets/pages/mabang-developer-permission.js?v=20260903-mabang-developer-permission"></script>
+  </body>
+</html>

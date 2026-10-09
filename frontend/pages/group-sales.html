@@ -16,14 +16,14 @@
           <div id="taskBadge" class="status-pill idle">待运行</div>
         </header>
         <section class="overview-grid">
-          <article class="overview-card accent-green"><span>当前流程</span><strong>小组销量导出</strong><small>马帮 ERP</small></article>
-          <article class="overview-card"><span>小组数</span><strong id="skuCount">0</strong><small>已选择小组数量</small></article>
+          <article class="overview-card accent-green"><span>当前流程</span><strong>分类销量导出</strong><small>马帮 ERP</small></article>
+          <article class="overview-card"><span>分类数</span><strong id="skuCount">0</strong><small>已选择自定义分类数量</small></article>
           <article class="overview-card"><span>商品行数</span><strong id="recordCount">0</strong><small>任务完成后更新</small></article>
           <article class="overview-card file-card"><span>输出文件</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
         </section>
         <section class="layout-grid">
           <form id="groupSalesForm" class="surface form-surface">
-            <div class="section-head"><div><h2>菲律宾各组销量报表</h2><p>选择小组和付款时间范围后，导出 CSV 明细并生成汇总 Excel。</p></div><span class="section-badge">菲律宾 Shopee</span></div>
+            <div class="section-head"><div><h2>菲律宾各组销量报表</h2><p>选择自定义分类和付款时间范围后，导出 CSV 明细并生成汇总 Excel。</p></div><span class="section-badge">菲律宾 Shopee</span></div>
             <div class="flow-account-bar">
               <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
               <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
@@ -31,12 +31,22 @@
             <div class="form-grid">
               <label><span>开始日期</span><input id="groupStartDate" type="date" /></label>
               <label><span>结束日期</span><input id="groupEndDate" type="date" /></label>
-              <label class="group-field"><span>小组</span><select id="salesGroupSelect" multiple size="8"></select><small class="form-note">可按住 Ctrl 多选；未保存过时默认选中第一个小组。</small></label>
+              <div class="group-field developer-panel">
+                <div class="developer-panel-head">
+                  <div><strong id="salesGroupLabel">自定义分类</strong><small id="groupSelectionSummary" role="status" aria-live="polite">准备加载分类</small></div>
+                  <button id="reloadGroupsBtn" class="secondary compact-btn" type="button">重新加载</button>
+                </div>
+                <label class="developer-search-field"><span>搜索分类</span><input id="salesGroupSearch" type="search" placeholder="输入分类名称或 ID" autocomplete="off" aria-controls="salesGroupSelect" /></label>
+                <div class="developer-selection-actions">
+                  <button id="selectAllGroupsBtn" class="secondary compact-btn" type="button">全选全部分类</button>
+                  <button id="clearGroupsBtn" class="secondary compact-btn" type="button">清空选择</button>
+                </div>
+                <div id="salesGroupSelect" class="developer-checklist" role="group" aria-labelledby="salesGroupLabel"></div>
+              </div>
+              <small class="group-field form-note">显示当前马帮账号可见的全部自定义分类，可直接勾选多个；搜索不会清除已选项。未保存过时默认选中第一个分类。</small>
             </div>
             <div class="actions">
               <button id="groupRunBtn" class="primary" type="submit">导出销量报表</button>
-              <button id="selectAllGroupsBtn" class="secondary" type="button">全选小组</button>
-              <button id="clearGroupsBtn" class="secondary" type="button">清空小组</button>
               <button id="groupOpenOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
             </div>
           </form>
@@ -53,7 +63,7 @@
       </main>
     </div>
     <div id="toast" class="toast hidden"></div>
-    <script src="../assets/common.js?v=20260623-log-panel"></script>
-    <script src="../assets/pages/group-sales.js?v=20260623-multipage"></script>
+    <script src="../assets/common.js?v=20260921-group-categories"></script>
+    <script src="../assets/pages/group-sales.js?v=20260921-group-categories"></script>
   </body>
 </html>
