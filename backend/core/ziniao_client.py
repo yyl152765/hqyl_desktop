@@ -51,7 +51,9 @@ class ZiniaoClient:
     def ensure_started(self, *, core_timeout: int = 300) -> None:
         if not self._service_responds():
             if not self.client_path.is_file():
-                raise ZiniaoClientError(f"紫鸟客户端不存在：{self.client_path}")
+                raise ZiniaoClientError(
+                    f"未找到紫鸟客户端，请在页面选择紫鸟客户端程序（ziniao.exe 或 SuperBrowser.exe）：{self.client_path}"
+                )
             creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             subprocess.Popen(
                 [

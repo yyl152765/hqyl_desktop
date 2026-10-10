@@ -55,6 +55,8 @@ const HQYL = (() => {
       { id: "lazada_withdrawal_statistics", href: "lazada-withdrawal-statistics.html", name: "提现统计", icon: "提", tag: "Lazada", category: "Lazada 财务", description: "Excel 与账单归档", keywords: "菲律宾 马来西亚 泰国 收入" },
       { id: "lazada_balance_statistics", href: "lazada-balance-statistics.html", name: "余额统计", icon: "余", tag: "Lazada", category: "Lazada 财务", description: "多站点当前余额与处理中提现截图", keywords: "Income Balance Ads processing 菲律宾 马来西亚 泰国 印尼 越南 新加坡" },
       { id: "lazada_monthly_report", href: "lazada-monthly-report.html", name: "月度账单下载", icon: "月", tag: "Lazada", category: "Lazada 财务", description: "按月份批量下载账单", keywords: "泰国 马来西亚 菲律宾 月报" },
+      { id: "lazada_ads_data", href: "lazada-ads-data.html", name: "广告数据", icon: "广", tag: "Lazada", category: "Lazada 广告", description: "指定日期采集广告费与业绩并写入 Sheet", keywords: "泰国 钉钉 广告 支出 业绩 Sheet" },
+      { id: "lazada_bill_detail", href: "lazada-bill-detail.html", name: "后台收支数据", icon: "账", tag: "Lazada", category: "Lazada 账单", description: "按国家采集店铺后台收支数据并写入指定 Sheet", keywords: "泰国 菲律宾 马来 印尼 越南 钉钉 总金额 收入 扣减项 截图 账单区间" },
     ] },
     { id: "echotik", name: "EchoTik", icon: "E", keywords: "EchoTik TikTok Data", items: [
       { id: "echotik_collect", href: "echotik-collect.html", name: "商品达人采集", icon: "采", tag: "泰国", category: "泰国商品库", description: "关键词或全库商品与达人导出", keywords: "网红 选品 TikTok" },
@@ -911,6 +913,156 @@ const HQYL = (() => {
             message: "月度账单已下载并按店铺命名",
           })),
         });
+      },
+      async get_lazada_ads_data_info() {
+        const now = new Date();
+        const pad = (value) => String(value).padStart(2, "0");
+        let preferences = {};
+        try { preferences = JSON.parse(window.localStorage.getItem("hqyl.preview.lazadaAdsPreferences") || "{}") || {}; } catch (_error) { /* Preview defaults remain available. */ }
+        return {
+          ok: true,
+          default_sheet_name: `${String(now.getFullYear()).slice(-2)}年${now.getMonth() + 1}月`,
+          default_target_date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+          saved_preferences: { client_path: preferences.client_path || "", workbook_id: preferences.workbook_id || "" },
+          workbook_id: preferences.workbook_id || "preview-lazada-workbook", operator_names: ["王小妹"], dingtalk_configured: true,
+          client_path: preferences.client_path || "C:\\Program Files\\Ziniao\\ziniao.exe", webdriver_path: "C:\\ziniaodriver", output_dir: "C:\\Preview",
+        };
+      },
+      async save_lazada_ads_preferences(payload) {
+        try {
+          const stored = JSON.parse(window.localStorage.getItem("hqyl.preview.lazadaAdsPreferences") || "{}") || {};
+          const preferences = Object.fromEntries(["client_path", "workbook_id"].filter((key) => typeof stored[key] === "string").map((key) => [key, stored[key]]));
+          for (const key of ["client_path", "workbook_id"]) {
+            if (!Object.prototype.hasOwnProperty.call(payload, key)) continue;
+            let value = String(payload[key] || "").trim();
+            if (key === "client_path") value = value.replace(/^"+|"+$/g, "");
+            if (key === "workbook_id" && value) {
+              if (/^https?:\/\//i.test(value)) {
+                const url = new URL(value);
+                const query = new Map(Array.from(url.searchParams, ([name, item]) => [name.toLowerCase(), item]));
+                const path = url.pathname.match(/\/(?:spreadsheetv2|i\/nodes)\/([^/?#]+)/i);
+                value = query.get("dockey") || (path && path[1]) || query.get("dentrykey") || "";
+              }
+              if (!/^[A-Za-z0-9_-]+$/.test(value)) return { ok: false, error: "钉钉工作簿 ID 格式无效" };
+            }
+            if (value) preferences[key] = value;
+            else delete preferences[key];
+          }
+          window.localStorage.setItem("hqyl.preview.lazadaAdsPreferences", JSON.stringify(preferences));
+          return { ok: true };
+        } catch (error) {
+          return { ok: false, error: error.message || "演示配置保存失败" };
+        }
+      },
+      async start_lazada_ads_data(payload) {
+        const now = new Date();
+        const pad = (value) => String(value).padStart(2, "0");
+        const sheetName = String(payload.sheet_name || "").trim() || `${String(now.getFullYear()).slice(-2)}年${now.getMonth() + 1}月`;
+        const targetDate = String(payload.target_date || "").trim() || `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+        const inputStores = Array.isArray(payload.store_names) ? payload.store_names : String(payload.store_names || "").split(/\r?\n/);
+        const stores = Array.from(new Set(inputStores.map((name) => name.trim()).filter(Boolean)));
+        const task = startPreviewTask("lazada_ads_data", {
+          is_preview: true, success: true, message: "演示数据：未连接 Lazada，未写入钉钉，未生成本地结果。",
+          sheet_name: sheetName, target_date: targetDate,
+          input_store_count: stores.length, matched_store_count: stores.length, success_store_count: stores.length,
+          skipped_store_count: 0, failed_store_count: 0, output_dir: "", output_file: "",
+          stores: stores.map((storeName, index) => ({
+            store_name: storeName, target_date: targetDate, status: "success",
+            advertising: (100 + index * 25.5).toFixed(2), performance: (1200 + index * 380.5).toFixed(2),
+            message: `演示结果；目标 Sheet：${sheetName}，未实际写入`, written_cells: [],
+          })),
+        });
+        task.logs = ["演示模式：未登录 Lazada，未读取真实广告数据，未写入钉钉。", `已展示 ${stores.length} 个店铺的演示结果。`];
+        return task;
+      },
+      async get_lazada_bill_detail_info() {
+        const now = new Date();
+        const pad = (value) => String(value).padStart(2, "0");
+        let preferences = {};
+        try { preferences = JSON.parse(window.localStorage.getItem("hqyl.preview.lazadaBillPreferences") || "{}") || {}; } catch (_error) { /* Preview defaults remain available. */ }
+        const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+        const previousMonthStart = new Date(previousMonthEnd.getFullYear(), previousMonthEnd.getMonth(), 1);
+        const iso = (value) => `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+        return {
+          ok: true,
+          countries: [
+            { code: "TH", name: "泰国", currency: "(?:฿|THB)", default_workbook_id: "14lgGw3P8vvv7b2gCgg3PkQr85daZ90D", default_dws_node: "" },
+            { code: "PH", name: "菲律宾", currency: "(?:₱|PHP)", default_workbook_id: "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l", default_dws_node: "" },
+            { code: "MY", name: "马来西亚", currency: "(?:RM|MYR)", default_workbook_id: "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l", default_dws_node: "" },
+            { code: "ID", name: "印尼", currency: "(?:Rp|IDR)", default_workbook_id: "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l", default_dws_node: "" },
+            { code: "VN", name: "越南", currency: "(?:₫|VND)", default_workbook_id: "pLdn55X2E5o4yno8", default_dws_node: "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l" },
+          ],
+          default_sheet_name: `${String(now.getFullYear()).slice(-2)}年${now.getMonth() + 1}月`,
+          date_range: { start_date: iso(previousMonthStart), end_date: iso(previousMonthEnd) },
+          workbook_id: preferences.workbook_id || "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l",
+          dws_node: "", image_column: "F",
+          output_dir: "C:\\Preview", screenshot_root: preferences.screenshot_root || "C:\\Users\\Demo\\Desktop\\log",
+          screenshot_dir: preferences.screenshot_root || "C:\\Users\\Demo\\Desktop\\log",
+          // 预览模式：加 ?dws=0 可以演示「未安装 dws」的告警状态。
+          ...(() => {
+            const previewDws = new URLSearchParams(location.search).get("dws") !== "0";
+            return {
+              dws_available: previewDws,
+              dws_path: previewDws ? "C:\\Users\\Demo\\.local\\bin\\dws.exe" : "",
+              dws_hint: previewDws ? "" : "本机未安装 dws（PATH 中没有 dws 命令）：本次不会写入钉钉 F 列图片，截图仍会保存到「截图保存位置」。请把它所在目录加入系统 PATH 后重开应用。",
+            };
+          })(),
+          operator_names: ["王小妹"], default_dingtalk_operator_name: "王小妹", dingtalk_configured: true,
+          client_path: preferences.client_path || "C:\\Program Files\\Ziniao\\ziniao.exe", webdriver_path: "C:\\ziniaodriver",
+        };
+      },
+      async list_lazada_bill_sheets(payload) {
+        if (!payload || !payload.country) return { ok: false, error: "请选择国家" };
+        const now = new Date();
+        const countryNames = { TH: "泰国", PH: "菲律宾", MY: "马来", ID: "印尼", VN: "越南" };
+        const currentMonthSheet = `${String(now.getFullYear()).slice(-2)}年${now.getMonth() + 1}月`;
+        const sheetNames = [...Object.values(countryNames), currentMonthSheet];
+        return {
+          ok: true, workbook_id: payload.workbook_id || "preview-workbook",
+          country: payload.country, country_name: countryNames[payload.country] || payload.country,
+          default_sheet_name: currentMonthSheet, preferred_sheet_name: countryNames[payload.country] || "",
+          sheet_names: sheetNames, sheets: sheetNames.map((name, index) => ({ name, id: `preview-sheet-${index + 1}` })),
+        };
+      },
+      async save_lazada_bill_preferences(payload) {
+        try {
+          const stored = JSON.parse(window.localStorage.getItem("hqyl.preview.lazadaBillPreferences") || "{}") || {};
+          const preferences = { client_path: stored.client_path || "", screenshot_root: stored.screenshot_root || "", workbook_id: stored.workbook_id || "", dws_node: stored.dws_node || "" };
+          for (const key of ["client_path", "screenshot_root", "workbook_id", "dws_node"]) {
+            if (Object.prototype.hasOwnProperty.call(payload, key)) preferences[key] = String(payload[key] || "").trim();
+          }
+          window.localStorage.setItem("hqyl.preview.lazadaBillPreferences", JSON.stringify(preferences));
+          return { ok: true };
+        } catch (error) {
+          return { ok: false, error: error.message || "演示配置保存失败" };
+        }
+      },
+      async start_lazada_bill_detail(payload) {
+        const now = new Date();
+        const sheetName = String(payload.sheet_name || "").trim() || `${String(now.getFullYear()).slice(-2)}年${now.getMonth() + 1}月`;
+        const inputStores = Array.isArray(payload.store_names) ? payload.store_names : String(payload.store_names || "").split(/\r?\n/);
+        const stores = Array.from(new Set(inputStores.map((name) => name.trim()).filter(Boolean)));
+        const task = startPreviewTask("lazada_bill_detail", {
+          is_preview: true, success: true, message: "演示数据：未连接 Lazada，未写入钉钉，未生成本地截图。",
+          country: payload.country, country_name: { TH: "泰国", PH: "菲律宾", MY: "马来西亚", ID: "印尼", VN: "越南" }[payload.country] || payload.country,
+          sheet_name: sheetName, start_date: payload.start_date, end_date: payload.end_date,
+          workbook_id: payload.workbook_id || "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l",
+          screenshot_root: payload.screenshot_root || "C:\\Users\\Demo\\Desktop\\log",
+          screenshot_dir: `${payload.screenshot_root || "C:\\Users\\Demo\\Desktop\\log"}\\Lazada${{ TH: "泰国", PH: "菲律宾", MY: "马来西亚", ID: "印尼", VN: "越南" }[payload.country] || payload.country}账单明细截图\\${payload.start_date}到${payload.end_date}`,
+          image_sync_note: "演示模式：未上传钉钉 F 列图片，截图仅本地保存",
+          input_store_count: stores.length, matched_store_count: stores.length, success_store_count: stores.length,
+          skipped_store_count: 0, failed_store_count: 0, image_uploaded_count: 0, image_failed_count: 0, image_local_only_count: stores.length,
+          output_dir: payload.output_root || "C:\\Preview", output_file: "",
+          stores: stores.map((storeName, index) => ({
+            store_name: storeName, country: payload.country, country_name: { TH: "泰国", PH: "菲律宾", MY: "马来西亚", ID: "印尼", VN: "越南" }[payload.country] || payload.country, sheet_name: sheetName,
+            start_date: payload.start_date, end_date: payload.end_date, row: index + 2, status: "success",
+            total_amount: (5000 + index * 1250.5).toFixed(2), revenue: (6800 + index * 980.5).toFixed(2), deductions: (120 + index * 40).toFixed(2),
+            message: `演示结果；目标 Sheet：${sheetName}，未实际写入`, written_range: "", screenshot: "",
+            image_status: "local_only", image_cell: `F${index + 2}`,
+          })),
+        });
+        task.logs = ["演示模式：未登录 Lazada，未读取真实账单，未写入钉钉。", `已展示 ${stores.length} 个店铺的演示结果。`];
+        return task;
       },
       async start_bigseller_sync() { return startPreviewTask("bigseller_sync", { processed_count: 300, success_count: 300, failed_count: 0, round_count: 1, output_file: "C:\\Preview\\BigSeller同步.xlsx", output_dir: "C:\\Preview" }); },
       async start_bigseller_item_id_query(payload) {

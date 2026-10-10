@@ -70,6 +70,19 @@ GSP_ORIGINS = (
 )
 INCOME_PAGE_PATH = "/portal/apps/finance/myIncome/index"
 DEFAULT_COUNTRIES = tuple(COUNTRIES)
+# 本土店（本地卖家中心）域名后缀白名单：与 COUNTRY_PROFILES 的 local_host 对应，
+# 用于开店落地判定，精确锚定域名避免把 *.evil.example 之类误判成店铺页面。
+LOCAL_STORE_FRONT_SUFFIXES = (
+    ".lazada.co.th",
+    ".lazada.com.ph",
+    ".lazada.com.my",
+    ".lazada.co.id",
+    ".lazada.vn",
+)
+# 紫鸟开店后等待店铺落地的时间预算。本土店直接是本地卖家中心（不是 GSP），
+# 因此这里必须同时接受「跨境 GSP」与「本地/跨境卖家中心」两类页面，否则本土店会白等。
+STORE_PAGE_WAIT_SECONDS = 12.0
+STORE_PAGE_WAIT_AFTER_LAUNCH_SECONDS = 20.0
 SUPPORTED_REPORT_SUFFIXES = frozenset({".xlsx", ".xls", ".csv", ".zip"})
 TEMP_DOWNLOAD_SUFFIXES = (
     ".crdownload",
@@ -347,10 +360,11 @@ def validate_lazada_monthly_report_payload(
 
 
 def resolve_lazada_runtime_paths() -> dict[str, str]:
-    """Reuse the existing Lazada runtime-path resolver without importing it eagerly."""
-    from backend.services.lazada_withdrawal_statistics import resolve_lazada_runtime_paths as resolve
+    """Discover the installed client without loading legacy workflow projects."""
+    from backend.core.ziniao_paths import resolve_ziniao_client_path
 
-    return resolve()
+    # Playwright connects over CDP and does not need a Selenium driver directory.
+    return {"client_path": resolve_ziniao_client_path(), "webdriver_path": ""}
 
 
 def safe_store_filename(value: Any, *, max_length: int = 150) -> str:
@@ -861,7 +875,7 @@ class ZiniaoPlaywrightRuntime:
             if not connection.contexts:
                 raise RuntimeError("紫鸟浏览器没有可用的浏览器上下文")
             context = connection.contexts[0]
-            page = self._wait_for_gsp_page(context, timeout=20)
+            page = self._wait_for_store_page(context, timeout=STORE_PAGE_WAIT_SECONDS)
             if page is None:
                 pages = [candidate for candidate in context.pages if not candidate.is_closed()]
                 page = next(
@@ -882,7 +896,12 @@ class ZiniaoPlaywrightRuntime:
                             page.evaluate("window.stop()")
                         except Exception:
                             pass
-                    page = self._wait_for_gsp_page(context, timeout=40) or page
+                    page = (
+                        self._wait_for_store_page(
+                            context, timeout=STORE_PAGE_WAIT_AFTER_LAUNCH_SECONDS
+                        )
+                        or page
+                    )
             page.set_default_timeout(30_000)
             if self.job.browser_window_mode == "background":
                 try:
@@ -909,13 +928,23 @@ class ZiniaoPlaywrightRuntime:
             raise
 
     @staticmethod
-    def _wait_for_gsp_page(context: Any, *, timeout: float) -> Any | None:
+    def _wait_for_store_page(context: Any, *, timeout: float, only_gsp: bool = False) -> Any | None:
+        """等待紫鸟店铺真正落地，优先跨境 GSP 工作台首页。
+
+        本土店（本地卖家中心）**不是** GSP 页面：只认 GSP 会让开店环节白等 20+40 秒，
+        所以默认同时接受两类店铺页面，只有 `only_gsp=True` 时才退回旧的严格判定。
+        """
         deadline = time.monotonic() + max(float(timeout), 0)
         while True:
             candidates = [
                 page
                 for page in context.pages
-                if not page.is_closed() and _url_matches_gsp(str(page.url or ""))
+                if not page.is_closed()
+                and (
+                    _url_matches_gsp(str(page.url or ""))
+                    if only_gsp
+                    else _url_matches_store_front(str(page.url or ""))
+                )
             ]
             if candidates:
                 home_pages = [
@@ -923,10 +952,21 @@ class ZiniaoPlaywrightRuntime:
                     for page in candidates
                     if urlsplit(str(page.url or "")).path.casefold().startswith("/portal/home")
                 ]
-                return (home_pages or candidates)[-1]
+                if home_pages:
+                    return home_pages[-1]
+                gsp_pages = [
+                    page for page in candidates if _url_matches_gsp(str(page.url or ""))
+                ]
+                return (gsp_pages or candidates)[-1]
             if time.monotonic() >= deadline:
                 return None
             time.sleep(0.25)
+
+    @staticmethod
+    def _wait_for_gsp_page(context: Any, *, timeout: float) -> Any | None:
+        return ZiniaoPlaywrightRuntime._wait_for_store_page(
+            context, timeout=timeout, only_gsp=True
+        )
 
     def close_browser(self, opened: OpenedBrowser) -> None:
         if opened.connection is not None:
@@ -2317,6 +2357,34 @@ def _url_matches_country(url: str, country: str) -> bool:
         for origin in COUNTRIES[country]["origins"]
     }
     return hostname in allowed_hosts
+
+
+def _url_matches_store_front(url: str) -> bool:
+    """是否是「紫鸟店铺已经打开」的页面。
+
+    紫鸟开店后可能落在三类地址：跨境 GSP（gsp.*）、跨境卖家中心
+    （sellercenter-<cc>.lazada-seller.cn）、本地卖家中心（sellercenter.lazada.<cc>）。
+    只认 GSP 会让本土店的开店等待白等到超时。
+    """
+    if _url_matches_gsp(url):
+        return True
+    try:
+        parsed = urlsplit(str(url or ""))
+        hostname = (parsed.hostname or "").casefold().rstrip(".")
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme.casefold() != "https" or port not in (None, 443):
+        return False
+    # 跨境店：sellercenter-<cc>.lazada-seller.cn
+    if hostname.endswith(".lazada-seller.cn"):
+        return True
+    # 本土店：sellercenter.lazada.co.th / .com.ph / .com.my / .co.id / .vn
+    if hostname.startswith("sellercenter.") and hostname.endswith(
+        LOCAL_STORE_FRONT_SUFFIXES
+    ):
+        return True
+    return False
 
 
 def _url_matches_gsp(url: str) -> bool:

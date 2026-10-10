@@ -55,6 +55,12 @@ class AppSettings:
     accounts: list[BoundAccount] = field(default_factory=list)
     active_account_ids: dict[str, str] = field(default_factory=dict)
     vietnam_last_manifest_path: str = ""
+    lazada_ads_client_path: str = ""
+    lazada_ads_workbook_id: str = ""
+    lazada_bill_client_path: str = ""
+    lazada_bill_screenshot_dir: str = ""
+    lazada_bill_workbook_id: str = ""
+    lazada_bill_dws_node: str = ""
 
 
 def _base_app_data_dir() -> Path:
@@ -156,6 +162,12 @@ class ConfigStore:
             accounts=accounts,
             active_account_ids=_coerce_active_account_ids(payload.get("active_account_ids"), accounts),
             vietnam_last_manifest_path=str(payload.get("vietnam_last_manifest_path") or "").strip(),
+            lazada_ads_client_path=str(payload.get("lazada_ads_client_path") or "").strip(),
+            lazada_ads_workbook_id=str(payload.get("lazada_ads_workbook_id") or "").strip(),
+            lazada_bill_client_path=str(payload.get("lazada_bill_client_path") or "").strip(),
+            lazada_bill_screenshot_dir=str(payload.get("lazada_bill_screenshot_dir") or "").strip(),
+            lazada_bill_workbook_id=str(payload.get("lazada_bill_workbook_id") or "").strip(),
+            lazada_bill_dws_node=str(payload.get("lazada_bill_dws_node") or "").strip(),
         )
         if migrated_dingtalk:
             self._write_settings(settings)
@@ -195,12 +207,28 @@ class ConfigStore:
                     accounts,
                 ),
                 vietnam_last_manifest_path=str(settings.get("vietnam_last_manifest_path", current.vietnam_last_manifest_path) or "").strip(),
+                lazada_ads_client_path=str(settings.get("lazada_ads_client_path", current.lazada_ads_client_path) or "").strip(),
+                lazada_ads_workbook_id=str(settings.get("lazada_ads_workbook_id", current.lazada_ads_workbook_id) or "").strip(),
+                lazada_bill_client_path=str(settings.get("lazada_bill_client_path", current.lazada_bill_client_path) or "").strip(),
+                lazada_bill_screenshot_dir=str(settings.get("lazada_bill_screenshot_dir", current.lazada_bill_screenshot_dir) or "").strip(),
+                lazada_bill_workbook_id=str(
+                    settings.get("lazada_bill_workbook_id", current.lazada_bill_workbook_id) or ""
+                ).strip(),
+                lazada_bill_dws_node=str(
+                    settings.get("lazada_bill_dws_node", current.lazada_bill_dws_node) or ""
+                ).strip(),
             )
         if not settings.output_dir:
             settings.output_dir = str(desktop_path())
         settings.dingtalk = _coerce_dingtalk_settings(settings.dingtalk)
         settings.accounts = _coerce_accounts(settings.accounts)
         settings.active_account_ids = _coerce_active_account_ids(settings.active_account_ids, settings.accounts)
+        settings.lazada_ads_client_path = str(settings.lazada_ads_client_path or "").strip()
+        settings.lazada_ads_workbook_id = str(settings.lazada_ads_workbook_id or "").strip()
+        settings.lazada_bill_client_path = str(settings.lazada_bill_client_path or "").strip()
+        settings.lazada_bill_screenshot_dir = str(settings.lazada_bill_screenshot_dir or "").strip()
+        settings.lazada_bill_workbook_id = str(settings.lazada_bill_workbook_id or "").strip()
+        settings.lazada_bill_dws_node = str(settings.lazada_bill_dws_node or "").strip()
         self._write_settings(settings)
         return settings
 

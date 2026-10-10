@@ -1943,6 +1943,63 @@ class BrowserSafetyTests(unittest.TestCase):
         selected = service.ZiniaoPlaywrightRuntime._wait_for_gsp_page(Context(), timeout=0)
         self.assertEqual(selected.url, "https://gsp.lazada-seller.cn/portal/home/index")
 
+    def test_store_front_url_accepts_local_and_cross_border_but_anchors_lazada(self) -> None:
+        for candidate in (
+            "https://gsp.lazada-seller.cn/portal/home/index",
+            "https://sellercenter-th.lazada-seller.cn/apps/seller/login",
+            "https://sellercenter.lazada.co.th/apps/seller/login",
+            "https://sellercenter.lazada.com.my/portal/home/index",
+            "https://sellercenter.lazada.vn/",
+        ):
+            with self.subTest(candidate=candidate):
+                self.assertTrue(service._url_matches_store_front(candidate))
+        for candidate in (
+            "http://sellercenter.lazada.co.th/apps/seller/login",
+            "https://sellercenter.lazada.co.th:8443/apps/seller/login",
+            "https://sellercenter.evil.example/apps/seller/login",
+            "https://sellercenter.lazada.co.th.evil.example/apps/seller/login",
+            "https://evil.example/?next=https://sellercenter-th.lazada-seller.cn/",
+            "about:blank",
+        ):
+            with self.subTest(candidate=candidate):
+                self.assertFalse(service._url_matches_store_front(candidate))
+
+    def test_wait_for_store_page_accepts_local_store_without_gsp(self) -> None:
+        """本土店只会落在本地卖家中心，不能因为等不到 GSP 而白等超时。"""
+
+        class Page:
+            def __init__(self, url: str) -> None:
+                self.url = url
+
+            def is_closed(self):
+                return False
+
+        class Context:
+            pages = [Page("https://sellercenter.lazada.co.th/apps/seller/login")]
+
+        selected = service.ZiniaoPlaywrightRuntime._wait_for_store_page(Context(), timeout=0)
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.url, "https://sellercenter.lazada.co.th/apps/seller/login")
+        # 严格模式（仅 GSP）仍然返回空，证明「放开本土店」是新逻辑而非误判。
+        self.assertIsNone(
+            service.ZiniaoPlaywrightRuntime._wait_for_gsp_page(Context(), timeout=0)
+        )
+
+    def test_wait_for_store_page_returns_none_when_nothing_landed(self) -> None:
+        class Page:
+            def __init__(self, url: str) -> None:
+                self.url = url
+
+            def is_closed(self):
+                return False
+
+        class Context:
+            pages = [Page("https://evil.example/"), Page("about:blank")]
+
+        self.assertIsNone(
+            service.ZiniaoPlaywrightRuntime._wait_for_store_page(Context(), timeout=0)
+        )
+
     def test_country_url_check_uses_hostname_not_query_substring(self) -> None:
         self.assertTrue(
             service._url_matches_country(

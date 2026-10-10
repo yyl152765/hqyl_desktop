@@ -58,6 +58,14 @@ class LauncherPageTests(unittest.TestCase):
         page = resolve_entry_html(["--page=lazada-monthly-report"])
         self.assertEqual(page.name, "lazada-monthly-report.html")
 
+    def test_lazada_ads_data_has_separate_development_entry_and_menu(self) -> None:
+        page = resolve_entry_html(["--page=lazada-ads-data"])
+        self.assertEqual(page.name, "lazada-ads-data.html")
+        frontend = Path(__file__).resolve().parents[1] / "frontend" / "assets"
+        self.assertIn('id: "lazada_ads_data", href: "lazada-ads-data.html"', (frontend / "common.js").read_text(encoding="utf-8"))
+        self.assertIn('lazada_ads_data: { href: "lazada-ads-data.html"', (frontend / "pages" / "dashboard.js").read_text(encoding="utf-8"))
+        self.assertNotEqual(page, resolve_entry_html(["--page=lazada-monthly-report"]))
+
     def test_sidebar_contains_vietnam_income_entry(self) -> None:
         common_js = Path(__file__).resolve().parents[1] / "frontend" / "assets" / "common.js"
         source = common_js.read_text(encoding="utf-8")

@@ -4399,3 +4399,27 @@ select:focus {
     border-bottom: 1px solid var(--border);
   }
 }
+
+.lazada-bill-warning {
+  display: grid;
+  gap: 3px;
+  padding: 11px 12px;
+  border: 1px solid #f8d69b;
+  border-radius: 9px;
+  background: var(--amber-soft);
+  color: #8a5a14;
+}
+
+.lazada-bill-warning[hidden] {
+  display: none;
+}
+
+.lazada-bill-warning strong {
+  font-size: 12px;
+}
+
+.lazada-bill-warning span {
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

@@ -109,6 +109,8 @@ from backend.services.lazada_monthly_report import (
     run_lazada_monthly_report,
     validate_lazada_monthly_report_payload,
 )
+from backend.services import lazada_ads_data
+from backend.services import lazada_bill_detail
 from backend.services.vietnam_income_collection import (
     create_collection_run,
     default_collection_period,
@@ -263,6 +265,20 @@ class AppBridge:
                     "key": "lazada_monthly_report",
                     "name": "Lazada 月度账单下载",
                     "description": "按月份下载泰国、马来西亚和菲律宾店铺的月度报告。",
+                    "status": "ready",
+                    "vendor": "ziniao",
+                },
+                {
+                    "key": "lazada_ads_data",
+                    "name": "泰国 Lazada 广告数据",
+                    "description": "按指定日期采集店铺广告费和业绩，写入指定钉钉 Sheet。",
+                    "status": "ready",
+                    "vendor": "ziniao",
+                },
+                {
+                    "key": "lazada_bill_detail",
+                    "name": "Lazada 后台收支数据",
+                    "description": "按国家和账单区间采集总金额、收入与扣减项，写入指定钉钉 Sheet 并保存截图。",
                     "status": "ready",
                     "vendor": "ziniao",
                 },
@@ -1425,6 +1441,160 @@ class AppBridge:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    def get_lazada_ads_data_info(self) -> dict[str, Any]:
+        """返回广告数据默认日期、Sheet 和已配置的钉钉操作人。"""
+        try:
+            settings = self.config_store.load()
+            try:
+                paths = resolve_lazada_monthly_report_runtime_paths()
+            except RuntimeError:
+                paths = {}
+            return {
+                "ok": True,
+                "default_sheet_name": lazada_ads_data.default_sheet_name(),
+                "default_target_date": lazada_ads_data.default_target_date(),
+                "workbook_id": settings.lazada_ads_workbook_id or lazada_ads_data.DEFAULT_WORKBOOK_ID,
+                "saved_preferences": {
+                    "client_path": settings.lazada_ads_client_path,
+                    "workbook_id": settings.lazada_ads_workbook_id,
+                },
+                "operator_names": [binding.name for binding in settings.dingtalk.users],
+                "dingtalk_configured": bool(settings.dingtalk.app_key and settings.dingtalk.app_secret),
+                "output_dir": settings.output_dir,
+                "client_path": settings.lazada_ads_client_path or paths.get("client_path", ""),
+                "webdriver_path": paths.get("webdriver_path", ""),
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def save_lazada_ads_preferences(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """保存广告页的客户端路径与工作簿；独立于账号和采集任务。"""
+        try:
+            if not isinstance(payload, dict):
+                raise ValueError("保存内容必须是对象")
+            preferences = {}
+            if "client_path" in payload:
+                preferences["lazada_ads_client_path"] = str(payload.get("client_path") or "").strip().strip('"')
+            if "workbook_id" in payload:
+                workbook = str(payload.get("workbook_id") or "").strip()
+                preferences["lazada_ads_workbook_id"] = lazada_ads_data.normalize_workbook_id(workbook) if workbook else ""
+            if preferences:
+                self.config_store.save(preferences)
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def get_lazada_bill_detail_info(self) -> dict[str, Any]:
+        """返回账单明细页的国家选项、默认 Sheet/区间与已保存偏好。"""
+        try:
+            settings = self.config_store.load()
+            try:
+                paths = resolve_lazada_monthly_report_runtime_paths()
+            except RuntimeError:
+                paths = {}
+            return {
+                "ok": True,
+                "countries": lazada_bill_detail.country_options(),
+                "default_sheet_name": lazada_bill_detail.default_sheet_name(),
+                "date_range": lazada_bill_detail.previous_month_range(),
+                "workbook_id": settings.lazada_bill_workbook_id
+                or lazada_bill_detail.DEFAULT_WORKBOOK_ID,
+                "dws_node": settings.lazada_bill_dws_node,
+                "image_column": lazada_bill_detail.IMAGE_COLUMN,
+                # 运行前就能知道 F 列图片会不会写入：dws 缺失时页面会给出安装提示。
+                "dws_available": lazada_bill_detail.dws_available(),
+                "dws_path": lazada_bill_detail.dws_path(),
+                "dws_hint": (
+                    "" if lazada_bill_detail.dws_available() else lazada_bill_detail.DWS_MISSING_HINT
+                ),
+                "output_dir": settings.output_dir,
+                "screenshot_root": settings.lazada_bill_screenshot_dir
+                or lazada_bill_detail.default_screenshot_root(),
+                "operator_names": [binding.name for binding in settings.dingtalk.users],
+                "default_dingtalk_operator_name": (
+                    settings.dingtalk.users[0].name if len(settings.dingtalk.users) == 1 else ""
+                ),
+                "dingtalk_configured": bool(
+                    settings.dingtalk.app_key and settings.dingtalk.app_secret
+                ),
+                "client_path": settings.lazada_bill_client_path or paths.get("client_path", ""),
+                "webdriver_path": paths.get("webdriver_path", ""),
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def save_lazada_bill_preferences(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """保存账单明细页的共用钉钉文档、图片节点、客户端路径与截图根目录。"""
+        try:
+            if not isinstance(payload, dict):
+                raise ValueError("保存内容必须是对象")
+            preferences: dict[str, Any] = {}
+            if "client_path" in payload:
+                preferences["lazada_bill_client_path"] = (
+                    str(payload.get("client_path") or "").strip().strip('"')
+                )
+            if "screenshot_root" in payload or "screenshot_dir" in payload:
+                preferences["lazada_bill_screenshot_dir"] = (
+                    str(payload.get("screenshot_root", payload.get("screenshot_dir")) or "")
+                    .strip()
+                    .strip('"')
+                )
+            if "workbook_id" in payload:
+                raw_workbook = str(payload.get("workbook_id") or "").strip()
+                preferences["lazada_bill_workbook_id"] = (
+                    lazada_bill_detail.normalize_workbook_id(raw_workbook) if raw_workbook else ""
+                )
+            if "dws_node" in payload:
+                raw_node = str(payload.get("dws_node") or "").strip()
+                preferences["lazada_bill_dws_node"] = (
+                    lazada_bill_detail.validate_image_node(raw_node) if raw_node else ""
+                )
+            if preferences:
+                self.config_store.save(preferences)
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def list_lazada_bill_sheets(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """读取共用钉钉文档的 Sheet 列表，供账单明细页「指定 Sheet」下拉选择。"""
+        try:
+            settings = self.config_store.load()
+            request = dict(payload or {})
+            profile = lazada_bill_detail.resolve_country(request.get("country"))
+            workbook_id = lazada_bill_detail.normalize_workbook_id(
+                request.get("workbook_id")
+                or settings.lazada_bill_workbook_id
+                or lazada_bill_detail.DEFAULT_WORKBOOK_ID
+            )
+            operator_name = str(request.get("dingtalk_operator_name") or "").strip()
+            if not operator_name and len(settings.dingtalk.users) == 1:
+                operator_name = settings.dingtalk.users[0].name
+            if not settings.dingtalk.app_key or not settings.dingtalk.app_secret:
+                raise ValueError("请先在设置中配置钉钉 AppKey 和 AppSecret")
+            user_id = _resolve_dingtalk_user_id(settings, operator_name) if operator_name else ""
+            if not user_id:
+                raise ValueError("请先在设置中配置钉钉操作人，或直接使用默认 Sheet")
+            sheets = lazada_bill_detail.list_workbook_sheets(
+                workbook_id,
+                app_key=settings.dingtalk.app_key,
+                app_secret=settings.dingtalk.app_secret,
+                user_id=user_id,
+            )
+            names = [item["name"] for item in sheets]
+            return {
+                "ok": True,
+                "workbook_id": workbook_id,
+                "sheet_names": names,
+                "sheets": sheets,
+                "country": profile.code,
+                "country_name": profile.name,
+                "default_sheet_name": lazada_bill_detail.default_sheet_name(),
+                # 下拉默认优先选与国家同名的 Sheet（泰国/菲律宾/马来/印尼/越南）。
+                "preferred_sheet_name": _preferred_bill_sheet_name(names, profile),
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def get_vietnam_collection_info(self) -> dict[str, Any]:
         """返回越南收支数据采集页面的批次默认值。"""
         settings = self.config_store.load()
@@ -1790,6 +1960,120 @@ class AppBridge:
                 "month": job.month,
                 "store_count": len(job.store_names),
                 "output_root": str(job.output_root),
+            },
+        )
+
+    def start_lazada_ads_data(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """使用平台绑定的紫鸟与钉钉配置启动指定日期的数据采集。"""
+        try:
+            settings = self.config_store.load()
+            request_payload = self._payload_with_account(payload, "ziniao")
+            request_payload.setdefault("client_path", settings.lazada_ads_client_path)
+            request_payload.setdefault("workbook_id", settings.lazada_ads_workbook_id)
+            operator_name = str(request_payload.get("dingtalk_operator_name") or "").strip()
+            if not operator_name and len(settings.dingtalk.users) == 1:
+                operator_name = settings.dingtalk.users[0].name
+            if not settings.dingtalk.app_key or not settings.dingtalk.app_secret:
+                raise ValueError("请先在设置中配置钉钉 AppKey 和 AppSecret")
+            if not operator_name:
+                raise ValueError("请选择钉钉操作人；可在设置中配置钉钉用户")
+            user_id = _resolve_dingtalk_user_id(settings, operator_name)
+            if not user_id:
+                raise ValueError(f"操作人「{operator_name}」不在钉钉用户配置表中，请先在设置中配置")
+            request_payload.update({
+                "dingtalk_app_key": settings.dingtalk.app_key,
+                "dingtalk_app_secret": settings.dingtalk.app_secret,
+                "dingtalk_user_id": user_id,
+            })
+            job = lazada_ads_data.validate_lazada_ads_payload(
+                request_payload, default_output_root=settings.output_dir,
+            )
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+        def runner(progress):
+            return lazada_ads_data.run_lazada_ads_data(job, progress)
+
+        return self.tasks.start(
+            "泰国 Lazada 广告数据",
+            runner,
+            tool="lazada_ads_data",
+            context={
+                "account_id": str(request_payload.get("account_id") or ""),
+                "sheet_name": job.sheet_name,
+                "target_date": str(job.target_date),
+                "store_count": len(job.store_names),
+                "output_root": str(job.output_root),
+            },
+        )
+
+    def start_lazada_bill_detail(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """使用平台绑定的紫鸟与钉钉配置采集指定国家、指定区间的账单明细。"""
+        try:
+            settings = self.config_store.load()
+            request_payload = self._payload_with_account(payload, "ziniao")
+            if not str(request_payload.get("workbook_id") or "").strip():
+                request_payload["workbook_id"] = (
+                    settings.lazada_bill_workbook_id or lazada_bill_detail.DEFAULT_WORKBOOK_ID
+                )
+            if not str(request_payload.get("dws_node") or "").strip():
+                request_payload["dws_node"] = settings.lazada_bill_dws_node
+            request_payload.setdefault("client_path", settings.lazada_bill_client_path)
+            request_payload.setdefault(
+                "screenshot_root",
+                request_payload.get("screenshot_dir") or settings.lazada_bill_screenshot_dir,
+            )
+            operator_name = str(request_payload.get("dingtalk_operator_name") or "").strip()
+            if not operator_name and len(settings.dingtalk.users) == 1:
+                operator_name = settings.dingtalk.users[0].name
+            if not settings.dingtalk.app_key or not settings.dingtalk.app_secret:
+                raise ValueError("请先在设置中配置钉钉 AppKey 和 AppSecret")
+            if not operator_name:
+                raise ValueError("请选择钉钉操作人；可在设置中配置钉钉用户")
+            user_id = _resolve_dingtalk_user_id(settings, operator_name)
+            if not user_id:
+                raise ValueError(f"操作人「{operator_name}」不在钉钉用户配置表中，请先在设置中配置")
+            request_payload.update(
+                {
+                    "dingtalk_app_key": settings.dingtalk.app_key,
+                    "dingtalk_app_secret": settings.dingtalk.app_secret,
+                    "dingtalk_user_id": user_id,
+                }
+            )
+            job = lazada_bill_detail.validate_lazada_bill_detail_payload(
+                request_payload,
+                default_output_root=settings.output_dir,
+                default_screenshot_root_value=settings.lazada_bill_screenshot_dir,
+            )
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+        def runner(progress):
+            return lazada_bill_detail.run_lazada_bill_detail(job, progress)
+
+        return self.tasks.start(
+            f"{job.country_name} Lazada 后台收支数据",
+            runner,
+            tool="lazada_bill_detail",
+            context={
+                "account_id": str(request_payload.get("account_id") or ""),
+                "country": job.country,
+                "country_name": job.country_name,
+                "sheet_name": job.sheet_name,
+                "start_date": job.start_date,
+                "end_date": job.end_date,
+                "store_count": len(job.store_names),
+                "output_root": str(job.output_root),
+                "screenshot_root": str(job.screenshot_root),
+                "screenshot_dir": str(
+                    lazada_bill_detail.screenshot_folder(
+                        job.screenshot_root, job.country_name, job.start_date, job.end_date
+                    )
+                ),
             },
         )
 
@@ -2323,6 +2607,25 @@ def _mask_config_value(value: str) -> str:
     if len(text) <= 6:
         return text[:1] + "***"
     return f"{text[:3]}****{text[-3:]}"
+
+
+def _preferred_bill_sheet_name(names: list[str], profile: Any) -> str:
+    """下拉默认 Sheet：优先与国家同名（旧脚本默认表名：泰国/菲律宾/马来/印尼/越南）。"""
+
+    def normalized(value: Any) -> str:
+        return " ".join(str(value or "").split()).strip().casefold()
+
+    aliases = [normalized(alias) for alias in lazada_bill_detail.sheet_name_aliases(profile)]
+    aliases = [alias for alias in aliases if alias]
+    for alias in aliases:
+        for name in names:
+            if normalized(name) == alias:
+                return name
+    for alias in aliases:
+        for name in names:
+            if alias in normalized(name):
+                return name
+    return ""
 
 
 def _resolve_dingtalk_user_id(settings: AppSettings, operator_name: str) -> str:

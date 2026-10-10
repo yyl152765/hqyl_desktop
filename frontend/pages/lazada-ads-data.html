@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>泰国 Lazada 广告数据</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">紫鸟流程 / Lazada 广告 / 泰国广告数据</div><h1>泰国 Lazada 广告数据</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>输入店铺</span><strong id="skuCount">0</strong><small>匹配店铺：<b id="matchedCount">0</b></small></article>
+          <article class="overview-card"><span>采集成功</span><strong id="recordCount">0</strong><small>广告费与业绩均已取得</small></article>
+          <article class="overview-card"><span>广告费合计（THB）</span><strong id="lazadaAdsAdvertisingTotal">—</strong><small>指定日期的广告支出</small></article>
+          <article class="overview-card"><span>业绩合计（THB）</span><strong id="lazadaAdsPerformanceTotal">—</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid">
+          <form id="lazadaAdsDataForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>采集条件</h2><p>采集店铺广告费与业绩并写入指定 Sheet。广告费支持昨天及以前的日期；补历史数据时请同时选择对应 Sheet。</p></div>
+              <span class="section-badge">泰国 Lazada</span>
+            </div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon ziniao-icon">Z</span>
+              <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a>
+            </div>
+
+            <div class="form-grid">
+              <label><span>指定 Sheet <small>不填默认当前月份</small></span><input id="lazadaAdsSheetName" type="text" placeholder="留空使用当前月份，例如：26年10月" /></label>
+              <label><span>指定日期 <small>不填默认当天</small></span><input id="lazadaAdsTargetDate" type="date" title="留空使用当天日期" /></label>
+              <label class="store-field"><span>店铺名称 <small>每行一个</small></span><textarea id="lazadaAdsStores" spellcheck="false" required placeholder="输入泰国 Lazada 紫鸟店铺名称，每行一个"></textarea></label>
+              <label class="store-field"><span>钉钉工作簿 ID 或链接 <small>修改后自动保存</small></span><input id="lazadaAdsWorkbookId" type="text" required placeholder="目标钉钉在线工作簿 ID 或链接" aria-describedby="lazadaAdsPreferencesStatus" /></label>
+              <label class="store-field"><span>钉钉操作人姓名 <small>使用设置中的用户配置</small></span><input id="lazadaAdsOperatorName" list="lazadaAdsOperatorList" required placeholder="填写设置里绑定的用户姓名" /></label>
+              <datalist id="lazadaAdsOperatorList"></datalist>
+            </div>
+
+            <div class="form-grid">
+              <label><span>浏览器窗口</span><select id="lazadaAdsWindowMode"><option value="normal">正常显示</option><option value="background">后台运行</option></select></label>
+              <label><span>紫鸟客户端 <small>自动保存</small></span><div class="input-action"><input id="lazadaAdsClientPath" placeholder="输入路径或点击选择" aria-describedby="lazadaAdsPreferencesStatus" /><button id="lazadaAdsChooseClientBtn" class="secondary" type="button">选择</button></div></label>
+              <label class="store-field"><span>输出目录</span><div class="input-action"><input id="lazadaAdsOutputDir" readonly required /><button id="lazadaAdsChooseOutputBtn" class="secondary" type="button">选择</button></div></label>
+              <p id="lazadaAdsPreferencesStatus" class="form-note store-field" role="status" aria-live="polite">客户端路径和工作簿配置会自动保存。</p>
+            </div>
+            <div class="actions">
+              <button id="lazadaAdsRunBtn" class="primary" type="submit">开始采集</button>
+              <button id="lazadaAdsRefreshBtn" class="secondary" type="button">恢复默认值</button>
+              <button id="lazadaAdsOpenOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>店铺匹配、广告费与业绩采集、指定 Sheet 写入进度</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section class="surface">
+          <div class="section-head tight"><div><h2>店铺结果</h2><p id="outputFile">未生成</p></div><span id="failedCount" class="section-badge">失败 0</span></div>
+          <div class="collection-table-wrap">
+            <table>
+              <thead><tr><th>店铺</th><th>日期</th><th>广告费（THB）</th><th>业绩（THB）</th><th>状态</th><th>说明</th></tr></thead>
+              <tbody id="lazadaAdsResultBody"><tr><td colspan="6">尚未运行</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20261009-lazada-ads-preferences"></script>
+    <script src="../assets/pages/lazada-ads-data.js?v=20261009-preferences"></script>
+  </body>
+</html>

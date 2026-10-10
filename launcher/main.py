@@ -34,6 +34,8 @@ PAGE_ENTRIES = {
     "bigseller-sku-benchmark": "bigseller-sku-benchmark.html",
     "bigseller-claim-query": "bigseller-claim-query.html",
     "lazada-monthly-report": "lazada-monthly-report.html",
+    "lazada-ads-data": "lazada-ads-data.html",
+    "lazada-bill-detail": "lazada-bill-detail.html",
     "vietnam-income-reconciliation": "vietnam-income-reconciliation.html",
     "kec-reconciliation": "kec-reconciliation.html",
 }

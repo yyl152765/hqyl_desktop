@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lazada 后台收支数据</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">紫鸟流程 / Lazada 财务 / 后台收支数据</div><h1>Lazada 后台收支数据</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>输入店铺</span><strong id="skuCount">0</strong><small>匹配店铺：<b id="matchedCount">0</b></small></article>
+          <article class="overview-card"><span>采集成功</span><strong id="recordCount">0</strong><small>已写入指定 Sheet</small></article>
+          <article class="overview-card"><span>写入列</span><strong>B:D</strong><small>总金额 · 收入 · 扣减项</small></article>
+          <article class="overview-card file-card"><span>任务输出</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid">
+          <form id="lazadaBillForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>采集条件</h2><p>按国家采集店铺后台收支数据并写入指定 Sheet。账单区间默认上月 1 日至上月末，可自行调整；截图按「国家 + 账单区间」保存到截图目录，钉钉截图只写入 F 列（不会写入 A～E 列）。</p></div>
+              <span class="section-badge">泰国 · 菲律宾 · 马来 · 印尼 · 越南</span>
+            </div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon ziniao-icon">Z</span>
+              <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a>
+            </div>
+
+            <div class="form-grid">
+              <label><span>国家</span><select id="lazadaBillCountry" required></select></label>
+              <label><span>指定 Sheet <small>按国家读取，优先同名 Sheet</small></span><div class="input-action"><select id="lazadaBillSheetName"></select><button id="lazadaBillRefreshSheetsBtn" class="secondary" type="button">读取</button></div></label>
+              <label><span>账单开始日期 <small>默认上月 1 日</small></span><input id="lazadaBillStartDate" type="date" required /></label>
+              <label><span>账单结束日期 <small>默认上月末</small></span><input id="lazadaBillEndDate" type="date" required /></label>
+            </div>
+
+            <div class="form-grid">
+              <label class="store-field"><span>店铺名称 <small>每行一个，需与指定 Sheet 的 A 列一致</small></span><textarea id="lazadaBillStores" spellcheck="false" required placeholder="输入该国家的紫鸟店铺名称，每行一个"></textarea></label>
+              <label class="store-field"><span>钉钉文档 ID 或链接 <small>五国共用一本，改一次即长期生效</small></span><input id="lazadaBillWorkbookId" type="text" required placeholder="目标钉钉在线文档 ID 或链接" aria-describedby="lazadaBillPreferencesStatus" /></label>
+              <p id="lazadaBillImageHint" class="form-note store-field" role="status" aria-live="polite">钉钉截图写入：同一文档的 F 列（不会写入 A～E 列）</p>
+              <label class="store-field"><span>钉钉操作人姓名 <small>使用设置中的用户配置</small></span><input id="lazadaBillOperatorName" list="lazadaBillOperatorList" required placeholder="填写设置里绑定的用户姓名" /></label>
+              <datalist id="lazadaBillOperatorList"></datalist>
+            </div>
+
+            <div class="form-grid">
+              <label><span>浏览器窗口</span><select id="lazadaBillWindowMode"><option value="normal">正常显示</option><option value="background">后台运行</option></select></label>
+              <label><span>紫鸟客户端 <small>自动保存</small></span><div class="input-action"><input id="lazadaBillClientPath" placeholder="输入路径或点击选择" aria-describedby="lazadaBillPreferencesStatus" /><button id="lazadaBillChooseClientBtn" class="secondary" type="button">选择</button></div></label>
+              <label class="store-field"><span>截图保存位置 <small>根目录，按国家和账单区间自动建文件夹</small></span><div class="input-action"><input id="lazadaBillScreenshotDir" placeholder="输入根目录或点击选择" aria-describedby="lazadaBillScreenshotHint" /><button id="lazadaBillChooseScreenshotBtn" class="secondary" type="button">选择</button></div></label>
+              <p id="lazadaBillScreenshotHint" class="form-note store-field" role="status" aria-live="polite">本次截图保存目录：—</p>
+              <label class="store-field"><span>输出目录 <small>任务日志与结果</small></span><div class="input-action"><input id="lazadaBillOutputDir" readonly required /><button id="lazadaBillChooseOutputBtn" class="secondary" type="button">选择</button></div></label>
+              <p id="lazadaBillPreferencesStatus" class="form-note store-field" role="status" aria-live="polite">钉钉文档 ID、客户端路径和截图根目录会自动保存，五国共用同一本文档。</p>
+              <div id="lazadaBillDwsWarning" class="lazada-bill-warning store-field" role="alert" hidden>
+                <strong>未检测到 dws 命令：钉钉 F 列图片将不会写入</strong>
+                <span id="lazadaBillDwsHint"></span>
+              </div>
+            </div>
+            <div class="actions">
+              <button id="lazadaBillRunBtn" class="primary" type="submit">开始采集</button>
+              <button id="lazadaBillRefreshBtn" class="secondary" type="button">恢复默认值</button>
+              <button id="lazadaBillOpenOutputBtn" class="secondary" type="button" disabled>打开输出目录</button>
+            </div>
+          </form>
+
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div><h2>运行日志</h2><p>店铺匹配、账单区间、指标读取与指定 Sheet 写入进度</p></div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section class="surface">
+          <div class="section-head tight"><div><h2>店铺结果</h2><p id="lazadaBillScreenshotSummary">截图按「国家 + 账单区间」保存；钉钉截图写入同一文档的 F 列</p></div><span id="failedCount" class="section-badge">失败 0</span></div>
+          <div class="collection-table-wrap">
+            <table>
+              <thead><tr><th>店铺</th><th>国家</th><th>指定 Sheet</th><th>账单区间</th><th>总金额</th><th>收入</th><th>扣减项</th><th>状态</th><th>说明</th></tr></thead>
+              <tbody id="lazadaBillResultBody"><tr><td colspan="9">尚未运行</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20261009-lazada-bill-detail"></script>
+    <script src="../assets/pages/lazada-bill-detail.js?v=20261009-v1"></script>
+  </body>
+</html>

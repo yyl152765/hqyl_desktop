@@ -23,7 +23,7 @@ except ImportError:
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
 STORAGE_KEY = "hqyl.sidebar.v1"
-GROUP_COUNTS = {"finance": 2, "mabang": 10, "ziniao": 6, "echotik": 1, "bigseller": 4}
+GROUP_COUNTS = {"finance": 2, "mabang": 10, "ziniao": 8, "echotik": 1, "bigseller": 4}
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
