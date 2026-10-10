@@ -565,35 +565,47 @@ class DingTalkBillSheet:
     def _refresh_token(self) -> None:
         import httpx
 
+        from backend.core.dingtalk_workbook import call_with_retry
+
         if self.access_token and time.time() < self.expires_at - 60:
             return
-        response = httpx.get(
-            "https://oapi.dingtalk.com/gettoken",
-            params={
-                "appkey": self.query.dingtalk_app_key,
-                "appsecret": self.query.dingtalk_app_secret,
-            },
-            timeout=20,
-        )
-        if response.status_code != 200:
-            raise WorkflowError(f"获取钉钉应用令牌失败（HTTP {response.status_code}）")
-        data = response.json()
-        if data.get("errcode") != 0 or not data.get("access_token"):
-            raise WorkflowError("获取钉钉应用令牌失败，请检查设置中的应用凭证")
+
+        def fetch_token() -> dict[str, Any]:
+            response = httpx.get(
+                "https://oapi.dingtalk.com/gettoken",
+                params={
+                    "appkey": self.query.dingtalk_app_key,
+                    "appsecret": self.query.dingtalk_app_secret,
+                },
+                timeout=20,
+            )
+            if response.status_code != 200:
+                raise WorkflowError(f"获取钉钉应用令牌失败（HTTP {response.status_code}）")
+            data = response.json()
+            if data.get("errcode") != 0 or not data.get("access_token"):
+                raise WorkflowError("获取钉钉应用令牌失败，请检查设置中的应用凭证")
+            return data
+
+        data = call_with_retry(fetch_token, description="获取钉钉应用令牌")
         self.access_token = str(data["access_token"])
         self.expires_at = time.time() + int(data.get("expires_in") or 7200)
-        response = httpx.post(
-            "https://oapi.dingtalk.com/topapi/v2/user/get",
-            params={"access_token": self.access_token},
-            json={"userid": self.query.dingtalk_user_id, "language": "zh_CN"},
-            timeout=20,
-        )
-        if response.status_code != 200:
-            raise WorkflowError(f"读取钉钉操作人失败（HTTP {response.status_code}）")
-        data = response.json()
-        self.operator_id = str((data.get("result") or {}).get("unionid") or "")
-        if data.get("errcode") != 0 or not self.operator_id:
-            raise WorkflowError("无法获取钉钉操作人 unionId，请检查设置中的操作人")
+
+        def fetch_operator() -> str:
+            response = httpx.post(
+                "https://oapi.dingtalk.com/topapi/v2/user/get",
+                params={"access_token": self.access_token},
+                json={"userid": self.query.dingtalk_user_id, "language": "zh_CN"},
+                timeout=20,
+            )
+            if response.status_code != 200:
+                raise WorkflowError(f"读取钉钉操作人失败（HTTP {response.status_code}）")
+            payload = response.json()
+            operator_id = str((payload.get("result") or {}).get("unionid") or "")
+            if payload.get("errcode") != 0 or not operator_id:
+                raise WorkflowError("无法获取钉钉操作人 unionId，请检查设置中的操作人")
+            return operator_id
+
+        self.operator_id = call_with_retry(fetch_operator, description="读取钉钉操作人")
 
     def read(self, cell_range: str) -> list[list[Any]]:
         from backend.core.dingtalk_workbook import read_sheet_range
@@ -610,21 +622,18 @@ class DingTalkBillSheet:
         )
 
     def update(self, cell_range: str, values: list[list[str]]) -> None:
-        from alibabacloud_dingtalk.doc_1_0 import models
-
-        from backend.core.dingtalk_workbook import _get_sdk_client, _runtime_options
+        from backend.core.dingtalk_workbook import update_sheet_range
 
         self._refresh_token()
-        client = _get_sdk_client(self.query.dingtalk_app_key, self.query.dingtalk_app_secret)
-        client.update_range_with_options(
+        update_sheet_range(
+            self.access_token,
+            self.operator_id,
             self.query.workbook_id,
             self.sheet_id,
             cell_range,
-            models.UpdateRangeRequest(
-                operator_id=self.operator_id, values=values, number_format="General"
-            ),
-            models.UpdateRangeHeaders(x_acs_dingtalk_access_token=self.access_token),
-            _runtime_options(),
+            values,
+            app_key=self.query.dingtalk_app_key,
+            app_secret=self.query.dingtalk_app_secret,
         )
 
 
@@ -1201,6 +1210,9 @@ def run_lazada_bill_detail(
 
     handler = ProgressHandler()
     logger.addHandler(handler)
+    from backend.core.dingtalk_workbook import set_retry_observer
+
+    set_retry_observer(lambda message: logger.warning("%s", message))
     results: list[dict[str, Any]] = []
     runtime = None
     uploader = image_uploader
@@ -1439,6 +1451,9 @@ def run_lazada_bill_detail(
                 if item["status"] in {"pending", "starting"} or not item["message"]:
                     item.update(status="failed", message=message)
     finally:
+        from backend.core.dingtalk_workbook import set_retry_observer
+
+        set_retry_observer(None)
         if runtime is not None:
             try:
                 runtime.shutdown()

@@ -916,13 +916,14 @@ const HQYL = (() => {
       },
       async get_lazada_ads_data_info() {
         const now = new Date();
+        const yesterday = new Date(now.getTime() - 86400000);
         const pad = (value) => String(value).padStart(2, "0");
         let preferences = {};
         try { preferences = JSON.parse(window.localStorage.getItem("hqyl.preview.lazadaAdsPreferences") || "{}") || {}; } catch (_error) { /* Preview defaults remain available. */ }
         return {
           ok: true,
-          default_sheet_name: `${String(now.getFullYear()).slice(-2)}年${now.getMonth() + 1}月`,
-          default_target_date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+          default_sheet_name: `${String(yesterday.getFullYear()).slice(-2)}年${yesterday.getMonth() + 1}月`,
+          default_target_date: `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`,
           saved_preferences: { client_path: preferences.client_path || "", workbook_id: preferences.workbook_id || "" },
           workbook_id: preferences.workbook_id || "preview-lazada-workbook", operator_names: ["王小妹"], dingtalk_configured: true,
           client_path: preferences.client_path || "C:\\Program Files\\Ziniao\\ziniao.exe", webdriver_path: "C:\\ziniaodriver", output_dir: "C:\\Preview",

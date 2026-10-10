@@ -28,7 +28,7 @@ def make_query(**changes):
 
 
 class FakeSheet:
-    def __init__(self, names=("shop A",), target=TARGET, initial=None):
+    def __init__(self, names=("shop A",), target=TARGET, initial=None, header_labels=("广告费", "业绩")):
         self.target = target
         self.cells = {}
         self.last_non_empty_row = len(names) + 2
@@ -36,13 +36,23 @@ class FakeSheet:
         self.bad_readback = False
         self.change_identity_on_write = False
         self.names_reads = 0
+        self.header_labels = list(header_labels)
         for row, name in enumerate(names, 3):
             self.cells[f"K{row}"] = name
         self.cells.update(initial or {})
 
+    def _header_rows(self):
+        # 真实钉钉表：第 1 行日期序列号、第 2 行「当日占比」辅助数值、第 3 行指标行、第 4 行数据行。
+        return [
+            [(self.target - date(1899, 12, 30)).days, ""],
+            [round(self.target.day / 31, 15), ""],
+            list(self.header_labels),
+            ["", ""],
+        ]
+
     def read(self, address):
-        if address.endswith("1:AI2"):
-            return [[(self.target - date(1899, 12, 30)).days, ""], ["广告费", "业绩"]]
+        if re.fullmatch(r"[A-Z]+1:[A-Z]+4", address):
+            return self._header_rows()
         match = re.fullmatch(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", address)
         if not match:
             raise AssertionError(f"Unsupported fake range: {address}")
@@ -94,7 +104,7 @@ class FakeRuntime:
 
 
 class QueryTests(unittest.TestCase):
-    def test_missing_empty_or_whitespace_uses_current_month_and_today(self):
+    def test_missing_empty_or_whitespace_uses_yesterday_month_and_yesterday(self):
         for empty_fields in ({}, {"sheet_name": "", "target_date": ""},
                              {"sheet_name": " \t\n ", "target_date": " \t\n "}):
             with self.subTest(empty_fields=empty_fields):
@@ -103,10 +113,10 @@ class QueryTests(unittest.TestCase):
                 payload.pop("target_date")
                 payload.update(empty_fields)
                 query = service.validate_lazada_ads_payload(payload, today=date(2026, 10, 1))
-                self.assertEqual(query.sheet_name, "26年10月")
-                self.assertEqual(query.target_date, "2026-10-01")
-        self.assertEqual(service.default_sheet_name(date(2027, 1, 1)), "27年1月")
-        self.assertEqual(service.default_target_date(date(2027, 1, 1)), "2027-01-01")
+                self.assertEqual(query.sheet_name, "26年9月")
+                self.assertEqual(query.target_date, "2026-09-30")
+        self.assertEqual(service.default_sheet_name(date(2027, 1, 1)), "26年12月")
+        self.assertEqual(service.default_target_date(date(2027, 1, 1)), "2026-12-31")
 
     def test_sheet_and_date_defaults_do_not_replace_explicit_other_field(self):
         query = make_query(sheet_name=" \t ", target_date=" 2026-09-30 ")
@@ -114,7 +124,7 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(query.target_date, "2026-09-30")
         query = make_query(sheet_name=" 补录页 ", target_date=" \n ")
         self.assertEqual(query.sheet_name, "补录页")
-        self.assertEqual(query.target_date, TODAY.isoformat())
+        self.assertEqual(query.target_date, TARGET.isoformat())
 
     def test_explicit_date_is_not_shifted_and_store_names_are_deduplicated(self):
         query = make_query(target_date="2026-10-01", store_names=" shop A \n\nshop A\nSHOP A\nshop A extra")
@@ -237,6 +247,20 @@ class RunnerTests(unittest.TestCase):
     def test_sheet_date_mismatch_fails_all_before_browser(self):
         result, sheet, runtime, _ = self.run_job(sheet=FakeSheet(target=date(2026, 9, 8)), names="shop A\nshop B")
         self.assertEqual(result["failed_store_count"], 2)
+        self.assertIn("表头不匹配", result["stores"][0]["message"])
+        self.assertFalse(sheet.writes)
+        self.assertFalse(runtime.events)
+
+    def test_metric_labels_below_a_ratio_row_are_accepted(self):
+        # 回归：钉钉表改版后第 2 行是「当日占比」辅助数值，指标行下移到第 3 行。
+        # 旧实现固定读第 2 行，会把 0.29… 当成指标并误报「表头不匹配」。
+        result, sheet, _, _ = self.run_job(sheet=FakeSheet())
+        self.assertTrue(result["success"], result["stores"][0]["message"])
+        self.assertEqual(sheet.writes, [("AH3:AH3", [["0"]]), ("AI3:AI3", [["12.34"]])])
+
+    def test_sheet_without_metric_labels_fails_before_browser(self):
+        result, sheet, runtime, _ = self.run_job(sheet=FakeSheet(header_labels=("花费", "业绩")))
+        self.assertEqual(result["failed_store_count"], 1)
         self.assertIn("表头不匹配", result["stores"][0]["message"])
         self.assertFalse(sheet.writes)
         self.assertFalse(runtime.events)

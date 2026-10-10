@@ -5,7 +5,7 @@ import json
 import tempfile
 import unittest
 from contextlib import ExitStack
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -55,13 +55,14 @@ class LazadaAdsBridgeTests(unittest.TestCase):
         ):
             self.assertNotIn(secret, serialized)
 
-    def test_info_defaults_to_current_sheet_and_today_without_credentials(self) -> None:
+    def test_info_defaults_to_yesterday_sheet_and_yesterday_without_credentials(self) -> None:
         today = date.today()
+        yesterday = today - timedelta(days=1)
         with patch.object(app_bridge, "resolve_lazada_monthly_report_runtime_paths", return_value={"client_path": "fixture-client", "webdriver_path": "fixture-driver"}):
             result = self.bridge.get_lazada_ads_data_info()
         self.assertTrue(result["ok"])
-        self.assertEqual(result["default_sheet_name"], f"{today.year % 100:02d}年{today.month}月")
-        self.assertEqual(result["default_target_date"], today.isoformat())
+        self.assertEqual(result["default_sheet_name"], f"{yesterday.year % 100:02d}年{yesterday.month}月")
+        self.assertEqual(result["default_target_date"], yesterday.isoformat())
         self.assertEqual(result["operator_names"], ["操作人甲"])
         self.assertEqual(result["workbook_id"], service.DEFAULT_WORKBOOK_ID)
         self.assertTrue(result["dingtalk_configured"])
@@ -136,12 +137,12 @@ class LazadaAdsBridgeTests(unittest.TestCase):
                 self.assertTrue(result["ok"], result)
                 call = self.bridge.tasks.start.call_args
                 self.assertEqual(call.kwargs["context"]["sheet_name"], service.default_sheet_name(today))
-                self.assertEqual(call.kwargs["context"]["target_date"], today.isoformat())
+                self.assertEqual(call.kwargs["context"]["target_date"], service.default_target_date(today))
                 with patch.object(service, "run_lazada_ads_data", return_value={}) as run:
                     call.args[1](Mock())
                 job = run.call_args.args[0]
                 self.assertEqual(job.sheet_name, service.default_sheet_name(today))
-                self.assertEqual(job.target_date, today.isoformat())
+                self.assertEqual(job.target_date, service.default_target_date(today))
         self.network.assert_not_called()
 
     def test_multiple_operators_require_explicit_selection(self) -> None:
@@ -306,10 +307,11 @@ class LazadaAdsPreferencesBridgeTests(unittest.TestCase):
         self.assertEqual(info["client_path"], "detected-ziniao.exe")
         self.assertEqual(info["workbook_id"], service.DEFAULT_WORKBOOK_ID)
 
-    def test_saved_preferences_take_precedence_while_sheet_and_date_follow_current_day(self) -> None:
+    def test_saved_preferences_take_precedence_while_sheet_and_date_follow_yesterday(self) -> None:
         self.save_initial_preferences()
         with patch.object(service, "date", wraps=date) as dates:
-            for today, sheet in ((date(2026, 10, 31), "26年10月"), (date(2026, 11, 1), "26年11月")):
+            # 月初也要落到上个月的表：11/01 的默认采集日是 10/31，Sheet 仍为 26年10月。
+            for today, sheet in ((date(2026, 10, 31), "26年10月"), (date(2026, 11, 1), "26年10月")):
                 with self.subTest(today=today):
                     dates.today.return_value = today
                     info = self.bridge.get_lazada_ads_data_info()
@@ -317,7 +319,7 @@ class LazadaAdsPreferencesBridgeTests(unittest.TestCase):
                     self.assertEqual(info["client_path"], "saved-ziniao.exe")
                     self.assertEqual(info["workbook_id"], "saved-workbook")
                     self.assertEqual(info["default_sheet_name"], sheet)
-                    self.assertEqual(info["default_target_date"], today.isoformat())
+                    self.assertEqual(info["default_target_date"], (today - timedelta(days=1)).isoformat())
 
     def test_info_distinguishes_saved_preferences_from_displayed_defaults(self) -> None:
         info = self.bridge.get_lazada_ads_data_info()

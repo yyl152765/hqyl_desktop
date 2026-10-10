@@ -112,7 +112,7 @@
     try {
       if (!await savePreferences()) { page.setRunning(false); return; }
       await HQYL.startTask(() => {
-        HQYL.appendLog(`准备采集 ${payload.target_date || "当天"} 的泰国 Lazada 广告费与业绩，指定 Sheet：${payload.sheet_name || "当前月份"}`);
+        HQYL.appendLog(`准备采集 ${payload.target_date || "昨天"} 的泰国 Lazada 广告费与业绩，指定 Sheet：${payload.sheet_name || "昨天所在月份"}`);
         HQYL.appendLog(`店铺数量：${payload.store_names.length}`);
         return HQYL.api().start_lazada_ads_data(payload);
       });
@@ -145,7 +145,7 @@
       if (result.output_dir) $("lazadaAdsOutputDir").value = result.output_dir;
       if (result.default_dingtalk_operator_name) $("lazadaAdsOperatorName").value = result.default_dingtalk_operator_name;
       renderOperators(result.operator_names || operatorNames);
-      if (showMessage) HQYL.showToast("已恢复默认配置，Sheet 和日期留空时使用当前月份和当天");
+      if (showMessage) HQYL.showToast("已恢复默认配置，Sheet 留空使用昨天所在月份，日期留空使用昨天");
     } catch (error) {
       HQYL.showToast(error.message || String(error));
     }

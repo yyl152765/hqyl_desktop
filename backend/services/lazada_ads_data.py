@@ -49,13 +49,19 @@ class LazadaAdsDataQuery:
     socket_port: int = 16851
 
 
+def default_collection_date(today: date | None = None) -> date:
+    """广告数据默认采集「昨天」：当天广告费不完整，需次日补采才准确。"""
+    return (today or date.today()) - timedelta(days=1)
+
+
 def default_sheet_name(today: date | None = None) -> str:
-    current = today or date.today()
-    return f"{current:%y}年{current.month}月"
+    """默认 Sheet 跟随默认采集日期（昨天）的月份，避免每月 1 号写到新月份的表。"""
+    target = default_collection_date(today)
+    return f"{target:%y}年{target.month}月"
 
 
 def default_target_date(today: date | None = None) -> str:
-    return (today or date.today()).isoformat()
+    return default_collection_date(today).isoformat()
 
 
 def normalize_workbook_id(value: Any) -> str:
@@ -160,29 +166,47 @@ def column_layout(target: date) -> tuple[str, str]:
     return excel_column(target.day * 3 + 10), excel_column(target.day * 3 + 11)
 
 
+# 钉钉广告表按天分列：每天 3 列（当日花费比/广告费/业绩），广告费与业绩位于
+# 3*day+10 / 3*day+11。表格改版后指标行从第 2 行下移到第 3 行（第 2 行是「当日占比」
+# 辅助数值），因此日期固定取首行，指标行在首几行内按精确文案定位，兼容新旧版式。
+HEADER_LABEL_SCAN_ROWS = 4
+ADVERTISING_LABELS = ["广告费", "业绩"]
+
+
 def _first_value(rows: Any) -> Any:
     return rows[0][0] if rows and rows[0] else None
 
 
+def _parse_header_date(raw: Any) -> date:
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    if re.fullmatch(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}", str(raw or "")):
+        parts = re.split(r"[-/.]", str(raw))
+        return date(*(int(part) for part in parts))
+    return date(1899, 12, 30) + timedelta(days=int(float(raw)))
+
+
 def verify_sheet_layout(sheet: Any, target: date) -> None:
+    """校验目标列的日期表头与「广告费/业绩」指标表头，避免写入错列。"""
     advertising, performance = column_layout(target)
-    headers = sheet.read(f"{advertising}1:{performance}2")
-    raw = _first_value(headers)
+    headers = sheet.read(f"{advertising}1:{performance}{HEADER_LABEL_SCAN_ROWS}")
     try:
-        if isinstance(raw, datetime):
-            actual = raw.date()
-        elif isinstance(raw, date):
-            actual = raw
-        elif re.fullmatch(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}", str(raw or "")):
-            parts = re.split(r"[-/.]", str(raw))
-            actual = date(*(int(part) for part in parts))
-        else:
-            actual = date(1899, 12, 30) + timedelta(days=int(float(raw)))
+        actual = _parse_header_date(_first_value(headers))
     except (TypeError, ValueError, OverflowError) as exc:
         raise WorkflowError("指定 Sheet 的日期表头无法识别，已停止写入") from exc
-    labels = [str(value).strip() for value in headers[1][:2]] if len(headers) > 1 else []
-    if actual != target or labels != ["广告费", "业绩"]:
-        raise WorkflowError(f"指定 Sheet 表头不匹配：目标日期 {target}，实际 {actual}，指标 {labels}")
+    labels = None
+    observed: list[str] = []
+    for row in list(headers)[1:]:
+        texts = [str(value).strip() for value in list(row or [])[:2]]
+        if texts == ADVERTISING_LABELS:
+            labels = texts
+            break
+        observed.append("|".join(texts))
+    if actual != target or labels is None:
+        detail = labels if labels is not None else observed
+        raise WorkflowError(f"指定 Sheet 表头不匹配：目标日期 {target}，实际 {actual}，指标 {detail}")
 
 
 class DingTalkAdsSheet:
@@ -207,31 +231,44 @@ class DingTalkAdsSheet:
 
     def _refresh_token(self) -> None:
         import httpx
+
+        from backend.core.dingtalk_workbook import call_with_retry
+
         if self.access_token and time.time() < self.expires_at - 60:
             return
-        response = httpx.get(
-            "https://oapi.dingtalk.com/gettoken",
-            params={"appkey": self.query.dingtalk_app_key, "appsecret": self.query.dingtalk_app_secret},
-            timeout=20,
-        )
-        if response.status_code != 200:
-            raise WorkflowError(f"获取钉钉应用令牌失败（HTTP {response.status_code}）")
-        data = response.json()
-        if data.get("errcode") != 0 or not data.get("access_token"):
-            raise WorkflowError("获取钉钉应用令牌失败，请检查设置中的应用凭证")
+
+        def fetch_token() -> dict[str, Any]:
+            response = httpx.get(
+                "https://oapi.dingtalk.com/gettoken",
+                params={"appkey": self.query.dingtalk_app_key, "appsecret": self.query.dingtalk_app_secret},
+                timeout=20,
+            )
+            if response.status_code != 200:
+                raise WorkflowError(f"获取钉钉应用令牌失败（HTTP {response.status_code}）")
+            data = response.json()
+            if data.get("errcode") != 0 or not data.get("access_token"):
+                raise WorkflowError("获取钉钉应用令牌失败，请检查设置中的应用凭证")
+            return data
+
+        data = call_with_retry(fetch_token, description="获取钉钉应用令牌")
         self.access_token = str(data["access_token"])
         self.expires_at = time.time() + int(data.get("expires_in") or 7200)
-        response = httpx.post(
-            "https://oapi.dingtalk.com/topapi/v2/user/get",
-            params={"access_token": self.access_token},
-            json={"userid": self.query.dingtalk_user_id, "language": "zh_CN"}, timeout=20,
-        )
-        if response.status_code != 200:
-            raise WorkflowError(f"读取钉钉操作人失败（HTTP {response.status_code}）")
-        data = response.json()
-        self.operator_id = str((data.get("result") or {}).get("unionid") or "")
-        if data.get("errcode") != 0 or not self.operator_id:
-            raise WorkflowError("无法获取钉钉操作人 unionId，请检查设置中的操作人")
+
+        def fetch_operator() -> str:
+            response = httpx.post(
+                "https://oapi.dingtalk.com/topapi/v2/user/get",
+                params={"access_token": self.access_token},
+                json={"userid": self.query.dingtalk_user_id, "language": "zh_CN"}, timeout=20,
+            )
+            if response.status_code != 200:
+                raise WorkflowError(f"读取钉钉操作人失败（HTTP {response.status_code}）")
+            payload = response.json()
+            operator_id = str((payload.get("result") or {}).get("unionid") or "")
+            if payload.get("errcode") != 0 or not operator_id:
+                raise WorkflowError("无法获取钉钉操作人 unionId，请检查设置中的操作人")
+            return operator_id
+
+        self.operator_id = call_with_retry(fetch_operator, description="读取钉钉操作人")
 
     def read(self, cell_range: str) -> list[list[Any]]:
         from backend.core.dingtalk_workbook import read_sheet_range
@@ -242,14 +279,11 @@ class DingTalkAdsSheet:
         )
 
     def update(self, cell_range: str, values: list[list[str]]) -> None:
-        from backend.core.dingtalk_workbook import _get_sdk_client, _runtime_options
-        from alibabacloud_dingtalk.doc_1_0 import models
+        from backend.core.dingtalk_workbook import update_sheet_range
         self._refresh_token()
-        client = _get_sdk_client(self.query.dingtalk_app_key, self.query.dingtalk_app_secret)
-        client.update_range_with_options(
-            self.query.workbook_id, self.sheet_id, cell_range,
-            models.UpdateRangeRequest(operator_id=self.operator_id, values=values, number_format="General"),
-            models.UpdateRangeHeaders(x_acs_dingtalk_access_token=self.access_token), _runtime_options(),
+        update_sheet_range(
+            self.access_token, self.operator_id, self.query.workbook_id, self.sheet_id, cell_range, values,
+            app_key=self.query.dingtalk_app_key, app_secret=self.query.dingtalk_app_secret,
         )
 
 
@@ -334,6 +368,9 @@ def run_lazada_ads_data(
 
     handler = ProgressHandler()
     logger.addHandler(handler)
+    from backend.core.dingtalk_workbook import set_retry_observer
+
+    set_retry_observer(lambda message: logger.warning("%s", message))
     results: list[dict[str, Any]] = []
     runtime = None
     matched_count = 0
@@ -439,6 +476,9 @@ def run_lazada_ads_data(
             elif not by_name[requested]["message"]:
                 by_name[requested].update(status="failed", message=message)
     finally:
+        from backend.core.dingtalk_workbook import set_retry_observer
+
+        set_retry_observer(None)
         if runtime is not None:
             try:
                 runtime.shutdown()
