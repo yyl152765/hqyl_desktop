@@ -18,6 +18,11 @@ from implement.shopee import vn_shopee_ads_recharge as vn_site
 
 class VerifiedCollectionTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, {
+            key: value for key, value in os.environ.items() if not key.startswith("HQYL_")
+        }, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.dtd = Mock()
@@ -62,9 +67,11 @@ class VerifiedCollectionTests(unittest.TestCase):
                 collection.prepare_verified_ads_budget(**self.options)
         self.assertEqual(sync.call_args.kwargs["expense_snapshot"], {})
         self.assertIsNone(sync.call_args.kwargs["balance"])
+        self.assertEqual(sync.call_args.kwargs["collection_failure"], "ExpenseCollectionFailed")
         self.balance_reader.assert_not_called()
         text = next(Path(self.temp.name).rglob("*.json")).read_text(encoding="utf-8")
         self.assertNotIn("private browser details", text)
+        self.assertEqual(json.loads(text)["collection_error_type"], "RuntimeError")
 
     def test_changed_balance_is_rejected_and_never_forwarded_as_valid(self):
         self.balance_reader.return_value = (SimpleNamespace(text="₫790.329"), Decimal(790328), None)
@@ -72,6 +79,22 @@ class VerifiedCollectionTests(unittest.TestCase):
             with self.assertRaises(collection.AdsDataValidationError):
                 collection.prepare_verified_ads_budget(**self.options)
         self.assertEqual(sync.call_args.kwargs["expense_snapshot"], {})
+        self.assertEqual(sync.call_args.kwargs["collection_failure"], "BalanceChanged")
+
+    def test_unreadable_wallet_has_its_own_failure_reason(self):
+        with patch.object(collection, "sync_verified_ads_budget", return_value={"ready": False}) as sync:
+            collection.mark_ads_pending_review(
+                store_name=self.options["store_name"], site_code="vn", dtd=self.dtd,
+                doc_config=self.config, output_directory=self.temp.name,
+            )
+        self.assertEqual(sync.call_args.kwargs["collection_failure"], "WalletUnavailable")
+
+    def test_balance_read_failure_is_distinct_from_expense_failure(self):
+        self.balance_reader.return_value = (None, None, "private browser details")
+        with patch.object(collection, "sync_verified_ads_budget", return_value={"ready": False}) as sync:
+            with self.assertRaises(collection.AdsDataValidationError):
+                collection.prepare_verified_ads_budget(**self.options)
+        self.assertEqual(sync.call_args.kwargs["collection_failure"], "BalanceUnavailable")
 
     def test_hqyl_output_cannot_be_redirected_to_local_default(self):
         managed = Path(self.temp.name) / "managed"
@@ -96,6 +119,7 @@ class VerifiedCollectionTests(unittest.TestCase):
             with self.assertRaises(collection.AdsDataValidationError):
                 collection.prepare_verified_ads_budget(**self.options)
         self.assertEqual(sync.call_args_list[-1].kwargs["expense_snapshot"], {})
+        self.assertEqual(sync.call_args_list[-1].kwargs["collection_failure"], "EvidenceUnavailable")
 
 
 class SiteIntegrationTests(unittest.TestCase):

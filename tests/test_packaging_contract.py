@@ -156,6 +156,30 @@ class PackagingContractTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "locations changed"):
             staging.sanitize_source("util/dingtalk_doc_api.py", b'APP_KEY = "fixture"\n')
 
+    def test_guard_release_staging_preserves_only_reviewed_builtin_credential(self):
+        from scripts.stage_superbrowser_source import sanitize_source, AUTHORIZED_EMBEDDED_CREDENTIALS
+        source = b'import os\nBUILTIN_DB_PASSWORD = "fixture-builtin"\nGUARD_DB_CONFIG = {"host": "runtime-host", "password": os.environ.get("HQYL_GUARD_DB_PASSWORD") or BUILTIN_DB_PASSWORD}\n'
+        staged, keys = sanitize_source("main/shopee/ads_recharge_guard.py", source)
+        self.assertEqual(staged, source)
+        self.assertEqual(keys, [])
+        self.assertEqual(AUTHORIZED_EMBEDDED_CREDENTIALS, {"main/shopee/ads_recharge_guard.py": ["BUILTIN_DB_PASSWORD"]})
+        for source in (b'GUARD_DB_CONFIG = {"password": "unexpected"}\n', b'BUILTIN_DB_PASSWORD = ""\n', b'BUILTIN_DB_PASSWORD = "fixture"\nGUARD_DB_CONFIG = {"password": "unexpected"}\n'):
+            with self.assertRaisesRegex(RuntimeError, "locations changed"):
+                sanitize_source("main/shopee/ads_recharge_guard.py", source)
+
+    def test_shared_database_staging_preserves_desktop_provider_and_removes_default(self):
+        from scripts.stage_superbrowser_source import sanitize_source
+        source = b'import psycopg2\nfrom util import database_credentials\ndef get_pg_connection():\n    return psycopg2.connect(password=database_credentials.resolve_password("fixture-old-password"))\n'
+        sanitized, keys = sanitize_source("util/db_helper.py", source)
+        self.assertNotIn(b"fixture-old-password", sanitized)
+        provider = SimpleNamespace(resolve_password=lambda fallback: "fixture-desktop-password")
+        captured = []
+        with patch.dict(sys.modules, {"psycopg2": SimpleNamespace(connect=lambda **kw: captured.append(kw)), "util": SimpleNamespace(database_credentials=provider)}):
+            namespace = {}
+            exec(compile(sanitized, "staged-db-provider", "exec"), namespace)
+            namespace["get_pg_connection"]()
+        self.assertEqual(captured[0]["password"], "fixture-desktop-password")
+
 
 
 if __name__ == "__main__":

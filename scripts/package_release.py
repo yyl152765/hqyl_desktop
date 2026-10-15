@@ -16,7 +16,7 @@ def _release_output_path(release_dir: Path, name: str) -> Path:
     return output_path
 
 
-def package_release(version: str = "0.2.66"):
+def package_release(version: str = "0.2.72"):
     if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("Release version must use the numeric major.minor.patch format")
 
@@ -50,7 +50,7 @@ def package_release(version: str = "0.2.66"):
     latest_json_data = {
         "version": version,
         "mandatory": False,
-        "notes": "Lazada 采集前通过页面语言菜单统一为简体中文并验证生效，保留英文兼容；修复跨境中文登录页及广告余额被多层推广、礼包和余额不足弹窗遮挡的问题，保留截图、站点和币种校验。增强紫鸟店铺打开与关闭同时失败时的阶段提示。保留 TEMU 余额统计、新品认领时间查询及 0.2.65 的已有功能。新品认领范围仍为当前账号可见的 Shopee 在售商品；广告数据库同步仍需 PGPASSWORD 环境变量，不影响 Excel 导出。Lazada 新加坡站仍未实店验证。",
+        "notes": "修复 BigSeller 批量 SKU 查询触发频率限制后连续失败的问题：识别 HTTP 200 下的 -1 频繁请求提示，商品 ID 查询增加请求间隔，限流时等待并重试当前 SKU，重试耗尽停止后续请求并标记结果不完整。滞销 SKU 爆款对标同步改进限流识别和冷却等待，保留已有 Lazada 等功能。",
         "frontend_url": "",
         "package_url": f"http://rpa.whhqyl.com.cn/hqyl/{installer_name}",
         "sha256": sha256_hash,
@@ -165,5 +165,5 @@ pause
     print(f"Release packaging complete for version {version}.")
 
 if __name__ == "__main__":
-    ver = sys.argv[1] if len(sys.argv) > 1 else "0.2.66"
+    ver = sys.argv[1] if len(sys.argv) > 1 else "0.2.72"
     package_release(ver)

@@ -9,9 +9,9 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 try:
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import Error, sync_playwright
 except ImportError:  # pragma: no cover - 环境未安装时跳过
-    sync_playwright = None
+    Error = sync_playwright = None
 
 from backend.services import lazada_bill_page as page_module
 from backend.services.lazada_ads_page import LoginRequiredError, WorkflowError
@@ -385,14 +385,23 @@ class EntryFlowTests(unittest.TestCase):
 class LoginCardTests(unittest.TestCase):
     """用合成页面验证「唯一凭据容器 + 唯一登录控件」的判定，不联网。"""
 
-    def setUp(self) -> None:
+    @classmethod
+    def setUpClass(cls) -> None:
         if sync_playwright is None:
-            self.skipTest("Playwright is not installed")
-        self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch()
+            raise unittest.SkipTest("Playwright is not installed")
+        cls.runtime = sync_playwright().start()
+        cls.addClassCleanup(cls.runtime.stop)
+        try:
+            # 与 test_lazada_balance_login 保持一致：优先用系统 Edge，
+            # 本机没有安装 Playwright 自带浏览器时也能跑真实 DOM 断言。
+            cls.browser = cls.runtime.chromium.launch(headless=True, channel="msedge")
+        except Error:
+            cls.browser = cls.runtime.chromium.launch(headless=True)
+        cls.addClassCleanup(cls.browser.close)
+
+    def setUp(self) -> None:
         self.page = self.browser.new_page()
-        self.addCleanup(self.playwright.stop)
-        self.addCleanup(self.browser.close)
+        self.addCleanup(self.page.close)
 
     def test_prefilled_card_without_form_is_recognised(self) -> None:
         self.page.set_content(PREFILLED_LOGIN_CARD)

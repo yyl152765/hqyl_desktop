@@ -11,6 +11,7 @@ from types import ModuleType
 from typing import Any, Callable
 
 from backend.config_store import ConfigStore
+from backend.ads_database import prepare_runtime_database
 
 ProgressCallback = Callable[[str], None]
 
@@ -317,6 +318,8 @@ def run_shopee_ads_recharge(
     progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """执行 Shopee 广告充值任务。返回结果 dict。"""
+    _emit(progress, "正在验证广告充值数据库配置...")
+    prepare_runtime_database()
     _emit(progress, f"正在加载 {SITE_BY_CODE[job.site_code].name} 站点模块...")
 
     try:

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import math
 import re
+import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -25,6 +28,12 @@ ProgressCallback = Callable[[str], None]
 MAX_SKU_COUNT = 5000
 PREVIEW_ROW_LIMIT = 500
 REQUEST_ATTEMPTS = 3
+REQUEST_INTERVAL = 0.75
+RATE_LIMIT_DELAYS = (10.0, 20.0)
+MAX_RATE_LIMIT_WAIT = 30.0
+_REQUEST_LOCK = threading.Lock()
+_LAST_REQUEST: float | None = None
+_COOLDOWN_UNTIL = 0.0
 LISTING_PATH = "/v1/product/listing/shopee/pageList.json"
 OUTPUT_COLUMNS = ("SKU", "Item ID")
 
@@ -56,7 +65,9 @@ class BigSellerTransientError(BigSellerQueryError):
 
 
 class BigSellerRateLimitError(BigSellerQueryError):
-    pass
+    def __init__(self, message: str, retry_after: float = 0.0) -> None:
+        super().__init__(message)
+        self.retry_after = max(0.0, retry_after)
 
 
 def parse_skus(value: object) -> tuple[str, ...]:
@@ -117,22 +128,38 @@ def build_listing_query(sku: str) -> dict[str, Any]:
     }
 
 
+def _safe_numeric_error_code(value: object) -> str:
+    # Keep only bounded ASCII numeric codes; unexpected values may contain
+    # credentials or request data and must never reach task logs.
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return "未知"
+    if isinstance(value, int) and not -9999999999 <= value <= 9999999999:
+        return "未知"
+    text = str(value)
+    return text if re.fullmatch(r"-?[0-9]{1,10}", text) else "未知"
+
+
 def extract_listing_rows(payload: object) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         raise BigSellerQueryError("BigSeller 商品列表响应格式异常")
     code = str(payload.get("code"))
     message = str(payload.get("msg") or payload.get("message") or "").lower()
-    if code in {"2001", "401", "401006"} or (
-        code != "0" and any(word in message for word in ("重新登录", "请登录", "未登录", "login", "session expired"))
-    ):
+    if code in {"2001", "401", "401006"}:
         raise BigSellerAuthenticationError("BigSeller 登录已失效")
     if code == "403":
         raise BigSellerPermissionError("BigSeller 账号无权读取商品列表，请检查账号权限")
-    if code == "429":
+    if code != "0" and any(word in message for word in ("重新登录", "请登录", "未登录", "login", "session expired")):
+        raise BigSellerAuthenticationError("BigSeller 登录已失效")
+    if code == "429" or (
+        code != "0" and any(word in message for word in ("频繁", "限流", "too frequent", "too many", "rate limit"))
+    ):
         raise BigSellerRateLimitError("BigSeller 限制访问频率，请稍后重新查询未完成的 SKU")
     if code != "0":
         # Do not echo server messages: they can contain credentials or request data.
-        raise BigSellerQueryError("BigSeller 商品查询接口返回失败，请检查账号权限或稍后重试")
+        raise BigSellerQueryError(
+            "BigSeller 商品查询接口返回失败，请检查账号权限或稍后重试"
+            f"（错误码：{_safe_numeric_error_code(payload.get('code'))}）"
+        )
     data = payload.get("data")
     page = data.get("page") if isinstance(data, dict) else None
     rows = page.get("rows") if isinstance(page, dict) else None
@@ -155,16 +182,58 @@ def first_item_id(rows: list[dict[str, Any]]) -> str:
     return item_id
 
 
-def request_first_item_id(session: Any, util: Any, config: dict[str, Any], sku: str) -> str:
-    for attempt in range(REQUEST_ATTEMPTS):
+def _retry_after(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return 0.0
+    if isinstance(value, (int, float)) and (not 0 <= value <= 999999999999 or not math.isfinite(value)):
+        return 0.0
+    text = str(value).strip()
+    if not text or len(text) > 128:
+        return 0.0
+    if re.fullmatch(r"[0-9]{1,12}(?:\.[0-9]{1,6})?", text):
+        return float(text)
+    try:
+        date = parsedate_to_datetime(text)
+        if date.tzinfo is None:
+            date = date.replace(tzinfo=timezone.utc)
+        return max(0.0, (date - datetime.now(timezone.utc)).total_seconds())
+    except (ValueError, TypeError, OverflowError):
+        return 0.0
+
+
+def _request_first_item_id_once(
+    session: Any, util: Any, config: dict[str, Any], sku: str,
+    attempt: int, progress: ProgressCallback | None,
+) -> str:
+    global _LAST_REQUEST, _COOLDOWN_UNTIL
+    # Keep response classification inside the gate so another ID-query task
+    # cannot send its next request before a newly observed cooldown is saved.
+    with _REQUEST_LOCK:
+        url = util.build_api_url(LISTING_PATH)
+        query = build_listing_query(sku)
+        headers = api_headers(util, config, "shopee", content_type="application/json")
+        now = time.monotonic()
+        cooldown = max(0.0, _COOLDOWN_UNTIL - now)
+        if cooldown > MAX_RATE_LIMIT_WAIT:
+            raise BigSellerRateLimitError("BigSeller 尚在冷却，请稍后重新查询未完成的 SKU", cooldown)
+        interval = 0.0 if _LAST_REQUEST is None else REQUEST_INTERVAL - (now - _LAST_REQUEST)
+        wait = max(0.0, interval, cooldown)
+        if cooldown > 0:
+            remaining = wait
+            while remaining > 0:
+                if progress is not None:
+                    progress(f"BigSeller 限流冷却，等待 {math.ceil(remaining)} 秒后重试当前 SKU")
+                step = min(10.0, remaining)
+                time.sleep(step)
+                remaining -= step
+        elif wait > 0:
+            time.sleep(wait)
+        _LAST_REQUEST = time.monotonic()
+        response = session.post(
+            url, json=query, headers=headers,
+            timeout=(10, 45), allow_redirects=False,
+        )
         try:
-            response = session.post(
-                util.build_api_url(LISTING_PATH),
-                json=build_listing_query(sku),
-                headers=api_headers(util, config, "shopee", content_type="application/json"),
-                timeout=(10, 45),
-                allow_redirects=False,
-            )
             try:
                 if response.status_code == 401 or 300 <= response.status_code < 400:
                     raise BigSellerAuthenticationError("BigSeller 登录已失效")
@@ -175,14 +244,44 @@ def request_first_item_id(session: Any, util: Any, config: dict[str, Any], sku: 
                 if response.status_code >= 500:
                     raise BigSellerTransientError("BigSeller 暂时繁忙或限制访问，请稍后重试")
                 if not 200 <= response.status_code < 300:
-                    raise BigSellerQueryError("BigSeller 商品查询请求失败，请检查账号权限或稍后重试")
+                    raise BigSellerQueryError(
+                        "BigSeller 商品查询请求失败，请检查账号权限或稍后重试"
+                        f"（HTTP 状态码：{_safe_numeric_error_code(response.status_code)}）"
+                    )
                 try:
                     payload = response.json()
                 except ValueError:
                     raise BigSellerQueryError("BigSeller 返回了非 JSON 内容，请检查登录状态或稍后重试") from None
                 return first_item_id(extract_listing_rows(payload))
-            finally:
-                response.close()
+            except BigSellerRateLimitError:
+                delay = _retry_after(response.headers.get("Retry-After"))
+                if delay <= 0:
+                    delay = RATE_LIMIT_DELAYS[min(attempt, len(RATE_LIMIT_DELAYS) - 1)]
+                _COOLDOWN_UNTIL = max(_COOLDOWN_UNTIL, time.monotonic() + delay)
+                raise BigSellerRateLimitError("BigSeller 限制访问频率，请稍后重新查询未完成的 SKU", delay) from None
+        finally:
+            response.close()
+
+
+def request_first_item_id(
+    session: Any, util: Any, config: dict[str, Any], sku: str,
+    progress: ProgressCallback | None = None,
+) -> str:
+    for attempt in range(REQUEST_ATTEMPTS):
+        try:
+            return _request_first_item_id_once(session, util, config, sku, attempt, progress)
+        except BigSellerRateLimitError as exc:
+            if exc.retry_after > MAX_RATE_LIMIT_WAIT:
+                raise BigSellerRateLimitError(
+                    "BigSeller 要求较长冷却时间，已停止本批查询，请稍后重新查询未完成的 SKU", exc.retry_after,
+                ) from None
+            if attempt == REQUEST_ATTEMPTS - 1:
+                raise BigSellerRateLimitError(
+                    "BigSeller 限制访问频率，已重试 3 次，请稍后重新查询未完成的 SKU", exc.retry_after,
+                ) from None
+            if progress is not None:
+                progress(f"BigSeller 限制访问频率，将重试当前 SKU（{attempt + 1}/{REQUEST_ATTEMPTS - 1}）")
+            continue
         except (requests.Timeout, requests.ConnectionError):
             if attempt == REQUEST_ATTEMPTS - 1:
                 raise BigSellerQueryError("BigSeller 商品查询网络超时或连接失败，已重试 3 次") from None
@@ -282,7 +381,7 @@ def run_bigseller_item_id_query(job: BigSellerItemIdQueryJob, progress: Progress
             else:
                 try:
                     try:
-                        item_id = request_first_item_id(session, util, config, sku)
+                        item_id = request_first_item_id(session, util, config, sku, progress)
                     except BigSellerAuthenticationError:
                         if refreshed:
                             raise
@@ -291,7 +390,7 @@ def run_bigseller_item_id_query(job: BigSellerItemIdQueryJob, progress: Progress
                         session.close()
                         session = None
                         session = login_for_query(util, config, progress)
-                        item_id = request_first_item_id(session, util, config, sku)
+                        item_id = request_first_item_id(session, util, config, sku, progress)
                     row.update(
                         item_id=item_id,
                         status="matched" if item_id else "not_found",
@@ -320,6 +419,8 @@ def run_bigseller_item_id_query(job: BigSellerItemIdQueryJob, progress: Progress
     output_file = export_item_ids(job.output_dir, rows)
     progress(f"查询结束：命中 {matched}，未命中 {not_found}，失败 {failed}；Excel 已保存：{output_file}")
     return {
+        "is_complete": failed == 0,
+        "completion_message": "查询完成" if failed == 0 else "查询结果不完整，部分 SKU 查询失败，请稍后重试失败或未执行的 SKU",
         "sku_count": len(rows),
         "matched_count": matched,
         "not_found_count": not_found,

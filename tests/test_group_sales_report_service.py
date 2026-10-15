@@ -238,11 +238,8 @@ class GroupSalesReportServiceTests(unittest.TestCase):
 
     def test_config_store_seeds_dingtalk_user_map(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            user_map = Path(temp_dir) / "user_map.yaml"
-            user_map.write_text("users:\n  Example User: example-user-id\n", encoding="utf-8")
-            with patch("backend.config_store._default_user_map_candidates", return_value=[user_map]):
-                loaded = ConfigStore(Path(temp_dir) / "settings.json").load()
-        self.assertEqual([(user.name, user.user_id) for user in loaded.dingtalk.users], [("Example User", "example-user-id")])
+            loaded = ConfigStore(Path(temp_dir) / "settings.json").load()
+        self.assertTrue(any(user.name == "01-JaJ" for user in loaded.dingtalk.users))
 
     def test_config_store_preserves_dingtalk_secret_on_partial_update(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

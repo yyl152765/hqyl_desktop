@@ -206,8 +206,21 @@ def _post_listing(
             headers=api_headers(util, config, "shopee", content_type="application/json"),
             timeout=(10, 45), allow_redirects=False,
         )
-        if response.status_code in (429, 503):
+        limited = response.status_code == 429
+        if 200 <= response.status_code < 300:
+            # Classify business throttling before releasing the gate. A second
+            # benchmark task must observe the cooldown before it can send.
+            try:
+                extract_listing_rows(response.json())
+            except BigSellerRateLimitError:
+                limited = True
+            except (BigSellerQueryError, ValueError):
+                # The page reader owns errors and closes the response.
+                pass
+        if limited or response.status_code == 503:
             delay = _retry_after(response.headers.get("Retry-After"))
+            if limited:
+                delay = max(delay, 10.0)
             _COOLDOWN_UNTIL = max(_COOLDOWN_UNTIL, time.monotonic() + delay)
         return response
 
@@ -242,16 +255,14 @@ def request_benchmark_page(
                     payload = response.json()
                 except ValueError:
                     raise BigSellerQueryError("BigSeller 返回非 JSON 内容，无法确认匹配结果") from None
-                if isinstance(payload, dict) and str(payload.get("code")) != "0":
-                    message = str(payload.get("msg") or payload.get("message") or "").lower()
-                    if any(word in message for word in ("频繁", "限流", "too many", "rate limit")):
-                        raise BigSellerRateLimitError("BigSeller 限制访问频率，请稍后重试失败的 SKU")
                 rows = extract_listing_rows(payload)
                 return rows, _total_rows(payload["data"]["page"])
             finally:
                 response.close()
         except BigSellerRateLimitError as exc:
-            delay = max(delay, getattr(exc, "retry_after", 0.0), 2.0 * (2 ** attempt))
+            # BigSeller can return HTTP 200/code -1 with an English "too
+            # frequent" message. Give its request window time to recover.
+            delay = max(delay, getattr(exc, "retry_after", 0.0), 10.0 * (2 ** attempt))
             _register_cooldown(delay)
             if on_cooldown is not None:
                 on_cooldown(time.time() + delay)

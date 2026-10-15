@@ -803,4 +803,3 @@ def _split_tracking_numbers(tracking_numbers: list[str], worker_count: int) -> l
     for index, tracking_number in enumerate(tracking_numbers):
         chunks[index % worker_count].append(tracking_number)
     return [chunk for chunk in chunks if chunk]
-

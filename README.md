@@ -12,7 +12,7 @@
 - 紫鸟：TEMU 在售商品导出（试运行；选店、原文件归档、汇总及失败重试已实现，旧 CLI 通道两店验证通过，新账号通道待实测）
 - 紫鸟：TEMU 余额统计（试运行；选择订单创建月份，读取当前账户总金额，导出金额和原始截图）
 - 紫鸟：Lazada 余额统计（试运行；多站点收入、余额、广告余额及最新提现状态，支持失败重试）
-- 紫鸟：泰国 Lazada 广告数据（指定店铺、Sheet 和日期，采集广告费及业绩并回填钉钉表格）
+- 紫鸟：泰国 Lazada 广告数据（指定店铺、Sheet 和日期，采集广告费及业绩并回填钉钉表格；默认采集昨天）
 - 紫鸟：Lazada 后台收支数据（泰国、菲律宾、马来、印尼、越南；五国共用一本钉钉文档，「指定 Sheet」按国家读取并优先选中同名 Sheet，按账单区间采集总金额/收入/扣减项写入 B:D，截图按国家与区间落盘，钉钉截图只写同一文档的 F 列）
 - BigSeller：BS 商品ID查询（批量 Parent SKU 模糊搜索、Views 降序首条、两列 Excel 导出）
 - BigSeller：滞销SKU爆款对标（读取 Excel，选择浏览量或销量，逐行记录第一店铺和失败原因）
@@ -23,6 +23,10 @@
 - 页面切换后按模块恢复最近任务及日志
 - 更新中心：支持远程发布清单检查
 - PyInstaller / Inno Setup 打包脚本
+
+## 当前版本
+
+当前源码版本为 **0.2.72**，包含 BigSeller 批量查询限流识别、请求节流和等待重试修复。详见 [0.2.72 发布说明](docs/发布说明_0.2.72.md)。
 
 ## 目录结构
 
@@ -106,7 +110,7 @@ D:\hqyl_project\hqyl_desktop\dist\HQYLAutomation
 如果本机安装了 Inno Setup，脚本会继续生成安装包：
 
 ```text
-D:\hqyl_project\hqyl_desktop\release\HQYLAutomationSetup_0.2.66.exe
+D:\hqyl_project\hqyl_desktop\release\HQYLAutomationSetup_0.2.72.exe
 ```
 
 ## 配置

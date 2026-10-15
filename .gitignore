@@ -39,3 +39,6 @@ settings.json
 *cookie*.json
 *.pem
 *.key
+!frontend/assets/logo.png
+docs/requirements/**/*.xlsx
+docs/requirements/**/*.xls

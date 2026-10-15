@@ -131,22 +131,86 @@ class BenchmarkTests(unittest.TestCase):
             rows, total = service.request_benchmark_page(Mock(), Mock(), {}, "a", "sales", 1, Mock())
         self.assertEqual((len(rows), total), (1, 1))
         self.assertEqual(post.call_count, 2)
-        sleep.assert_called_once_with(7)
+        sleep.assert_called_once_with(10.0)
         limited.close.assert_called_once()
         success.close.assert_called_once()
 
     def test_business_rate_limit_retries_and_persistent_limit_stops(self):
         response = self.response(payload={"code": 9, "msg": "请求过于频繁"})
         with patch.object(service, "_post_listing", return_value=response) as post, \
-             patch.object(service.time, "sleep"), self.assertRaises(service.BigSellerRateLimitError):
+             patch.object(service, "wait_before_retry") as wait, \
+             self.assertRaises(service.BenchmarkCooldownError) as caught:
             service.request_benchmark_page(Mock(), Mock(), {}, "a", "views", 1, Mock())
-        self.assertEqual(post.call_count, service.REQUEST_ATTEMPTS)
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual([call.args[0] for call in wait.call_args_list], [10.0, 20.0])
+        self.assertEqual(caught.exception.retry_after, 40.0)
+        self.assertEqual(response.close.call_count, 3)
         response = self.response(status=429, headers={"Retry-After": "120"})
         with patch.object(service, "_post_listing", return_value=response) as post, \
              patch.object(service.time, "sleep") as sleep, self.assertRaises(service.BigSellerRateLimitError):
             service.request_benchmark_page(Mock(), Mock(), {}, "a", "views", 1, Mock())
         post.assert_called_once()
         sleep.assert_not_called()
+
+    def test_http_200_english_too_frequent_retries_to_success_without_echoing_message(self):
+        message = "The request is too frequent. Please try again later. password=fixture-private"
+        limited = self.response(payload={"code": -1, "msg": message})
+        success = self.response([listing("A", views=13)], total=1)
+        logs = []
+        with patch.object(service, "_post_listing", side_effect=[limited, success]) as post, \
+             patch.object(service, "wait_before_retry") as wait:
+            rows, total = service.request_benchmark_page(Mock(), Mock(), {}, "HQsy000864B", "views", 1, logs.append)
+        self.assertEqual((rows, total), ([listing("A", views=13)], 1))
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(wait.call_args.args[0], 10.0)
+        self.assertEqual(len(logs), 1)
+        self.assertIn("访问频率受限", logs[0])
+        self.assertNotIn(message, "\n".join(logs))
+        self.assertNotIn("fixture-private", "\n".join(logs))
+        limited.close.assert_called_once()
+        success.close.assert_called_once()
+
+    def test_english_too_frequent_exhausts_into_shared_cooldown_without_message_leak(self):
+        for field in ("msg", "message"):
+            with self.subTest(field=field):
+                message = "The request is too frequent. Please try again later. cookie=fixture-cookie"
+                limited = self.response(payload={"code": -1, field: message})
+                logs, cooldowns = [], []
+                with patch.object(service, "_post_listing", return_value=limited) as post, \
+                     patch.object(service, "wait_before_retry") as wait, \
+                     patch.object(service, "_register_cooldown") as register, \
+                     patch.object(service.time, "time", return_value=1000.0), \
+                     self.assertRaises(service.BenchmarkCooldownError) as caught:
+                    service.request_benchmark_page(Mock(), Mock(), {}, "HQsy000864B", "views", 1,
+                                                   logs.append, on_cooldown=cooldowns.append)
+                self.assertEqual(post.call_count, 3)
+                self.assertEqual([call.args[0] for call in wait.call_args_list], [10.0, 20.0])
+                self.assertEqual([call.args[0] for call in register.call_args_list], [10.0, 20.0, 40.0])
+                self.assertEqual(cooldowns, [1010.0, 1020.0, 1040.0])
+                self.assertEqual(caught.exception.retry_after, 40.0)
+                self.assertIn("等待冷却后补查", str(caught.exception))
+                self.assertTrue(caught.exception.__suppress_context__)
+                safe_output = "\n".join(logs) + str(caught.exception)
+                self.assertNotIn(message, safe_output)
+                self.assertNotIn("fixture-cookie", safe_output)
+                self.assertEqual(limited.close.call_count, 3)
+
+    def test_half_hour_retry_after_is_preserved_for_deferred_retry(self):
+        response = self.response(status=429, headers={"Retry-After": "1800"})
+        logs, cooldowns = [], []
+        with patch.object(service, "_post_listing", return_value=response) as post, \
+             patch.object(service, "wait_before_retry") as wait, \
+             patch.object(service, "_register_cooldown") as register, \
+             patch.object(service.time, "time", return_value=1000.0), \
+             self.assertRaises(service.BenchmarkCooldownError) as caught:
+            service.request_benchmark_page(Mock(), Mock(), {}, "HQsy000864B", "views", 1,
+                                           logs.append, on_cooldown=cooldowns.append)
+        post.assert_called_once()
+        wait.assert_not_called()
+        register.assert_called_once_with(1800.0)
+        self.assertEqual(cooldowns, [2800.0])
+        self.assertEqual(caught.exception.retry_after, 1800.0)
+        response.close.assert_called_once()
 
     def test_transient_timeout_retries_without_leaking_secrets(self):
         with patch.object(service, "_post_listing", side_effect=requests.Timeout("password=private")), \
@@ -165,6 +229,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_request_gate_and_http_contract(self):
         session, util = Mock(), Mock()
+        session.post.return_value = self.response()
         util.build_api_url.side_effect = lambda path: "https://example.invalid/api" + path
         with patch.object(service, "api_headers", return_value={}), \
              patch.object(service, "_LAST_REQUEST", 10.0), \
@@ -176,6 +241,50 @@ class BenchmarkTests(unittest.TestCase):
         self.assertFalse(kwargs["allow_redirects"])
         self.assertEqual(kwargs["timeout"], (10, 45))
         self.assertEqual(kwargs["json"]["orderBy"], "sales")
+
+    def assert_gate_registers_cooldown_before_return(self, limited):
+        clock = [100.0]
+        calls = []
+        first_session, next_session, util = Mock(), Mock(), Mock()
+        success = self.response([listing("A")], total=1)
+
+        def first_post(*_args, **_kwargs):
+            calls.append(("first_post", clock[0]))
+            return limited
+
+        def next_post(*_args, **_kwargs):
+            calls.append(("next_post", clock[0]))
+            self.assertGreaterEqual(clock[0], 110.0)
+            return success
+
+        def advance(seconds):
+            calls.append(("sleep", seconds))
+            clock[0] += seconds
+
+        first_session.post.side_effect = first_post
+        next_session.post.side_effect = next_post
+        with patch.object(service, "api_headers", return_value={}), \
+             patch.object(service.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(service.time, "time", side_effect=lambda: 1000.0 + clock[0]), \
+             patch.object(service.time, "sleep", side_effect=advance) as sleep:
+            first = service._post_listing(first_session, util, {}, service.build_benchmark_query("a", "views"))
+            self.assertIs(first, limited)
+            self.assertGreaterEqual(service._COOLDOWN_UNTIL, clock[0] + 10.0)
+            next_session.post.assert_not_called()
+            sleep.assert_not_called()
+            second = service._post_listing(next_session, util, {}, service.build_benchmark_query("b", "views"))
+            self.assertIs(second, success)
+            sleep.assert_called_once_with(10.0)
+        first_session.post.assert_called_once()
+        next_session.post.assert_called_once()
+        self.assertEqual(calls, [("first_post", 100.0), ("sleep", 10.0), ("next_post", 110.0)])
+
+    def test_request_gate_saves_http_200_business_rate_limit_before_returning_response(self):
+        limited = self.response(payload={"code": -1, "msg": "The request is too frequent. Please try again later."})
+        self.assert_gate_registers_cooldown_before_return(limited)
+
+    def test_request_gate_saves_headerless_http_429_cooldown_before_returning_response(self):
+        self.assert_gate_registers_cooldown_before_return(self.response(status=429))
 
     def test_validation_rejects_bad_metric_and_missing_sheet_before_login(self):
         with tempfile.TemporaryDirectory() as directory:

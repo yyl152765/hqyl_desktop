@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -419,6 +419,54 @@ def _report_record(**overrides):
 
 
 class StrictExpenseSnapshotTests(unittest.TestCase):
+    def _report_tab(self, active=False):
+        tab = Mock()
+        tab.is_displayed.return_value = True
+        tab.find_element.return_value.get_attribute.return_value = (
+            "eds-tabs__nav-tab active" if active else "eds-tabs__nav-tab"
+        )
+        return tab
+
+    def test_sticky_shop_report_is_switched_once_before_collection(self):
+        clock = _FakeClock()
+        tab = self._report_tab()
+        driver = Mock(current_url="https://seller.shopee.co.id/portal/marketing/pas/index?type=shop_homepage")
+        driver.find_elements.return_value = [tab]
+        browser = Mock(driver=driver)
+
+        def activate(_tab):
+            driver.current_url = "https://seller.shopee.co.id/portal/marketing/pas/index?type=new_cpc_homepage"
+            tab.find_element.return_value.get_attribute.return_value = "eds-tabs__nav-tab active"
+
+        browser.move_to_click.side_effect = activate
+        with patch.object(expense_range_module.time, "monotonic", clock.monotonic), patch.object(
+            expense_range_module.time, "sleep", clock.sleep
+        ):
+            expense_range_module._ensure_product_ads_report(browser, timeout=2)
+        browser.move_to_click.assert_called_once_with(tab)
+
+    def test_selected_product_report_does_not_click_again(self):
+        driver = Mock(current_url="https://seller.shopee.co.id/portal/marketing/pas/index?type=new_cpc_homepage")
+        driver.find_elements.return_value = [self._report_tab(active=True)]
+        browser = Mock(driver=driver)
+        expense_range_module._ensure_product_ads_report(browser, timeout=0)
+        browser.move_to_click.assert_not_called()
+
+    def test_missing_ambiguous_or_unconfirmed_product_tab_blocks(self):
+        for tabs in ([], [self._report_tab(), self._report_tab()], [self._report_tab()], [self._report_tab(active=True)]):
+            with self.subTest(count=len(tabs)):
+                clock = _FakeClock()
+                driver = Mock(current_url="https://seller.shopee.co.id/portal/marketing/pas/index?type=shop_homepage")
+                driver.find_elements.return_value = tabs
+                browser = Mock(driver=driver)
+                with patch.object(expense_range_module.time, "monotonic", clock.monotonic), patch.object(
+                    expense_range_module.time, "sleep", clock.sleep
+                ), self.assertRaisesRegex(RuntimeError, "商品广告报表"):
+                    expense_range_module._ensure_product_ads_report(browser, timeout=1)
+                self.assertLessEqual(browser.move_to_click.call_count, 1)
+                if len(tabs) != 1:
+                    browser.move_to_click.assert_not_called()
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is required for the isolated observer test")
     def test_observer_only_records_report_fields_and_preserves_network_calls(self):
         script = r"""
@@ -629,6 +677,8 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
         expected = {"amount": Decimal("6471781"), "text": "₫6.471.781",
                     "refresh_evidence": {"verified": True}}
         with patch.object(expense_range_module, "datetime", _FixedReportDateTime), patch.object(
+            expense_range_module, "_ensure_product_ads_report"
+        ) as ensure_report, patch.object(
             expense_range_module, "select_ads_expense_date_range"
         ) as select, patch.object(
             expense_range_module, "_wait_for_verified_expense_snapshot", return_value=expected
@@ -639,6 +689,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
         self.assertEqual(result["start_date"], "2026-09-03")
         self.assertEqual(result["end_date"], "2026-09-09")
         self.assertEqual(result["timezone"], "GMT+7")
+        ensure_report.assert_called_once()
         self.assertEqual(datetime.fromisoformat(result["collected_at"]).utcoffset(), timedelta(hours=7))
         self.assertEqual(result["currency"], "VND")
         self.assertTrue(result["ready"])
@@ -650,7 +701,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
     def test_collector_releases_observer_after_failed_verification(self):
         clock = _FakeClock()
         driver = _StrictExpenseDriver(clock, complete_at=0, render_at=0)
-        with patch.object(expense_range_module, "select_ads_expense_date_range"), patch.object(
+        with patch.object(expense_range_module, "_ensure_product_ads_report"), patch.object(expense_range_module, "select_ads_expense_date_range"), patch.object(
             expense_range_module, "_wait_for_verified_expense_snapshot", side_effect=RuntimeError("no evidence")
         ):
             with self.assertRaisesRegex(RuntimeError, "no evidence"):

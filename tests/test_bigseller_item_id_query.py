@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -13,6 +15,23 @@ from backend.services import bigseller_item_id_query as service
 
 
 class BigSellerItemIdQueryTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = 100.0
+
+        def advance(seconds):
+            self.clock += seconds
+
+        patches = (
+            patch.object(service, "_REQUEST_LOCK", threading.Lock()),
+            patch.object(service, "_LAST_REQUEST", None),
+            patch.object(service, "_COOLDOWN_UNTIL", 0.0),
+            patch.object(service.time, "monotonic", side_effect=lambda: self.clock),
+            patch.object(service.time, "sleep", side_effect=advance),
+        )
+        for mocked in patches:
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
     def make_job(self, output_dir: Path, skus: tuple[str, ...] = ("sku-a",)):
         return service.BigSellerItemIdQueryJob(
             username="private-account", password="private-password",
@@ -28,8 +47,8 @@ class BigSellerItemIdQueryTests(unittest.TestCase):
         util.build_request_headers.return_value = {"Content-Type": "application/json"}
         return util
 
-    def response(self, rows=None, *, status=200, payload=None):
-        response = Mock(status_code=status)
+    def response(self, rows=None, *, status=200, payload=None, headers=None):
+        response = Mock(status_code=status, headers=headers or {})
         response.json.return_value = payload if payload is not None else {"code": 0, "data": {"page": {"rows": rows or []}}}
         return response
 
@@ -105,6 +124,47 @@ class BigSellerItemIdQueryTests(unittest.TestCase):
         with self.assertRaises(service.BigSellerRateLimitError):
             service.extract_listing_rows({"code": 429})
 
+    def test_business_frequency_errors_are_classified_without_echoing_server_message(self):
+        messages = ("The request is too frequent. Please try again later", "TOO MANY requests",
+                    "rate limit exceeded", "请求过于频繁", "平台限流")
+        for message in messages:
+            with self.subTest(message=message), self.assertRaises(service.BigSellerRateLimitError) as caught:
+                service.extract_listing_rows({"code": -1, "msg": message + " private-password"})
+            self.assertEqual(str(caught.exception), "BigSeller 限制访问频率，请稍后重新查询未完成的 SKU")
+        for code, error in ((401, service.BigSellerAuthenticationError), (403, service.BigSellerPermissionError)):
+            with self.subTest(code=code), self.assertRaises(error):
+                service.extract_listing_rows({"code": code, "msg": "login too frequent private-password"})
+        self.assertEqual(service.extract_listing_rows({
+            "code": 0, "msg": "too frequent", "data": {"page": {"rows": []}},
+        }), [])
+
+    def test_nonzero_business_errors_preserve_safe_numeric_codes_only(self):
+        for code in (500, "500", -1, "-1", 9999999999, "-9999999999"):
+            payload = {"code": code, "msg": "private-password", "data": {"page": {"rows": []}}}
+            with self.subTest(code=code), self.assertRaises(service.BigSellerQueryError) as caught:
+                service.extract_listing_rows(payload)
+            self.assertEqual(
+                str(caught.exception),
+                f"BigSeller 商品查询接口返回失败，请检查账号权限或稍后重试（错误码：{code}）",
+            )
+            self.assertNotIn("private-password", str(caught.exception))
+
+    def test_unknown_or_malicious_business_codes_do_not_leak_response_data(self):
+        private_value = "private-password"
+        invalid_codes = (None, True, False, 500.0, "", " 500", "500\n", "+500", "５０１",
+                         "12345678901", "-12345678901", 10 ** 20, -10 ** 20,
+                         {"password": private_value}, [private_value], f"500 {private_value}")
+        for code in invalid_codes:
+            payload = {"code": code, "msg": private_value,
+                       "data": {"page": {"rows": [{"itemId": "123", "password": private_value}]}}}
+            with self.subTest(code=code), self.assertRaises(service.BigSellerQueryError) as caught:
+                service.extract_listing_rows(payload)
+            self.assertEqual(
+                str(caught.exception),
+                "BigSeller 商品查询接口返回失败，请检查账号权限或稍后重试（错误码：未知）",
+            )
+            self.assertNotIn(private_value, str(caught.exception))
+
     def test_request_uses_readonly_listing_post_not_sync_endpoint(self):
         session, util = Mock(), self.make_util()
         response = self.response([{"itemId": "123"}])
@@ -141,13 +201,216 @@ class BigSellerItemIdQueryTests(unittest.TestCase):
             session.post.return_value = self.response(status=status)
             with self.subTest(status=status), self.assertRaises(error_type):
                 service.request_first_item_id(session, self.make_util(), {}, "sku-a")
-            self.assertEqual(session.post.call_count, 1)
+            self.assertEqual(session.post.call_count, service.REQUEST_ATTEMPTS if status == 429 else 1)
         response = self.response()
         response.json.side_effect = ValueError("secret-response")
         session.post.return_value = response
         with self.assertRaises(service.BigSellerQueryError) as caught:
             service.request_first_item_id(session, self.make_util(), {}, "sku-a")
         self.assertNotIn("secret-response", str(caught.exception))
+
+    def test_generic_http_failure_keeps_status_without_reading_response_payload(self):
+        response = self.response(status=400, payload={"code": "private-password", "msg": "private-password"})
+        session = Mock()
+        session.post.return_value = response
+        with self.assertRaises(service.BigSellerQueryError) as caught:
+            service.request_first_item_id(session, self.make_util(), {}, "sku-a")
+        self.assertEqual(
+            str(caught.exception),
+            "BigSeller 商品查询请求失败，请检查账号权限或稍后重试（HTTP 状态码：400）",
+        )
+        response.json.assert_not_called()
+        response.close.assert_called_once()
+        self.assertEqual(session.post.call_count, 1)
+
+    def test_successful_requests_share_minimum_start_interval_across_sessions(self):
+        starts = []
+
+        def success(*args, **kwargs):
+            starts.append(self.clock)
+            return self.response([{"itemId": "123"}])
+
+        first, second = Mock(), Mock()
+        first.post.side_effect = success
+        second.post.side_effect = success
+        self.assertEqual(service.request_first_item_id(first, self.make_util(), {}, "a"), "123")
+        self.clock += 0.2
+        self.assertEqual(service.request_first_item_id(second, self.make_util(), {}, "b"), "123")
+        self.assertEqual(starts, [100.0, 100.75])
+        service.time.sleep.assert_called_once()
+        self.assertAlmostEqual(service.time.sleep.call_args.args[0], 0.55)
+
+    def test_concurrent_sessions_cannot_overlap_requests(self):
+        entered, release, second_started = threading.Event(), threading.Event(), threading.Event()
+        starts, results, errors = [], [], []
+        first, second = Mock(), Mock()
+
+        def first_response(*args, **kwargs):
+            starts.append(self.clock)
+            entered.set()
+            if not release.wait(2):
+                raise RuntimeError("test request was not released")
+            return self.response([{"itemId": "123"}])
+
+        def second_response(*args, **kwargs):
+            starts.append(self.clock)
+            return self.response([{"itemId": "456"}])
+
+        def query(session, sku, ready=None):
+            try:
+                if ready is not None:
+                    ready.set()
+                results.append(service.request_first_item_id(session, self.make_util(), {}, sku))
+            except Exception as exc:
+                errors.append(exc)
+
+        first.post.side_effect = first_response
+        second.post.side_effect = second_response
+        workers = [threading.Thread(target=query, args=(first, "a")),
+                   threading.Thread(target=query, args=(second, "b", second_started))]
+        workers[0].start()
+        self.assertTrue(entered.wait(1))
+        workers[1].start()
+        try:
+            self.assertTrue(second_started.wait(1))
+            second.post.assert_not_called()
+        finally:
+            release.set()
+            for worker in workers:
+                worker.join(2)
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(errors, [])
+        self.assertEqual(results, ["123", "456"])
+        self.assertEqual(starts, [100.0, 100.75])
+
+    def test_business_frequency_retries_current_sku_after_ten_then_twenty_seconds(self):
+        session, util, logs, starts = Mock(), self.make_util(), [], []
+        responses = [self.response(payload={"code": -1, "msg": "too frequent private-password"}),
+                     self.response(payload={"code": -1, "msg": "too frequent private-password"}),
+                     self.response([{"itemId": "123"}])]
+
+        def respond(*args, **kwargs):
+            starts.append(self.clock)
+            return responses[len(starts) - 1]
+
+        session.post.side_effect = respond
+        self.assertEqual(service.request_first_item_id(session, util, {}, "HQsy000864B", logs.append), "123")
+        self.assertEqual(starts, [100.0, 110.0, 130.0])
+        self.assertEqual([call.kwargs["json"]["searchContent"] for call in session.post.call_args_list],
+                         ["HQsy000864B"] * 3)
+        self.assertNotIn("private-password", str(logs))
+        self.assertNotIn("too frequent", str(logs))
+        for response in responses:
+            response.close.assert_called_once()
+
+    def test_http_frequency_retries_respect_retry_after_seconds(self):
+        session, starts = Mock(), []
+        responses = [self.response(status=429, headers={"Retry-After": "3"}),
+                     self.response([{"itemId": "123"}])]
+
+        def respond(*args, **kwargs):
+            starts.append(self.clock)
+            return responses[len(starts) - 1]
+
+        session.post.side_effect = respond
+        self.assertEqual(service.request_first_item_id(session, self.make_util(), {}, "a"), "123")
+        self.assertEqual(starts, [100.0, 103.0])
+        service.time.sleep.assert_called_once_with(3.0)
+
+    def test_retry_after_accepts_http_date_and_rejects_unsafe_values(self):
+        instant = datetime(2026, 10, 14, 6, 0, 0, tzinfo=timezone.utc)
+        with patch.object(service, "datetime") as date:
+            date.now.return_value = instant
+            self.assertEqual(service._retry_after("Wed, 14 Oct 2026 06:00:07 GMT"), 7.0)
+            self.assertEqual(service._retry_after("Wed, 14 Oct 2026 05:59:00 GMT"), 0.0)
+        for value in (None, True, False, [], {}, "private-password", "nan", "inf", "-1",
+                      float("nan"), float("inf"), 10 ** 5000, "1" * 1000):
+            with self.subTest(type=type(value).__name__):
+                self.assertEqual(service._retry_after(value), 0.0)
+
+    def test_long_cooldown_is_registered_and_prevents_another_session_request(self):
+        first, second, logs = Mock(), Mock(), []
+        first.post.return_value = self.response(status=429, headers={"Retry-After": "120"})
+        with self.assertRaises(service.BigSellerRateLimitError) as caught:
+            service.request_first_item_id(first, self.make_util(), {}, "a", logs.append)
+        self.assertIn("较长冷却时间", str(caught.exception))
+        self.assertEqual(service._COOLDOWN_UNTIL, 220.0)
+        with self.assertRaises(service.BigSellerRateLimitError):
+            service.request_first_item_id(second, self.make_util(), {}, "b", logs.append)
+        first.post.assert_called_once()
+        second.post.assert_not_called()
+        service.time.sleep.assert_not_called()
+        self.clock = 221.0
+        second.post.return_value = self.response([{"itemId": "123"}])
+        self.assertEqual(service.request_first_item_id(second, self.make_util(), {}, "b"), "123")
+
+    def test_unknown_negative_code_remains_an_error_without_rate_limit_retry(self):
+        session = Mock()
+        session.post.return_value = self.response(payload={"code": -1, "msg": "unrecognized private-password"})
+        with self.assertRaises(service.BigSellerQueryError) as caught:
+            service.request_first_item_id(session, self.make_util(), {}, "a")
+        self.assertNotIsInstance(caught.exception, service.BigSellerRateLimitError)
+        self.assertIn("错误码：-1", str(caught.exception))
+        self.assertNotIn("private-password", str(caught.exception))
+        session.post.assert_called_once()
+        service.time.sleep.assert_not_called()
+
+    def test_long_server_cooldown_stops_batch_without_querying_remaining_skus(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job = self.make_job(Path(temp_dir), ("a", "b", "c"))
+            session, logs = Mock(), []
+            session.post.return_value = self.response(status=429, headers={"Retry-After": "120"})
+            with patch.object(service, "query_process_config", return_value={}), \
+                 patch.object(service, "load_bigseller_request_util", return_value=self.make_util()), \
+                 patch.object(service, "login_for_query", return_value=session):
+                result = service.run_bigseller_item_id_query(job, logs.append)
+            session.post.assert_called_once()
+            service.time.sleep.assert_not_called()
+            self.assertFalse(result["is_complete"])
+            self.assertEqual(result["failed_count"], 3)
+            self.assertIn("较长冷却时间", result["rows"][0]["message"])
+            self.assertTrue(all("未执行" in row["message"] for row in result["rows"][1:]))
+
+    def test_frequency_retry_exhaustion_stops_batch_and_retains_unexecuted_skus(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job = self.make_job(Path(temp_dir), ("a", "b", "c", "d"))
+            session, util, logs = Mock(), self.make_util(), []
+            session.post.side_effect = [self.response([{"itemId": "123"}])] + [
+                self.response(payload={"code": -1, "msg": "too frequent private-password"}) for _ in range(3)
+            ]
+            with patch.object(service, "query_process_config", return_value={}), \
+                 patch.object(service, "load_bigseller_request_util", return_value=util), \
+                 patch.object(service, "login_for_query", return_value=session):
+                result = service.run_bigseller_item_id_query(job, logs.append)
+            self.assertEqual(session.post.call_count, 4)
+            self.assertEqual([call.kwargs["json"]["searchContent"] for call in session.post.call_args_list],
+                             ["a", "b", "b", "b"])
+            self.assertEqual((result["matched_count"], result["not_found_count"], result["failed_count"]), (1, 0, 3))
+            self.assertFalse(result["is_complete"])
+            self.assertIn("结果不完整", result["completion_message"])
+            self.assertEqual([row["sku"] for row in result["rows"]], list(job.skus))
+            self.assertTrue(all("未执行" in row["message"] for row in result["rows"][2:]))
+            self.assertNotIn(job.password, str(result) + str(logs))
+            self.assertNotIn("too frequent", str(result) + str(logs))
+            workbook = load_workbook(result["output_file"], read_only=True)
+            try:
+                self.assertEqual(workbook.active.max_row, 5)
+                self.assertEqual(workbook.active.max_column, 2)
+            finally:
+                workbook.close()
+
+    def test_confirmed_matches_and_empty_rows_mark_batch_complete(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job = self.make_job(Path(temp_dir), ("a", "b"))
+            session = Mock()
+            session.post.side_effect = [self.response([{"itemId": "123"}]), self.response([])]
+            with patch.object(service, "query_process_config", return_value={}), \
+                 patch.object(service, "load_bigseller_request_util", return_value=self.make_util()), \
+                 patch.object(service, "login_for_query", return_value=session):
+                result = service.run_bigseller_item_id_query(job, lambda _: None)
+            self.assertTrue(result["is_complete"])
+            self.assertEqual(result["completion_message"], "查询完成")
+            self.assertEqual((result["matched_count"], result["not_found_count"], result["failed_count"]), (1, 1, 0))
 
     def test_excel_has_only_two_text_columns_and_preserves_every_sku(self):
         rows = [

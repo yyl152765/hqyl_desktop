@@ -151,7 +151,7 @@ from backend.update_service import (
 )
 
 
-APP_VERSION = "0.2.66"
+APP_VERSION = "0.2.72"
 APP_NAME = "寰球云联自动化平台"
 
 

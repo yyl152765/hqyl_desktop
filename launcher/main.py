@@ -99,6 +99,9 @@ def self_check() -> int:
         if not hasattr(module, "run_ads_recharge"):
             raise RuntimeError(f"Shopee Ads module is incomplete: {site.module_name}")
 
+    from backend.ads_database import self_check as ads_database_self_check
+    print("ADS_DATABASE_SELF_CHECK=" + str(ads_database_self_check()))
+
     # Check the bundled BigSeller loader without creating a session or logging in.
     from backend.services.bigseller_sync import load_bigseller_request_util
     from backend.services.bigseller_item_id_query import build_listing_query, export_item_ids

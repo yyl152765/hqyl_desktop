@@ -9,12 +9,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.66"
+VERSION = "0.2.72"
 SOURCE = ROOT.parent / "superbrowser_process"
 INPUTS = ROOT / f"build/release_inputs_{VERSION}"
 TARGET = INPUTS / "superbrowser_source"
 MANIFEST = INPUTS / "superbrowser_staging_manifest.json"
 SOURCE_DIRECTORIES = ("config", "implement", "main", "util")
+AUTHORIZED_EMBEDDED_CREDENTIALS = {"main/shopee/ads_recharge_guard.py": ["BUILTIN_DB_PASSWORD"]}
+
 SANITIZED_FIELDS = {
     "util/db_helper.py": ["password"],
     "util/dingtalk_doc_api.py": ["APP_KEY", "APP_SECRET", "USER_ID"],
@@ -27,6 +29,19 @@ def digest(payload: bytes) -> str:
 
 
 def sanitize_source(relative: str, payload: bytes) -> tuple[bytes, list[str]]:
+    if relative in AUTHORIZED_EMBEDDED_CREDENTIALS:
+        tree = ast.parse(payload)
+        fields = {target.id: node.value for node in tree.body if isinstance(node, ast.Assign)
+                  for target in node.targets if isinstance(target, ast.Name)}
+        value = fields.get("BUILTIN_DB_PASSWORD")
+        if not isinstance(value, ast.Constant) or not isinstance(value.value, str) or not value.value:
+            raise RuntimeError(f"Reviewed credential locations changed in {relative}; inspect before staging")
+        config = fields.get("GUARD_DB_CONFIG")
+        passwords = [value for key, value in zip(config.keys, config.values)
+                     if isinstance(key, ast.Constant) and key.value == "password"] if isinstance(config, ast.Dict) else []
+        if len(passwords) != 1 or ast.unparse(passwords[0]) != "os.environ.get('HQYL_GUARD_DB_PASSWORD') or BUILTIN_DB_PASSWORD":
+            raise RuntimeError(f"Reviewed credential locations changed in {relative}; inspect before staging")
+        return payload, []
     expected = SANITIZED_FIELDS.get(relative, [])
     if not expected:
         return payload, []
@@ -45,8 +60,12 @@ def sanitize_source(relative: str, payload: bytes) -> tuple[bytes, list[str]]:
             for node in ast.walk(function):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == "psycopg2" and node.func.attr == "connect":
                     for keyword in node.keywords:
-                        if keyword.arg == "password" and isinstance(keyword.value, ast.Constant):
-                            nodes["password"] = keyword.value
+                        if keyword.arg == "password":
+                            value = keyword.value
+                            if isinstance(value, ast.Call) and ast.unparse(value.func) == "database_credentials.resolve_password" and len(value.args) == 1 and not value.keywords:
+                                value = value.args[0]
+                            if isinstance(value, ast.Constant):
+                                nodes["password"] = value
     else:
         statements = tree.body
         if relative == "util/email_util.py":
@@ -63,7 +82,7 @@ def sanitize_source(relative: str, payload: bytes) -> tuple[bytes, list[str]]:
     for key, node in nodes.items():
         start = offsets[node.lineno - 1] + node.col_offset
         end = offsets[node.end_lineno - 1] + node.end_col_offset
-        value = b'os.environ.get("PGPASSWORD", "")' if relative == "util/db_helper.py" and key == "password" else b'""'
+        value = b'os.environ.get("PGPASSWORD", "")' if (relative == "util/db_helper.py" and key == "password") else b'""'
         replacements.append((start, end, value))
     if relative == "util/db_helper.py" and not any(isinstance(node, ast.Import) and any(alias.name == "os" and alias.asname in (None, "os") for alias in node.names) for node in tree.body):
         location = offsets[functions[0].lineno - 1]
@@ -90,7 +109,7 @@ def source_files() -> dict[str, bytes]:
             if any(item.is_symlink() for item in (path, *path.parents)):
                 raise RuntimeError("Refuse symbolic source path: " + relative.as_posix())
             found[relative.as_posix()] = path.read_bytes()
-    if not set(SANITIZED_FIELDS).issubset(found):
+    if not (set(SANITIZED_FIELDS) | set(AUTHORIZED_EMBEDDED_CREDENTIALS)).issubset(found):
         raise RuntimeError("Reviewed credential-bearing modules are missing")
     return found
 
@@ -116,7 +135,7 @@ def main() -> None:
         if staged_hashes() != expected or not MANIFEST.is_file():
             raise RuntimeError("Existing staging differs or lacks provenance; preserve and inspect it")
         report = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        if report.get("version") != VERSION or report.get("files") != expected or report.get("source_files") != source_hashes or report.get("sanitized_fields") != SANITIZED_FIELDS:
+        if report.get("version") != VERSION or report.get("files") != expected or report.get("source_files") != source_hashes or report.get("sanitized_fields") != SANITIZED_FIELDS or report.get("authorized_embedded_credentials") != AUTHORIZED_EMBEDDED_CREDENTIALS:
             raise RuntimeError("Existing staging manifest differs; preserve and inspect it")
         action = "existing_staging_verified"
     else:
@@ -132,12 +151,12 @@ def main() -> None:
             raise RuntimeError("Source or staging changed while copying")
         report = {"version": VERSION, "status": "sanitized_and_verified", "created_at": datetime.now(timezone.utc).isoformat(),
                   "source": str(SOURCE.resolve()), "destination": str(TARGET.resolve()), "python_sources_only": True,
-                  "file_count": len(expected), "source_files": source_hashes, "files": expected, "sanitized_fields": SANITIZED_FIELDS,
-                  "configuration_inputs": {"util/db_helper.py": ["PGPASSWORD"]}}
+                  "file_count": len(expected), "source_files": source_hashes, "files": expected, "sanitized_fields": SANITIZED_FIELDS, "authorized_embedded_credentials": AUTHORIZED_EMBEDDED_CREDENTIALS,
+                  "configuration_inputs": {"util/db_helper.py": ["desktop built-in credential provider", "PGPASSWORD"], "main/shopee/ads_recharge_guard.py": ["HQYL_GUARD_DB_PASSWORD", "PGPASSWORD", "user-authorized BUILTIN_DB_PASSWORD"]}}
         with MANIFEST.open("x", encoding="utf-8") as stream:
             stream.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
         action = "sanitized_and_verified"
-    print(json.dumps({"action": action, "version": VERSION, "file_count": len(expected), "sanitized_fields": SANITIZED_FIELDS,
+    print(json.dumps({"action": action, "version": VERSION, "file_count": len(expected), "sanitized_fields": SANITIZED_FIELDS, "authorized_embedded_credentials": AUTHORIZED_EMBEDDED_CREDENTIALS,
                       "staging": str(TARGET), "manifest": str(MANIFEST)}, ensure_ascii=True))
 
 
