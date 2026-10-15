@@ -111,6 +111,7 @@ from backend.services.lazada_monthly_report import (
 )
 from backend.services import lazada_ads_data
 from backend.services import lazada_bill_detail
+from backend.services import lazada_campaign_workbook
 from backend.services.vietnam_income_collection import (
     create_collection_run,
     default_collection_period,
@@ -175,6 +176,7 @@ class AppBridge:
         self._temu_export_previews: dict[str, dict[str, Any]] = {}
         self._balance_statistics_lock = threading.RLock()
         self._balance_statistics_active = False
+        self._campaign_operation_lock = threading.Lock()
 
     def get_sidebar_preferences(self) -> dict[str, Any]:
         try:
@@ -281,6 +283,13 @@ class AppBridge:
                     "description": "按国家和账单区间采集总金额、收入与扣减项，写入指定钉钉 Sheet 并保存截图。",
                     "status": "ready",
                     "vendor": "ziniao",
+                },
+                {
+                    "key": "lazada_campaign_workbook",
+                    "name": "Excel 折扣筛选",
+                    "description": "批量导入 Excel，按最低折扣率筛选并导出表格和异常明细。",
+                    "status": "ready",
+                    "vendor": "local",
                 },
                 {
                     "key": "temu_on_sale_export",
@@ -1483,6 +1492,89 @@ class AppBridge:
             return {"ok": True}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def get_lazada_campaign_workbook_info(self) -> dict[str, Any]:
+        settings = self.config_store.load()
+        return {
+            "ok": True,
+            "workflow": "local_excel",
+            "default_threshold": "0.95",
+            "output_dir": settings.output_dir,
+            "max_files": lazada_campaign_workbook.MAX_FILES,
+            "modes": [{"value": "auto", "label": "自动识别"},
+                      {"value": "plain", "label": "按已有活动价筛选"},
+                      {"value": "invited", "label": "按推荐价填充并筛选"}],
+        }
+
+    def choose_lazada_campaign_files(self) -> dict[str, Any]:
+        try:
+            import webview
+
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=True,
+                file_types=("Excel 文件 (*.xlsx;*.xlsm)",),
+            )
+            if not result:
+                return {"ok": False, "cancelled": True}
+            selected = result if isinstance(result, (list, tuple)) else [result]
+            return {"ok": True, "paths": [str(Path(path).expanduser().resolve()) for path in selected]}
+        except Exception:
+            return {"ok": False, "error": "打开文件选择器失败，请粘贴 Excel 完整路径"}
+
+    def inspect_lazada_campaign_files(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return {"ok": True, **lazada_campaign_workbook.inspect_campaign_files(payload)}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            return {"ok": False, "error": "检查表格失败，请确认文件可读取且未损坏"}
+
+    def export_lazada_campaign_template(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            if payload is not None and not isinstance(payload, dict):
+                raise ValueError("模板导出参数必须是对象")
+            request = dict(payload or {})
+            request.setdefault("output_dir", self.config_store.load().output_dir)
+            return lazada_campaign_workbook.export_campaign_template(request)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            return {"ok": False, "error": "模板保存失败，请检查目录权限和文件占用"}
+
+    def start_lazada_campaign_workbook(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            if not isinstance(payload, dict):
+                raise ValueError("表格处理参数必须是对象")
+            request = dict(payload)
+            request.setdefault("output_dir", self.config_store.load().output_dir)
+            job = lazada_campaign_workbook.validate_campaign_payload(request)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            return {"ok": False, "error": "表格处理参数无效，请检查 Excel 文件、折扣率和输出目录"}
+
+        if not self._campaign_operation_lock.acquire(blocking=False):
+            return {"ok": False, "error": "正在处理表格，请等待当前任务结束"}
+
+        def runner(progress):
+            try:
+                return lazada_campaign_workbook.run_campaign_batch(job, progress)
+            finally:
+                self._campaign_operation_lock.release()
+
+        try:
+            self.config_store.save({"output_dir": str(job.output_dir)})
+            task = self.tasks.start(
+                "Excel 折扣筛选", runner, tool="lazada_campaign_workbook",
+                context={"workflow": "local_excel", "source_files": [str(path) for path in job.source_files],
+                         "mode": job.mode, "threshold": str(job.threshold), "output_dir": str(job.output_dir)},
+            )
+            if not task.get("ok"):
+                self._campaign_operation_lock.release()
+            return task
+        except Exception:
+            self._campaign_operation_lock.release()
+            return {"ok": False, "error": "表格处理任务启动失败，请稍后重试"}
 
     def get_lazada_bill_detail_info(self) -> dict[str, Any]:
         """返回账单明细页的国家选项、默认 Sheet/区间与已保存偏好。"""

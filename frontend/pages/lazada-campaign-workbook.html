@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Excel 折扣筛选 · 寰球云联</title>
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+    <link rel="stylesheet" href="../assets/pages/lazada-campaign-workbook.css?v=20261015-local-excel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main id="mainContent" class="main campaign-page">
+        <header class="page-header">
+          <div><div class="page-kicker">通用工具 / Excel</div><h1>Excel 折扣筛选</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+        <p class="campaign-intro">导入表格，设置最低折扣率，导出筛选结果。全部在本地处理，无需配置账号。</p>
+        <div id="previewNotice" class="campaign-notice" hidden role="status">当前为界面演示，文件与统计均为示例，未读取或生成真实 Excel。</div>
+        <section class="overview-grid" aria-label="本批处理统计">
+          <article class="overview-card"><span>表格数</span><strong id="fileCount">0</strong><small id="completedCount">完成 0 · 失败 0</small></article>
+          <article class="overview-card accent-green"><span>保留行</span><strong id="keptCount">0</strong><small id="updatedCount">填充活动价 0 行</small></article>
+          <article class="overview-card"><span>移出结果</span><strong id="removedCount">0</strong><small id="exceptionCount">异常行 0 · 另存明细</small></article>
+          <article class="overview-card"><span>原始数据行</span><strong id="totalCount">0</strong><small id="statusText" aria-live="polite">导入表格后开始处理</small></article>
+        </section>
+        <section class="content-grid campaign-layout">
+          <form id="campaignForm" class="surface" aria-labelledby="formTitle">
+            <div class="section-head"><div><h2 id="formTitle">导入 Excel 表格</h2><p>批量选择文件，每个原文件分别输出一份筛选结果。</p></div><span class="section-badge">本地处理</span></div>
+            <div class="campaign-form-body">
+              <div class="actions"><button id="chooseFilesBtn" class="secondary" type="button" disabled>批量选择 Excel</button><button id="clearFilesBtn" class="secondary" type="button" disabled>清空</button><button id="exportTemplateBtn" class="secondary" type="button" disabled>导出空白模板</button></div>
+              <small id="fileLimitHint" class="campaign-note">支持 .xlsx / .xlsm，每批最多 100 个文件，单文件不超过 50 MiB。</small>
+              <ul id="sourceFileList" class="campaign-file-list" aria-label="已选择文件"><li class="campaign-empty">尚未选择文件</li></ul>
+              <details class="campaign-paths"><summary>粘贴文件路径</summary><label class="campaign-output-field" for="sourcePaths"><span class="campaign-visually-hidden">Excel 完整路径，每行一个</span><textarea id="sourcePaths" rows="4" placeholder="Excel 完整路径，每行一个" spellcheck="false" disabled></textarea></label></details>
+              <div class="campaign-options">
+                <label for="processingMode"><span>处理方式</span><select id="processingMode" disabled><option value="auto">自动识别</option><option value="plain">按已有活动价筛选</option><option value="invited">按推荐价填充并筛选</option></select></label>
+                <label for="discountThreshold"><span>最低折扣率</span><div class="campaign-percent-field"><input id="discountThreshold" type="number" min="0.01" max="100" step="0.01" value="95" required disabled /><span>%</span></div></label>
+              </div>
+              <p class="campaign-rule">折扣率 = 活动价 ÷ 原价。低于 <strong id="thresholdLabel">95%</strong> 的行移出结果，等于该值时保留。</p>
+              <p class="campaign-note">通用表头：原价、活动价，推荐价选填。自动识别通用表时沿用已有活动价；需要填充推荐价时可切换处理方式。缺失价格或无法核算的行另存异常明细。</p>
+              <label class="campaign-output-field" for="campaignOutputDir"><span>结果保存目录</span><div class="input-action"><input id="campaignOutputDir" placeholder="输入或选择本地保存目录" required disabled /><button id="chooseOutputBtn" type="button" class="secondary" disabled>选择</button></div></label>
+              <p id="templateNotice" class="campaign-note" hidden role="status"></p>
+              <div id="formIssues" class="campaign-notice" hidden role="alert"></div>
+              <p id="inspectionMessage" class="campaign-note" aria-live="polite">可先检查表头、处理方式和数据行数。</p>
+              <div class="campaign-submit-actions"><button id="inspectBtn" class="secondary" type="button" disabled>检查表格</button><button id="startBtn" class="primary" type="submit" disabled>导出筛选 Excel</button></div>
+            </div>
+          </form>
+          <section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>显示逐个文件的处理和保存进度。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section>
+        </section>
+        <section class="surface campaign-results" aria-labelledby="resultsTitle">
+          <div class="section-head"><div><h2 id="resultsTitle">处理结果</h2><p id="resultMessage" aria-live="polite">尚未运行。选择表格并设置最低折扣率后开始处理。</p></div><span id="resultBadge" class="section-badge neutral">尚无结果</span></div>
+          <div class="actions"><button id="openArchiveBtn" type="button" class="secondary" disabled>打开打包文件</button><button id="openSummaryBtn" type="button" class="secondary" disabled>打开汇总与异常明细</button><button id="openDirectoryBtn" type="button" class="secondary" disabled>打开结果目录</button></div>
+          <div class="collection-table-wrap campaign-table-wrap"><table><caption class="campaign-visually-hidden">每个文件的筛选结果与异常统计</caption><thead><tr><th scope="col">文件 / 处理方式</th><th scope="col">状态</th><th scope="col">原始行</th><th scope="col">填价行</th><th scope="col">保留行</th><th scope="col">折扣剔除</th><th scope="col">异常行</th><th scope="col">结果文件 / 原因</th></tr></thead><tbody id="fileResults"><tr><td colspan="8">尚未运行</td></tr></tbody></table></div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20261015-local-excel"></script>
+    <script src="../assets/pages/lazada-campaign-workbook.js?v=20261015-local-excel"></script>
+  </body>
+</html>

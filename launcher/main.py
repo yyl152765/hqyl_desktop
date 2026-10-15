@@ -36,6 +36,7 @@ PAGE_ENTRIES = {
     "lazada-monthly-report": "lazada-monthly-report.html",
     "lazada-ads-data": "lazada-ads-data.html",
     "lazada-bill-detail": "lazada-bill-detail.html",
+    "lazada-campaign-workbook": "lazada-campaign-workbook.html",
     "vietnam-income-reconciliation": "vietnam-income-reconciliation.html",
     "kec-reconciliation": "kec-reconciliation.html",
 }

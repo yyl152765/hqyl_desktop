@@ -58,6 +58,9 @@ const HQYL = (() => {
       { id: "lazada_ads_data", href: "lazada-ads-data.html", name: "广告数据", icon: "广", tag: "Lazada", category: "Lazada 广告", description: "指定日期采集广告费与业绩并写入 Sheet", keywords: "泰国 钉钉 广告 支出 业绩 Sheet" },
       { id: "lazada_bill_detail", href: "lazada-bill-detail.html", name: "后台收支数据", icon: "账", tag: "Lazada", category: "Lazada 账单", description: "按国家采集店铺后台收支数据并写入指定 Sheet", keywords: "泰国 菲律宾 马来 印尼 越南 钉钉 总金额 收入 扣减项 截图 账单区间" },
     ] },
+    { id: "tools", name: "通用工具", icon: "表", keywords: "本地 Excel 表格", items: [
+      { id: "lazada_campaign_workbook", href: "lazada-campaign-workbook.html", name: "Excel 折扣筛选", icon: "表", tag: "Excel", category: "本地表格", description: "批量导入表格、按最低折扣率筛选并导出", keywords: "活动 导入 上传 模板 Excel xlsx xlsm 折扣 价格 筛选" },
+    ] },
     { id: "echotik", name: "EchoTik", icon: "E", keywords: "EchoTik TikTok Data", items: [
       { id: "echotik_collect", href: "echotik-collect.html", name: "商品达人采集", icon: "采", tag: "泰国", category: "泰国商品库", description: "关键词或全库商品与达人导出", keywords: "网红 选品 TikTok" },
     ] },
@@ -511,6 +514,7 @@ const HQYL = (() => {
   function renderGlobalTaskStatus(task) {
     const summary = $("updateSummary");
     if (!summary || !task || !task.ok) return;
+    if (task.result?.preview) { summary.textContent = "界面演示 · 未处理真实文件"; return; }
     if (task.status === "running" || task.status === "pending") {
       summary.textContent = `${task.name || "后台任务"}运行中`;
     } else if (task.status === "success") {
@@ -797,6 +801,21 @@ const HQYL = (() => {
       async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "0.2.72" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
       async get_latest_task_status(tool) { return tasks[tool] || { ok: false, empty: true }; },
       async get_task_status(id) { return Object.values(tasks).find((task) => task.id === id) || { ok: false, error: "任务不存在" }; },
+      async get_lazada_campaign_workbook_info() { return { ok: true, preview: true, workflow: "local_excel", default_threshold: "0.95", output_dir: "C:\\Preview\\Excel折扣筛选", max_files: 100 }; },
+      async choose_lazada_campaign_files() { return { ok: true, paths: ["C:\\Preview\\商品表格.xlsx"] }; },
+      async inspect_lazada_campaign_files(payload = {}) { return { ok: true, files: (payload.source_files || []).map(path => ({ ok: true, name: path.split(/[\\/]/).pop(), mode: payload.mode === "auto" ? "plain" : payload.mode, total_rows: 20, unparseable_rows: 1 })) }; },
+      async export_lazada_campaign_template() { return { ok: true, preview: true, output_file: "", path: "" }; },
+      async start_lazada_campaign_workbook(payload = {}) {
+        if (!Array.isArray(payload.source_files) || !payload.source_files.length || payload.source_files.length > 100) return { ok: false, error: "请选择 1 至 100 个 Excel 文件" };
+        const files = payload.source_files.map(path => ({ name: path.split(/[\\/]/).pop(), mode: payload.mode === "auto" ? "plain" : payload.mode, status: "preview", total_rows: 20, updated_rows: payload.mode === "invited" ? 20 : 0, kept_rows: 16, removed_rows: 3, unparseable_rows: 1, source_file: path, processed_file: "", audit_file: "" }));
+        const result = { preview: true, workflow: "local_excel", is_complete: false, file_count: files.length, success_count: 0, failed_count: 0, output_dir: "", output_file: "", archive_file: "", output_files: [], files };
+        ["total_rows", "updated_rows", "kept_rows", "removed_rows", "unparseable_rows"].forEach(key => { result[key] = files.reduce((total, file) => total + Number(file[key] || 0), 0); });
+        const task = startPreviewTask("lazada_campaign_workbook", result);
+        task.context = { workflow: "local_excel", source_files: payload.source_files, mode: payload.mode, threshold: payload.threshold, output_dir: payload.output_dir };
+        task.logs = ["[界面演示] 仅展示表格筛选流程。", "[界面演示] 未读取真实 Excel，未生成结果文件。"];
+        task.created_at = new Date().toISOString();
+        return task;
+      },
       async get_group_sales_options() { return { ok: true, groups: [{ id: "preview-group", name: "菲S-示例小组" }, { id: "preview-tk", name: "tk菲律宾" }, { id: "preview-lazada", name: "lazada马来" }] }; },
       async start_group_sales_report(payload) { return startPreviewTask("group_sales", { group_count: (payload.group_ids || []).length, record_count: 16, output_file: "C:\\Preview\\销量.xlsx", output_dir: "C:\\Preview" }); },
       async start_developer_sales_income_summary() { return startPreviewTask("developer_sales_income_summary", { developer_count: 2, salesperson_count: 4, source_row_count: 86, missing_developer_names: [], output_file: "C:\\Preview\\开发与销售收入汇总.xlsx", output_dir: "C:\\Preview" }); },

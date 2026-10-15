@@ -16,6 +16,7 @@
     lazada_monthly_report: { href: "lazada-monthly-report.html", icon: "月", featured: true },
     lazada_ads_data: { href: "lazada-ads-data.html", icon: "广", featured: true },
     lazada_bill_detail: { href: "lazada-bill-detail.html", icon: "账", featured: true },
+    lazada_campaign_workbook: { href: "lazada-campaign-workbook.html", icon: "表", featured: true, local: true },
     bigseller_sync: { href: "bigseller-sync.html", icon: "同" },
     bigseller_item_id_query: { href: "bigseller-item-id-query.html", icon: "ID", featured: true },
     bigseller_sku_benchmark: { href: "bigseller-sku-benchmark.html", icon: "标", featured: true },
@@ -27,6 +28,7 @@
     kec_reconciliation: { href: "kec-reconciliation.html", icon: "K", featured: true },
   };
   const VENDORS = {
+    local: { label: "通用工具", mark: "表" },
     mabang: { label: "马帮 ERP", mark: "M" },
     ziniao: { label: "紫鸟浏览器", mark: "Z" },
     bigseller: { label: "BigSeller", mark: "B" },
@@ -51,6 +53,7 @@
     { key: "lazada_monthly_report", name: "Lazada 月度账单下载", description: "按国家、月份和店铺批量下载月度报告，并以店铺名称保存。", vendor: "ziniao" },
     { key: "lazada_ads_data", name: "泰国 Lazada 广告数据", description: "采集指定日期的广告费与业绩，写入钉钉指定 Sheet 并保存本地结果。", vendor: "ziniao" },
     { key: "lazada_bill_detail", name: "Lazada 后台收支数据", description: "按国家和账单区间采集总金额、收入与扣减项，写入钉钉指定 Sheet 并保存截图。", vendor: "ziniao" },
+    { key: "lazada_campaign_workbook", name: "Excel 折扣筛选", description: "批量导入表格，设置最低折扣率，导出筛选 Excel 与异常明细。", vendor: "local" },
     { key: "bigseller_sync", name: "BigSeller 同步", description: "通过 BigSeller 接口同步产品或库存，支持在售、售完状态。", vendor: "bigseller" },
     { key: "bigseller_item_id_query", name: "BS 商品ID查询", description: "SKU（含子SKU）模糊搜索，取 Views 降序首条 Item ID 并导出 Excel。", vendor: "bigseller" },
     { key: "bigseller_claim_query", name: "新品认领时间查询", description: "导入 Excel，查询主 SKU 最早创建商品的店铺和两个时间。", vendor: "bigseller" },
@@ -82,7 +85,7 @@
       const cards = group.items.map((tool) => {
         const meta = TOOL_META[tool.key];
         const account = HQYL.activeAccount(tool.vendor);
-        const availability = account ? `账号：${escapeHtml(account.name || account.username)}` : "进入后绑定账号";
+        const availability = meta.local ? "本地处理 · 无需绑定账号" : account ? `账号：${escapeHtml(account.name || account.username)}` : "进入后绑定账号";
         return `<a class="dashboard-tool${meta.featured ? " featured" : ""}" href="${meta.href}">
           <span class="dashboard-tool-icon">${meta.icon}</span>
           <span class="dashboard-tool-content"><span class="dashboard-tool-title">${escapeHtml(tool.name)}${meta.featured ? '<em>新功能</em>' : ""}</span><span class="dashboard-tool-description">${escapeHtml(tool.description)}</span><span class="dashboard-tool-account">${availability}</span></span>
