@@ -25,6 +25,7 @@ from backend.services.lazada_ads_page import (
     is_pending_value, parse_amount, values_equal,
 )
 from backend.services.lazada_monthly_report import ZiniaoPlaywrightRuntime, safe_store_filename
+from backend.output_paths import default_output_directories
 
 DEFAULT_WORKBOOK_ID = "oP0MALyR8k77eL4OhNLR1j4N83bzYmDO"
 _WRITE_LOCK = threading.Lock()
@@ -147,7 +148,8 @@ def validate_lazada_ads_payload(
         browser_window_mode=window_mode,
         client_path=str(request.get("client_path") or "").strip(),
         webdriver_path=str(request.get("webdriver_path") or "").strip(),
-        output_root=str(request.get("output_root") or request.get("output_dir") or default_output_root).strip(),
+        output_root=str(request.get("output_root") or request.get("output_dir") or default_output_root
+                        or default_output_directories("lazada_ads_data")["output_dir"]).strip(),
         socket_port=socket_port, **credentials,
     )
 
@@ -349,8 +351,8 @@ def run_lazada_ads_data(
     sheet_factory: Callable[..., Any] | None = None,
     page_actions: Any = None,
 ) -> dict[str, Any]:
-    root = Path(query.output_root or Path.cwd() / "outputs")
-    run_dir = root / "lazada_ads_data" / f"{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}"
+    root = Path(query.output_root or default_output_directories("lazada_ads_data")["output_dir"])
+    run_dir = root / f"{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}"
     run_dir.mkdir(parents=True, exist_ok=True)
     log_file = run_dir / "run.log"
     result_file = run_dir / "result.json"

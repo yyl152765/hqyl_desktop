@@ -47,7 +47,7 @@
             <div class="form-grid">
               <label><span>浏览器窗口</span><select id="lazadaAdsWindowMode"><option value="normal">正常显示</option><option value="background">后台运行</option></select></label>
               <label><span>紫鸟客户端 <small>自动保存</small></span><div class="input-action"><input id="lazadaAdsClientPath" placeholder="输入路径或点击选择" aria-describedby="lazadaAdsPreferencesStatus" /><button id="lazadaAdsChooseClientBtn" class="secondary" type="button">选择</button></div></label>
-              <label class="store-field"><span>输出目录</span><div class="input-action"><input id="lazadaAdsOutputDir" readonly required /><button id="lazadaAdsChooseOutputBtn" class="secondary" type="button">选择</button></div></label>
+              <label class="store-field"><span>输出目录 <small>本脚本独立保存</small></span><div class="input-action"><input id="lazadaAdsOutputDir" required /><button id="lazadaAdsChooseOutputBtn" class="secondary" type="button">选择</button></div></label>
               <p id="lazadaAdsPreferencesStatus" class="form-note store-field" role="status" aria-live="polite">客户端路径和工作簿配置会自动保存。</p>
             </div>
             <div class="actions">
@@ -81,7 +81,7 @@
     </div>
 
     <div id="toast" class="toast hidden"></div>
-    <script src="../assets/common.js?v=20261009-lazada-ads-preferences"></script>
-    <script src="../assets/pages/lazada-ads-data.js?v=20261009-preferences"></script>
+    <script src="../assets/common.js?v=20261015-scoped-output"></script>
+    <script src="../assets/pages/lazada-ads-data.js?v=20261015-scoped-output"></script>
   </body>
 </html>

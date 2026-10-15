@@ -17,6 +17,7 @@ from backend.config_store import (
     DingTalkUserBinding,
 )
 from backend.services import lazada_bill_detail as service
+from backend.output_paths import directory_scope_key, default_output_directories
 
 
 class LazadaBillBridgeTests(unittest.TestCase):
@@ -24,6 +25,8 @@ class LazadaBillBridgeTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        patch.object(config_store, "desktop_path", return_value=self.root / "desktop").start()
+        self.output_root = str(self.root / "desktop" / "log" / "Lazada泰国账单明细")
         settings = config_store.AppSettings(
             output_dir=str(self.root),
             accounts=[
@@ -100,7 +103,7 @@ class LazadaBillBridgeTests(unittest.TestCase):
         self.assertEqual(result["date_range"], {"start_date": start, "end_date": end})
         self.assertEqual(result["workbook_id"], service.DEFAULT_WORKBOOK_ID)
         self.assertEqual(result["dws_node"], "")
-        self.assertEqual(result["output_dir"], str(self.root))
+        self.assertEqual(result["output_dir"], self.output_root)
         self.assertEqual(result["screenshot_root"], service.default_screenshot_root())
         self.assertEqual(result["image_column"], "F")
         self.assertEqual(result["operator_names"], ["操作人甲"])
@@ -164,7 +167,8 @@ class LazadaBillBridgeTests(unittest.TestCase):
         self.assertEqual(saved.lazada_bill_workbook_id, "AbCdEf123456")
         self.assertEqual(saved.lazada_bill_dws_node, "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l")
         self.assertEqual(saved.lazada_bill_client_path, "C:\\Ziniao\\ziniao.exe")
-        self.assertEqual(saved.lazada_bill_screenshot_dir, str(self.root / "shots"))
+        self.assertEqual(saved.tool_output_dirs[directory_scope_key("lazada_bill_detail", "TH", "screenshot")], str(self.root / "shots"))
+        self.assertEqual(saved.lazada_bill_screenshot_dir, "")
 
     def test_save_preferences_is_country_independent_and_can_be_cleared(self) -> None:
         self.bridge.save_lazada_bill_preferences({"country": "TH", "workbook_id": "shared-workbook-1"})
@@ -231,7 +235,7 @@ class LazadaBillBridgeTests(unittest.TestCase):
                 "start_date": "2026-08-01",
                 "end_date": "2026-08-31",
                 "store_count": 2,
-                "output_root": str(self.root),
+                "output_root": self.output_root,
                 "screenshot_root": service.default_screenshot_root(),
                 "screenshot_dir": str(
                     service.screenshot_folder(
@@ -262,7 +266,7 @@ class LazadaBillBridgeTests(unittest.TestCase):
             {
                 "lazada_bill_workbook_id": "saved-shared-workbook",
                 "lazada_bill_dws_node": "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l",
-                "lazada_bill_screenshot_dir": str(self.root / "saved-shots"),
+                "tool_output_dirs": {directory_scope_key("lazada_bill_detail", "VN", "screenshot"): str(self.root / "saved-shots")},
                 "lazada_bill_client_path": "C:\\saved\\ziniao.exe",
             }
         )

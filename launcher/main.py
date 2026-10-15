@@ -29,6 +29,7 @@ PAGE_ENTRIES = {
     "mabang-warehouse-permission": "mabang-warehouse-permission.html",
     "mabang-developer-permission": "mabang-developer-permission.html",
     "sku-inventory-query": "sku-inventory-query.html",
+    "lz-warehouse-realtime-inventory": "lz-warehouse-realtime-inventory.html",
     "developer-sales-income-summary": "developer-sales-income-summary.html",
     "bigseller-item-id-query": "bigseller-item-id-query.html",
     "bigseller-sku-benchmark": "bigseller-sku-benchmark.html",
@@ -91,6 +92,11 @@ def self_check() -> int:
         bridge_module.get_group_options = original_group_options
     if not info.get("ok"):
         raise RuntimeError(f"bridge self-check failed: {info}")
+    if not any(item.get("key") == "lz_warehouse_inventory" for item in info.get("tools", [])):
+        raise RuntimeError("lz warehouse inventory is missing from the tool catalog")
+    lz_account_check = bridge.get_lz_warehouse_inventory_info()
+    if lz_account_check.get("ok") or not lz_account_check.get("requires_account"):
+        raise RuntimeError("lz inventory must require its configured account")
 
     # Exercise the dynamic imports that PyInstaller cannot discover on its own.
     from backend.services.shopee_ads_recharge import SITE_OPTIONS, get_site_module

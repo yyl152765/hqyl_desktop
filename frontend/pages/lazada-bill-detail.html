@@ -53,10 +53,10 @@
             <div class="form-grid">
               <label><span>浏览器窗口</span><select id="lazadaBillWindowMode"><option value="normal">正常显示</option><option value="background">后台运行</option></select></label>
               <label><span>紫鸟客户端 <small>自动保存</small></span><div class="input-action"><input id="lazadaBillClientPath" placeholder="输入路径或点击选择" aria-describedby="lazadaBillPreferencesStatus" /><button id="lazadaBillChooseClientBtn" class="secondary" type="button">选择</button></div></label>
-              <label class="store-field"><span>截图保存位置 <small>根目录，按国家和账单区间自动建文件夹</small></span><div class="input-action"><input id="lazadaBillScreenshotDir" placeholder="输入根目录或点击选择" aria-describedby="lazadaBillScreenshotHint" /><button id="lazadaBillChooseScreenshotBtn" class="secondary" type="button">选择</button></div></label>
+              <label class="store-field"><span>截图保存位置 <small>本国独立目录，按账单区间自动建文件夹</small></span><div class="input-action"><input id="lazadaBillScreenshotDir" placeholder="输入本国截图目录或点击选择" aria-describedby="lazadaBillScreenshotHint" /><button id="lazadaBillChooseScreenshotBtn" class="secondary" type="button">选择</button></div></label>
               <p id="lazadaBillScreenshotHint" class="form-note store-field" role="status" aria-live="polite">本次截图保存目录：—</p>
-              <label class="store-field"><span>输出目录 <small>任务日志与结果</small></span><div class="input-action"><input id="lazadaBillOutputDir" readonly required /><button id="lazadaBillChooseOutputBtn" class="secondary" type="button">选择</button></div></label>
-              <p id="lazadaBillPreferencesStatus" class="form-note store-field" role="status" aria-live="polite">钉钉文档 ID、客户端路径和截图根目录会自动保存，五国共用同一本文档。</p>
+              <label class="store-field"><span>输出目录 <small>本国独立保存任务日志与结果</small></span><div class="input-action"><input id="lazadaBillOutputDir" required /><button id="lazadaBillChooseOutputBtn" class="secondary" type="button">选择</button></div></label>
+              <p id="lazadaBillPreferencesStatus" class="form-note store-field" role="status" aria-live="polite">钉钉文档 ID 和客户端路径会自动保存，五国共用同一本文档；输出与截图目录按国家独立保存。</p>
               <div id="lazadaBillDwsWarning" class="lazada-bill-warning store-field" role="alert" hidden>
                 <strong>未检测到 dws 命令：钉钉 F 列图片将不会写入</strong>
                 <span id="lazadaBillDwsHint"></span>
@@ -93,7 +93,7 @@
     </div>
 
     <div id="toast" class="toast hidden"></div>
-    <script src="../assets/common.js?v=20261009-lazada-bill-detail"></script>
-    <script src="../assets/pages/lazada-bill-detail.js?v=20261009-v1"></script>
+    <script src="../assets/common.js?v=20261015-scoped-output"></script>
+    <script src="../assets/pages/lazada-bill-detail.js?v=20261015-scoped-output"></script>
   </body>
 </html>

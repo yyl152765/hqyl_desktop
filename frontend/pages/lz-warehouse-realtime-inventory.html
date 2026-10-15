@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>lz各仓实时库存</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel-20261015-lz-inventory" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">马帮流程 / 商品 / 库存查询</div><h1>lz各仓实时库存</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>目标仓库</span><strong id="warehouseCount">0 个仓库</strong><small>按所选仓库分别导出</small></article>
+          <article class="overview-card"><span>库存记录</span><strong id="recordCount">0</strong><small id="sourceCount">查询结果 0 条</small></article>
+          <article class="overview-card"><span>导出分页</span><strong id="exportPageCount">0</strong><small>自动导出全部页面</small></article>
+          <article class="overview-card file-card"><span>结果文件</span><strong id="lzFileStatus">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+        <section class="layout-grid">
+          <form id="lzInventoryForm" class="surface form-surface">
+            <div class="section-head"><div><h2>选择仓库并导出</h2><p>勾选要查询的仓库，每个仓库单独生成一个 Excel，仓内全部分页自动合并。</p></div><span class="section-badge">马帮 ERP</span></div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">正在加载指定账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+            <p id="lzAccountNote" class="form-note" style="margin:12px 18px 0" aria-live="polite">正在检查本功能指定的马帮账号…</p>
+            <section class="developer-panel" aria-labelledby="lzWarehouseTitle">
+              <div class="developer-panel-head"><div><strong id="lzWarehouseTitle">仓库多选</strong><small id="lzWarehouseSelection">正在加载仓库</small></div><button id="lzRefreshWarehousesBtn" class="secondary compact-btn" type="button">刷新仓库</button></div>
+              <label class="developer-search-field"><span class="sr-only">搜索仓库</span><input id="lzWarehouseSearch" type="search" placeholder="按仓库名称搜索" disabled /></label>
+              <div class="developer-selection-actions"><button id="lzSelectWarehousesBtn" class="secondary compact-btn" type="button" disabled>全选当前结果</button><button id="lzClearWarehousesBtn" class="secondary compact-btn" type="button" disabled>清空当前结果</button></div>
+              <div id="lzWarehouseChecklist" class="developer-checklist" aria-live="polite"><div class="developer-empty">正在加载账号有权限的仓库…</div></div>
+            </section>
+            <p id="lzWarehouseStatus" class="form-note" style="margin:12px 18px 0" aria-live="polite">默认勾选泰国TH04仓、泰国TH05仓、泰国TH06仓，可自由调整。</p>
+            <div class="query-rule-note"><strong>查询与导出规则</strong><span>范围：商品 → 库存查询，保留零库存记录</span><span>只查询已勾选仓库</span><span>每仓一个 Excel，仓内全部分页合并，保留页面原始字段</span></div>
+            <div class="form-grid">
+              <label class="output-field"><span>输出目录 <small>本脚本独立保存</small></span><div class="input-action"><input id="lzOutputDir" required /><button id="lzChooseDirBtn" class="secondary" type="button">选择</button></div></label>
+            </div>
+            <div class="actions"><button id="lzRunBtn" class="primary" type="submit" disabled>开始查询并导出</button><button id="lzOpenFileBtn" class="secondary" type="button" disabled>打开 Excel</button><button id="lzOpenOutputBtn" class="secondary" type="button" disabled>打开输出目录</button></div>
+          </form>
+          <div class="right-stack"><section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>登录、各仓查询、逐页导出与文件生成进度</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section></div>
+        </section>
+        <section id="lzResult" class="surface sku-inventory-result" hidden>
+          <div class="section-head tight"><div><h2>库存导出结果</h2><p id="lzResultSummary">暂无结果</p></div><span id="lzPreviewNote" class="section-badge">前 100 条预览</span></div>
+          <p id="lzWarehouseSummary" class="query-rule-note"></p>
+          <div id="lzFailureSummary" class="query-rule-note" hidden></div>
+          <div id="lzExportFiles" class="collection-table-wrap" style="margin-top:14px" hidden><table><thead><tr><th>仓库</th><th>库存记录</th><th>导出分页</th><th>完整文件路径</th><th>操作</th></tr></thead><tbody id="lzExportFilesBody"></tbody></table></div>
+          <div id="lzPreviewPanel" hidden>
+            <div class="form-grid compact-form-grid"><label><span>查看仓库预览</span><select id="lzPreviewWarehouse"></select></label></div>
+            <div class="form-note" style="margin:12px 18px;overflow-wrap:anywhere"><strong>当前文件路径：</strong><span id="lzOutputFile">未生成</span></div>
+            <div id="lzTableWrap" class="collection-table-wrap sku-inventory-table-wrap" tabindex="0" aria-label="库存导出预览，可横向滚动"><table><thead><tr id="lzTableHead"></tr></thead><tbody id="lzTableBody"></tbody></table><div id="lzEmpty" class="developer-empty" hidden>暂无库存预览</div></div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20261015-scoped-output"></script>
+    <script src="../assets/pages/lz-warehouse-realtime-inventory.js?v=20261015-scoped-output"></script>
+  </body>
+</html>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ APP_NAME = "HQYLAutomation"
 DEFAULT_ROWS_PER_PAGE = 500
 DEFAULT_UPDATE_MANIFEST_URL = "http://rpa.whhqyl.com.cn/hqyl/latest.json"
 LEGACY_DINGTALK_CONFIG_ENV = "HQYL_LEGACY_DINGTALK_CONFIG"
+_SETTINGS_LOCK = threading.RLock()
 LEGACY_UPDATE_MANIFEST_URLS = {
     "http://47.112.20.68/hqyl/latest.json",
 }
@@ -61,6 +63,7 @@ class AppSettings:
     lazada_bill_screenshot_dir: str = ""
     lazada_bill_workbook_id: str = ""
     lazada_bill_dws_node: str = ""
+    tool_output_dirs: dict[str, str] = field(default_factory=dict)
 
 
 def _base_app_data_dir() -> Path:
@@ -100,6 +103,10 @@ class ConfigStore:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
     def load(self) -> AppSettings:
+        with _SETTINGS_LOCK:
+            return self._load_unlocked()
+
+    def _load_unlocked(self) -> AppSettings:
         self.ensure_dirs()
         if not self.config_path.exists():
             legacy_dingtalk = _load_legacy_dingtalk_credentials(
@@ -147,6 +154,7 @@ class ConfigStore:
             )
         settings = AppSettings(
             output_dir=str(payload.get("output_dir") or desktop_path()).strip(),
+            tool_output_dirs=_coerce_tool_output_dirs(payload.get("tool_output_dirs")),
             rows_per_page=_coerce_rows_per_page(payload.get("rows_per_page")),
             update_manifest_url=_coerce_update_manifest_url(payload.get("update_manifest_url")),
             captcha_username=str(payload.get("captcha_username") or "").strip(),
@@ -174,13 +182,20 @@ class ConfigStore:
         return settings
 
     def save(self, settings: AppSettings | dict[str, Any]) -> AppSettings:
+        with _SETTINGS_LOCK:
+            return self._save_unlocked(settings)
+
+    def _save_unlocked(self, settings: AppSettings | dict[str, Any]) -> AppSettings:
         self.ensure_dirs()
         if isinstance(settings, dict):
             current = self.load()
             accounts = _coerce_accounts(settings.get("accounts", current.accounts))
             dingtalk = _merge_dingtalk_settings(settings.get("dingtalk"), current.dingtalk)
+            tool_output_dirs = dict(current.tool_output_dirs)
+            tool_output_dirs.update(_coerce_tool_output_dirs(settings.get("tool_output_dirs")))
             settings = AppSettings(
                 output_dir=str(settings.get("output_dir", current.output_dir) or desktop_path()).strip(),
+                tool_output_dirs=tool_output_dirs,
                 rows_per_page=_coerce_rows_per_page(settings.get("rows_per_page", current.rows_per_page)),
                 update_manifest_url=_coerce_update_manifest_url(
                     settings.get("update_manifest_url", current.update_manifest_url)
@@ -220,6 +235,7 @@ class ConfigStore:
             )
         if not settings.output_dir:
             settings.output_dir = str(desktop_path())
+        settings.tool_output_dirs = _coerce_tool_output_dirs(settings.tool_output_dirs)
         settings.dingtalk = _coerce_dingtalk_settings(settings.dingtalk)
         settings.accounts = _coerce_accounts(settings.accounts)
         settings.active_account_ids = _coerce_active_account_ids(settings.active_account_ids, settings.accounts)
@@ -237,6 +253,16 @@ class ConfigStore:
             json.dumps(asdict(settings), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+
+def _coerce_tool_output_dirs(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key.strip(): str(path or "").strip()
+        for key, path in value.items()
+        if isinstance(key, str) and key.strip() and (isinstance(path, str) or path is None)
+    }
 
 
 def _legacy_dingtalk_config_candidates(*, include_source_fallback: bool) -> list[Path]:

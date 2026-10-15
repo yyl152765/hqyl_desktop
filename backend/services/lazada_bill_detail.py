@@ -27,6 +27,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import urlsplit
+from backend.output_paths import default_output_directories
 
 from backend.services.lazada_ads_data import normalize_workbook_id
 from backend.services.lazada_ads_page import (
@@ -64,8 +65,6 @@ DWS_MISSING_HINT = (
 # 与原脚本一致：一家店最多 3 次采集机会（每次都是全新的登录流程），两次之间稍作等待。
 STORE_ATTEMPTS = 3
 STORE_RETRY_BACKOFF_MS = 2_000
-SCREENSHOT_ROOT_FOLDER = "log"
-SCREENSHOT_FOLDER_SUFFIX = "账单明细截图"
 
 _WRITE_LOCK = threading.Lock()
 _DWS_SHEET_ID_LOCK = threading.Lock()
@@ -223,22 +222,16 @@ def previous_month_range(today: date | None = None) -> dict[str, str]:
     return {"start_date": end.replace(day=1).isoformat(), "end_date": end.isoformat()}
 
 
-def default_screenshot_root() -> str:
-    """默认截图根目录：桌面\\log，其下按国家与账单区间自动建文件夹。"""
-    try:
-        from backend.config_store import desktop_path
-
-        return str(Path(desktop_path()) / SCREENSHOT_ROOT_FOLDER)
-    except Exception:
-        return str(Path.cwd() / SCREENSHOT_ROOT_FOLDER)
+def default_screenshot_root(country: str = "TH") -> str:
+    """The selected country's screenshot directory, before the date range."""
+    return default_output_directories("lazada_bill_detail", resolve_country(country).code)["screenshot_root"]
 
 
 def screenshot_folder(
     screenshot_root: Any, country_name: str, start_date: Any, end_date: Any
 ) -> Path:
-    """截图实际落地目录：<根目录>\\Lazada<国家名>账单明细截图\\<开始>到<结束>。"""
-    folder = f"Lazada{country_name}{SCREENSHOT_FOLDER_SUFFIX}"
-    return Path(str(screenshot_root)) / folder / f"{start_date}到{end_date}"
+    """The input is already country-specific; append the bill range once."""
+    return Path(str(screenshot_root)) / f"{start_date}到{end_date}"
 
 
 def validate_image_column(column: Any) -> str:
@@ -470,13 +463,14 @@ def validate_lazada_bill_detail_payload(
 
     output_root = str(
         request.get("output_root") or request.get("output_dir") or default_output_root
+        or default_output_directories("lazada_bill_detail", profile.code)["output_dir"]
     ).strip()
     screenshot_root = str(
         request.get("screenshot_root")
         or request.get("screenshot_dir")
         or default_screenshot_root_value
         or ""
-    ).strip() or default_screenshot_root()
+    ).strip() or default_screenshot_root(profile.code)
 
     workbook_id = normalize_workbook_id(request.get("workbook_id") or DEFAULT_WORKBOOK_ID)
     return LazadaBillDetailQuery(
@@ -1191,8 +1185,8 @@ def run_lazada_bill_detail(
     page_actions: Any = None,
     image_uploader: Any = None,
 ) -> dict[str, Any]:
-    root = Path(query.output_root or Path.cwd() / "outputs")
-    run_dir = root / "lazada_bill_detail" / f"{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}"
+    root = Path(query.output_root or default_output_directories("lazada_bill_detail", query.country)["output_dir"])
+    run_dir = root / f"{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}"
     run_dir.mkdir(parents=True, exist_ok=True)
     log_file = run_dir / "run.log"
     result_file = run_dir / "result.json"

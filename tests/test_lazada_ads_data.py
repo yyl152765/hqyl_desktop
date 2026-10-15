@@ -199,6 +199,7 @@ class RunnerTests(unittest.TestCase):
             saved = json.loads(Path(result["output_file"]).read_text(encoding="utf-8"))
             self.assertEqual(saved, result)
             self.assertTrue(Path(result["log_file"]).exists())
+            self.assertEqual(Path(result["output_dir"]).parent, Path(directory))
             serialized = json.dumps(result) + Path(result["log_file"]).read_text(encoding="utf-8")
             for secret in (query.password, query.dingtalk_app_secret, query.dingtalk_app_key, query.dingtalk_user_id):
                 self.assertNotIn(secret, serialized)

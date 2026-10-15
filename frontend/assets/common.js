@@ -46,6 +46,7 @@ const HQYL = (() => {
       { id: "mabang_warehouse_permission", href: "mabang-warehouse-permission.html", name: "仓库权限开通", icon: "仓", tag: "权限", category: "通用工具", description: "批量添加员工仓库", keywords: "授权 仓储 员工权限" },
       { id: "mabang_developer_permission", href: "mabang-developer-permission.html", name: "批量添加开发员", icon: "开", tag: "权限", category: "通用工具", description: "员工岗位与商品查看设置", keywords: "授权 员工权限" },
       { id: "sku_inventory_query", href: "sku-inventory-query.html", name: "SKU库存与可售天数", icon: "存", tag: "库存", category: "通用工具", description: "库存明细与爆款旺款缺失仓库", keywords: "仓储 SKU仓库库存 开发员 爆款 旺款 东南亚 缺失仓库" },
+      { id: "lz_warehouse_inventory", href: "lz-warehouse-realtime-inventory.html", name: "lz各仓实时库存", icon: "存", tag: "库存", category: "通用工具", description: "多选仓库，每仓独立导出 Excel", keywords: "lz 实时库存 仓库多选 泰国 TH04 TH05 TH06 商品 库存查询" },
       { id: "purchase_log", href: "purchase-log.html", name: "SKU 采购日志", icon: "购", tag: "采购", category: "通用工具", description: "查询采购记录", keywords: "采购流程" },
     ] },
     { id: "ziniao", name: "紫鸟流程", icon: "Z", keywords: "紫鸟 ZIniao Superbrowser", items: [
@@ -797,6 +798,17 @@ const HQYL = (() => {
       tasks[tool] = task;
       return task;
     };
+    const previewScopedDirs = (tool, country = "") => {
+      const code = country || (tool === "lazada_ads_data" || tool === "lazada_bill_detail" ? "TH" : "");
+      const name = { TH: "泰国", PH: "菲律宾", MY: "马来西亚", ID: "印尼", VN: "越南" }[code] || "泰国";
+      const root = "C:\\Users\\Demo\\Desktop\\log";
+      const defaults = tool === "lazada_bill_detail"
+        ? { output_dir: `${root}\\Lazada${name}账单明细`, screenshot_root: `${root}\\Lazada${name}账单明细截图` }
+        : { output_dir: `${root}\\${tool === "lazada_ads_data" ? "lz泰国广告数据" : "lz各仓库存"}` };
+      let saved = {};
+      try { saved = JSON.parse(window.localStorage.getItem("hqyl.preview.scopedOutputDirs") || "{}")[`${tool}:${code}`] || {}; } catch (_error) { /* Keep independent defaults. */ }
+      return { ...defaults, ...saved };
+    };
     return {
       async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "0.2.72" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
       async get_latest_task_status(tool) { return tasks[tool] || { ok: false, empty: true }; },
@@ -822,6 +834,14 @@ const HQYL = (() => {
       async start_mabang_income_expense_report() { return startPreviewTask("mabang_income_expense_report", { target_count: 3, category_count: 0, warehouse_count: 3, csv_file_count: 3, record_count: 1286, output_files: ["C:\\Preview\\印尼雅仓海外仓_收支报表.csv", "C:\\Preview\\菲律宾雅仓海外仓_收支报表.csv", "C:\\Preview\\马来雅仓海外仓_收支报表.csv"], output_dir: "C:\\Preview\\马帮收支报表" }); },
       async start_purchase_log_query() { return startPreviewTask("purchase_log", { sku_count: 2, record_count: 8, output_file: "C:\\Preview\\采购.xlsx", output_dir: "C:\\Preview" }); },
       async start_mabang_arrival_query() { return startPreviewTask("mabang_arrival_query", { remark_count: 3, matched_remark_count: 2, matched_batch_count: 2, exported_batch_count: 2, unmatched_remarks: ["未命中示例备注"], output_file: "C:\\Preview\\到货查询\\到货查询_20260825_090000_第一车.xls", output_files: ["C:\\Preview\\到货查询\\到货查询_20260825_090000_第一车.xls", "C:\\Preview\\到货查询\\到货查询_20260825_090000_第二车.xls"], file_count: 2, output_dir: "C:\\Preview\\到货查询", output_root: "C:\\Preview", exports: [{ remark: "第一车", matched_batch_count: 1, output_file: "C:\\Preview\\到货查询\\到货查询_20260825_090000_第一车.xls" }, { remark: "第二车", matched_batch_count: 1, output_file: "C:\\Preview\\到货查询\\到货查询_20260825_090000_第二车.xls" }] }); },
+      async get_lz_warehouse_inventory_info() { return { ok: true, account_id: accounts.find((account) => account.vendor === "mabang")?.id || "", account_name: "预览马帮账号", output_dir: previewScopedDirs("lz_warehouse_inventory").output_dir, warehouses: ["泰国TH04仓", "泰国TH05仓", "泰国TH06仓"] }; },
+      async get_lz_warehouse_inventory_warehouses() { return { ok: true, warehouses: ["泰国TH04仓", "泰国TH05仓", "泰国TH06仓", "菲律宾PH01仓"].map((name, index) => ({ id: `preview-${index}`, name })) }; },
+      async start_lz_warehouse_inventory(payload = {}) {
+        const columns = ["库存SKU", "仓库", "可用库存量"];
+        const exports = (payload.warehouse_names || []).map((name, index) => ({ warehouse_name: name, output_file: `C:/Preview/lz各仓实时库存_${name}.xlsx`, record_count: 1, source_record_count: 1, export_page_count: 1, preview_columns: columns, rows: [{ "库存SKU": `SKU-${index + 1}`, "仓库": name, "可用库存量": (index + 1) * 10 }] }));
+        const files = exports.map((item) => item.output_file);
+        return startPreviewTask("lz_warehouse_inventory", { output_file: files[0] || "", output_files: files, output_dir: "C:/Preview", output_root: "C:/Preview", record_count: exports.length, source_record_count: exports.length, export_page_count: exports.length, warehouse_count: exports.length, selected_warehouse_count: exports.length, warehouse_counts: Object.fromEntries(exports.map((item) => [item.warehouse_name, item.record_count])), preview_columns: columns, rows: exports.flatMap((item) => item.rows), exports, failures: [], is_complete: true, completion_message: "所选仓库均已导出", preview_limit: 100, preview_truncated: false });
+      },
       async get_sku_inventory_developers() { return { ok: true, developer_count: 3, developers: [{ id: "101", name: "张三-开发" }, { id: "102", name: "李四-欧美开发" }, { id: "103", name: "王五-开发" }] }; },
       async start_sku_inventory_query(payload = {}) {
         if (payload.query_mode === "missing_warehouses") {
@@ -945,7 +965,7 @@ const HQYL = (() => {
           default_target_date: `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`,
           saved_preferences: { client_path: preferences.client_path || "", workbook_id: preferences.workbook_id || "" },
           workbook_id: preferences.workbook_id || "preview-lazada-workbook", operator_names: ["王小妹"], dingtalk_configured: true,
-          client_path: preferences.client_path || "C:\\Program Files\\Ziniao\\ziniao.exe", webdriver_path: "C:\\ziniaodriver", output_dir: "C:\\Preview",
+          client_path: preferences.client_path || "C:\\Program Files\\Ziniao\\ziniao.exe", webdriver_path: "C:\\ziniaodriver", ...previewScopedDirs("lazada_ads_data", "TH"),
         };
       },
       async save_lazada_ads_preferences(payload) {
@@ -1011,13 +1031,12 @@ const HQYL = (() => {
             { code: "MY", name: "马来西亚", currency: "(?:RM|MYR)", default_workbook_id: "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l", default_dws_node: "" },
             { code: "ID", name: "印尼", currency: "(?:Rp|IDR)", default_workbook_id: "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l", default_dws_node: "" },
             { code: "VN", name: "越南", currency: "(?:₫|VND)", default_workbook_id: "pLdn55X2E5o4yno8", default_dws_node: "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l" },
-          ],
+          ].map((item) => ({ ...item, ...previewScopedDirs("lazada_bill_detail", item.code) })),
           default_sheet_name: `${String(now.getFullYear()).slice(-2)}年${now.getMonth() + 1}月`,
           date_range: { start_date: iso(previousMonthStart), end_date: iso(previousMonthEnd) },
           workbook_id: preferences.workbook_id || "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l",
           dws_node: "", image_column: "F",
-          output_dir: "C:\\Preview", screenshot_root: preferences.screenshot_root || "C:\\Users\\Demo\\Desktop\\log",
-          screenshot_dir: preferences.screenshot_root || "C:\\Users\\Demo\\Desktop\\log",
+          ...previewScopedDirs("lazada_bill_detail", "TH"),
           // 预览模式：加 ?dws=0 可以演示「未安装 dws」的告警状态。
           ...(() => {
             const previewDws = new URLSearchParams(location.search).get("dws") !== "0";
@@ -1067,8 +1086,8 @@ const HQYL = (() => {
           country: payload.country, country_name: { TH: "泰国", PH: "菲律宾", MY: "马来西亚", ID: "印尼", VN: "越南" }[payload.country] || payload.country,
           sheet_name: sheetName, start_date: payload.start_date, end_date: payload.end_date,
           workbook_id: payload.workbook_id || "np9zOoBVBYnBP2eXsnOjR5qaW1DK0g6l",
-          screenshot_root: payload.screenshot_root || "C:\\Users\\Demo\\Desktop\\log",
-          screenshot_dir: `${payload.screenshot_root || "C:\\Users\\Demo\\Desktop\\log"}\\Lazada${{ TH: "泰国", PH: "菲律宾", MY: "马来西亚", ID: "印尼", VN: "越南" }[payload.country] || payload.country}账单明细截图\\${payload.start_date}到${payload.end_date}`,
+          screenshot_root: payload.screenshot_root || previewScopedDirs("lazada_bill_detail", payload.country).screenshot_root,
+          screenshot_dir: `${payload.screenshot_root || previewScopedDirs("lazada_bill_detail", payload.country).screenshot_root}\\${payload.start_date}到${payload.end_date}`,
           image_sync_note: "演示模式：未上传钉钉 F 列图片，截图仅本地保存",
           input_store_count: stores.length, matched_store_count: stores.length, success_store_count: stores.length,
           skipped_store_count: 0, failed_store_count: 0, image_uploaded_count: 0, image_failed_count: 0, image_local_only_count: stores.length,
@@ -1143,6 +1162,23 @@ const HQYL = (() => {
       async save_settings(payload) { return { ok: true, settings: payload }; },
       async query_captcha_balance() { return { ok: true, data: { balance: "88.50" } }; },
       async choose_output_dir() { return { ok: true, path: "C:\\Users\\Demo\\Desktop" }; },
+      async choose_scoped_output_dir(payload) { const paths = previewScopedDirs(payload.tool, payload.country); return { ok: true, path: payload.current_dir || (payload.kind === "screenshot" ? paths.screenshot_root : paths.output_dir) }; },
+      async save_scoped_output_dirs(payload) {
+        try {
+          const stored = JSON.parse(window.localStorage.getItem("hqyl.preview.scopedOutputDirs") || "{}");
+          const country = payload.country || (payload.tool === "lazada_ads_data" || payload.tool === "lazada_bill_detail" ? "TH" : "");
+          const key = `${payload.tool}:${country}`;
+          stored[key] = { ...(stored[key] || {}) };
+          for (const field of ["output_dir", "screenshot_root"]) {
+            if (!Object.prototype.hasOwnProperty.call(payload, field)) continue;
+            const value = String(payload[field] || "").trim();
+            if (value) stored[key][field] = value;
+            else delete stored[key][field];
+          }
+          window.localStorage.setItem("hqyl.preview.scopedOutputDirs", JSON.stringify(stored));
+          return { ok: true };
+        } catch (error) { return { ok: false, error: error.message || "目录保存失败" }; }
+      },
       async get_kec_reconciliation_info() { return { ok: true, settings: {}, account_state: accountState(), basis: "实际体积（长 × 宽 × 高 × 数量 × 0.000001）" }; },
       async inspect_kec_reconciliation_source(payload) {
         if (!payload || !payload.input_file) return { ok: false, error: "请选择 KEC 账单 Excel" };

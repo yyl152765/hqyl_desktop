@@ -10,6 +10,36 @@
   let preferenceSaveQueue = Promise.resolve(true);
   let pendingPreferenceSaves = 0;
   let startingCollection = false;
+  let outputSaveQueue = Promise.resolve(true);
+  let savedOutputDir = "";
+  let outputRevision = 0;
+
+  function saveOutputDir(force = false) {
+    const value = $("lazadaAdsOutputDir").value.trim();
+    const operation = outputSaveQueue.then(async () => {
+      if (!force && value === savedOutputDir) return true;
+      try {
+        const result = await HQYL.api().save_scoped_output_dirs({ tool: "lazada_ads_data", country: "TH", output_dir: value });
+        if (!result.ok) throw new Error(result.error || "输出目录保存失败");
+        savedOutputDir = value;
+        return true;
+      } catch (error) { HQYL.showToast(error.message || String(error)); return false; }
+    });
+    outputSaveQueue = operation;
+    return operation;
+  }
+
+  async function chooseOutputDir() {
+    const revision = outputRevision;
+    try {
+      const result = await HQYL.api().choose_scoped_output_dir({ tool: "lazada_ads_data", country: "TH", kind: "output", current_dir: $("lazadaAdsOutputDir").value.trim() });
+      if (!result.ok) { if (!result.cancelled) throw new Error(result.error || "选择输出目录失败"); return; }
+      if (revision !== outputRevision) { await saveOutputDir(true); return; }
+      $("lazadaAdsOutputDir").value = result.path || "";
+      outputRevision += 1;
+      await saveOutputDir();
+    } catch (error) { HQYL.showToast(error.message || String(error)); }
+  }
 
   function preferenceValue(key) {
     const value = $(preferenceFields[key]).value.trim();
@@ -110,7 +140,7 @@
     startingCollection = true;
     page.setRunning(true);
     try {
-      if (!await savePreferences()) { page.setRunning(false); return; }
+      if (!await savePreferences() || !await saveOutputDir()) { page.setRunning(false); return; }
       await HQYL.startTask(() => {
         HQYL.appendLog(`准备采集 ${payload.target_date || "昨天"} 的泰国 Lazada 广告费与业绩，指定 Sheet：${payload.sheet_name || "昨天所在月份"}`);
         HQYL.appendLog(`店铺数量：${payload.store_names.length}`);
@@ -123,9 +153,12 @@
 
   async function refreshInfo(showMessage = true) {
     const revisions = { ...preferenceRevisions };
+    const directoryRevision = outputRevision;
     try {
       if (showMessage && !await savePreferences()) return;
+      if (showMessage && !await saveOutputDir()) return;
       await preferenceSaveQueue;
+      await outputSaveQueue;
       const result = await HQYL.api().get_lazada_ads_data_info();
       if (!result.ok) throw new Error(result.error || "默认配置加载失败");
       const runtime = result.runtime || result;
@@ -142,7 +175,10 @@
       });
       renderPreferenceStatus();
       $("lazadaAdsWindowMode").value = "normal";
-      if (result.output_dir) $("lazadaAdsOutputDir").value = result.output_dir;
+      if (directoryRevision === outputRevision) {
+        $("lazadaAdsOutputDir").value = result.output_dir || "";
+        savedOutputDir = result.output_dir || "";
+      }
       if (result.default_dingtalk_operator_name) $("lazadaAdsOperatorName").value = result.default_dingtalk_operator_name;
       renderOperators(result.operator_names || operatorNames);
       if (showMessage) HQYL.showToast("已恢复默认配置，Sheet 留空使用昨天所在月份，日期留空使用昨天");
@@ -222,7 +258,6 @@
       const today = new Date();
       const pad = (value) => String(value).padStart(2, "0");
       $("lazadaAdsTargetDate").max = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
-      $("lazadaAdsOutputDir").value = (info.settings || {}).output_dir || "";
       renderOperators(((info.settings || {}).dingtalk || {}).operator_names || []);
       Object.entries(preferenceFields).forEach(([key, id]) => {
         $(id).addEventListener("input", () => {
@@ -238,7 +273,9 @@
       $("lazadaAdsStores").addEventListener("input", updateStoreCount);
       $("lazadaAdsRefreshBtn").addEventListener("click", () => refreshInfo(true));
       $("lazadaAdsChooseClientBtn").addEventListener("click", () => choosePath("choose_client_path", "lazadaAdsClientPath", "选择客户端失败"));
-      $("lazadaAdsChooseOutputBtn").addEventListener("click", () => choosePath("choose_output_dir", "lazadaAdsOutputDir", "选择输出目录失败", true));
+      $("lazadaAdsOutputDir").addEventListener("input", () => { outputRevision += 1; });
+      $("lazadaAdsOutputDir").addEventListener("change", () => saveOutputDir());
+      $("lazadaAdsChooseOutputBtn").addEventListener("click", chooseOutputDir);
       $("lazadaAdsOpenOutputBtn").addEventListener("click", () => HQYL.openOutput(resultOutputDir || $("lazadaAdsOutputDir").value));
       updateStoreCount();
     },

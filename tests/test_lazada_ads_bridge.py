@@ -32,7 +32,12 @@ class LazadaAdsBridgeTests(unittest.TestCase):
                 users=[DingTalkUserBinding("操作人甲", "fixture-user-a")],
             ),
         )
-        config = SimpleNamespace(load=lambda: self.settings, local_data_dir=self.root)
+        self.output_root = str(self.root / "desktop" / "log" / "lz泰国广告数据")
+        patch.object(config_store, "desktop_path", return_value=self.root / "desktop").start()
+        def save(settings):
+            self.settings.tool_output_dirs.update(settings.get("tool_output_dirs", {}))
+            return self.settings
+        config = SimpleNamespace(load=lambda: self.settings, save=save, local_data_dir=self.root)
         with patch.object(app_bridge, "ConfigStore", return_value=config):
             self.bridge = AppBridge()
         self.bridge.tasks = Mock()
@@ -66,7 +71,7 @@ class LazadaAdsBridgeTests(unittest.TestCase):
         self.assertEqual(result["operator_names"], ["操作人甲"])
         self.assertEqual(result["workbook_id"], service.DEFAULT_WORKBOOK_ID)
         self.assertTrue(result["dingtalk_configured"])
-        self.assertEqual(result["output_dir"], str(self.root))
+        self.assertEqual(result["output_dir"], self.output_root)
         self.assertEqual(result["client_path"], "fixture-client")
         self.assertEqual(result["webdriver_path"], "fixture-driver")
         self.assert_no_credentials(result)
@@ -103,7 +108,7 @@ class LazadaAdsBridgeTests(unittest.TestCase):
         self.assertEqual(call.kwargs["tool"], "lazada_ads_data")
         self.assertEqual(call.kwargs["context"], {
             "account_id": self.other.id, "sheet_name": "26年1月", "target_date": "2026-01-02",
-            "store_count": 2, "output_root": str(self.root),
+            "store_count": 2, "output_root": self.output_root,
         })
         self.assert_no_credentials(call.kwargs["context"])
         progress = Mock()
@@ -116,7 +121,7 @@ class LazadaAdsBridgeTests(unittest.TestCase):
         self.assertEqual(tuple(job.store_names), ("店铺 A", "店铺 B"))
         self.assertEqual(job.sheet_name, "26年1月")
         self.assertEqual(str(job.target_date), "2026-01-02")
-        self.assertEqual(str(job.output_root), str(self.root))
+        self.assertEqual(str(job.output_root), self.output_root)
         self.network.assert_not_called()
 
     def test_one_operator_is_selected_automatically_and_active_account_is_used(self) -> None:

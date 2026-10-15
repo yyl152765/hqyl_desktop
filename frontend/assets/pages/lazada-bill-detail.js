@@ -8,17 +8,19 @@
   let defaultSheetName = "";
   let preferredSheetName = "";
   let loadingSheets = false;
-  const savedPreferences = { client_path: "", screenshot_root: "", workbook_id: "" };
+  const savedPreferences = { client_path: "", workbook_id: "" };
   const preferenceErrors = {};
   const PREFERENCE_TARGETS = {
     client_path: { id: "lazadaBillClientPath", saved: () => savedPreferences.client_path || "" },
-    screenshot_root: { id: "lazadaBillScreenshotDir", saved: () => savedPreferences.screenshot_root || "" },
     workbook_id: { id: "lazadaBillWorkbookId", saved: () => savedPreferences.workbook_id || defaultWorkbookId },
   };
-  const preferenceRevisions = { client_path: 0, screenshot_root: 0, workbook_id: 0 };
+  const preferenceRevisions = { client_path: 0, workbook_id: 0 };
   let preferenceSaveQueue = Promise.resolve(true);
   let pendingPreferenceSaves = 0;
   let startingCollection = false;
+  let directorySaveQueue = Promise.resolve(true);
+  const directoryDirty = new Map();
+  const directoryRevisions = {};
 
   const todayIso = () => {
     const now = new Date();
@@ -32,6 +34,67 @@
 
   function countryProfile(code = currentCountry()) {
     return countryProfiles[code] || {};
+  }
+
+  function markDirectoryEdited(field) {
+    const country = currentCountry();
+    const id = field === "output_dir" ? "lazadaBillOutputDir" : "lazadaBillScreenshotDir";
+    countryProfile(country)[field] = $(id).value.trim();
+    if (!directoryDirty.has(country)) directoryDirty.set(country, new Set());
+    directoryDirty.get(country).add(field);
+    const key = `${country}:${field}`;
+    directoryRevisions[key] = (directoryRevisions[key] || 0) + 1;
+    if (field === "screenshot_root") renderScreenshotHint();
+  }
+
+  function saveCountryDirectories(country = currentCountry()) {
+    const dirty = directoryDirty.get(country);
+    if (!country || !dirty?.size) return directorySaveQueue;
+    const snapshot = Object.fromEntries(Array.from(dirty).map((field) => [field, countryProfile(country)[field] || ""]));
+    dirty.clear();
+    const operation = directorySaveQueue.then(async () => {
+      try {
+        const result = await HQYL.api().save_scoped_output_dirs({ tool: "lazada_bill_detail", country, ...snapshot });
+        if (!result.ok) throw new Error(result.error || "目录保存失败");
+        return true;
+      } catch (error) {
+        if (!directoryDirty.has(country)) directoryDirty.set(country, new Set());
+        Object.keys(snapshot).forEach((field) => directoryDirty.get(country).add(field));
+        HQYL.showToast(`${countryProfile(country).name || country}目录保存失败：${error.message || error}`);
+        return false;
+      }
+    });
+    directorySaveQueue = operation;
+    return operation;
+  }
+
+  function applyCountryDirectories() {
+    $("lazadaBillOutputDir").value = countryProfile().output_dir || "";
+    $("lazadaBillScreenshotDir").value = countryProfile().screenshot_root || "";
+    renderScreenshotHint();
+  }
+
+  async function chooseDirectory(kind) {
+    const country = currentCountry();
+    const field = kind === "screenshot" ? "screenshot_root" : "output_dir";
+    const key = `${country}:${field}`;
+    const revision = directoryRevisions[key] || 0;
+    try {
+      const result = await HQYL.api().choose_scoped_output_dir({ tool: "lazada_bill_detail", country, kind, current_dir: countryProfile(country)[field] || "" });
+      if (!result.ok) { if (!result.cancelled) throw new Error(result.error || "选择目录失败"); return; }
+      if (revision !== (directoryRevisions[key] || 0)) {
+        if (!directoryDirty.has(country)) directoryDirty.set(country, new Set());
+        directoryDirty.get(country).add(field);
+        await saveCountryDirectories(country);
+        return;
+      }
+      countryProfile(country)[field] = result.path || "";
+      directoryRevisions[key] = revision + 1;
+      if (!directoryDirty.has(country)) directoryDirty.set(country, new Set());
+      directoryDirty.get(country).add(field);
+      if (currentCountry() === country) applyCountryDirectories();
+      await saveCountryDirectories(country);
+    } catch (error) { HQYL.showToast(error.message || String(error)); }
   }
 
   function workbookIdValue() {
@@ -48,9 +111,9 @@
     const dirty = Object.keys(PREFERENCE_TARGETS).some((key) => preferenceValue(key) !== PREFERENCE_TARGETS[key].saved());
     hint.classList.toggle("error-text", errors.length > 0);
     hint.textContent = errors.length ? `保存失败：${errors[0]}。请修改后重试，或再次点击开始采集。`
-      : pendingPreferenceSaves ? "正在保存钉钉文档、客户端路径和截图目录…"
+      : pendingPreferenceSaves ? "正在保存钉钉文档和客户端路径…"
       : dirty ? "配置已修改，离开输入框后自动保存。"
-      : "钉钉文档 ID、客户端路径和截图根目录已保存，下次打开自动使用。";
+      : "钉钉文档 ID 和客户端路径已保存；输出及截图目录按国家独立保存。";
   }
 
   let dwsAvailable = true;
@@ -72,12 +135,11 @@
 
   function renderScreenshotHint() {
     const root = $("lazadaBillScreenshotDir").value.trim();
-    const name = countryProfile().name;
     const start = $("lazadaBillStartDate").value;
     const end = $("lazadaBillEndDate").value;
-    $("lazadaBillScreenshotHint").textContent = root && name && start && end
-      ? `本次截图保存目录：${root}\\Lazada${name}账单明细截图\\${start}到${end}`
-      : "本次截图保存目录：按「国家 + 账单区间」在截图根目录下自动创建";
+    $("lazadaBillScreenshotHint").textContent = root && start && end
+      ? `本次截图保存目录：${root.replace(/[\\/]+$/, "")}\\${start}到${end}`
+      : "本次截图保存目录：在当前国家的截图目录下按账单区间自动创建";
   }
 
   function persistDefaultWorkbook() {
@@ -241,7 +303,7 @@
     startingCollection = true;
     page.setRunning(true);
     try {
-      if (!await savePreferences()) { page.setRunning(false); return; }
+      if (!await savePreferences() || !await saveCountryDirectories()) { page.setRunning(false); return; }
       await HQYL.startTask(() => {
         HQYL.appendLog(`准备采集 ${payload.country} ${payload.start_date} 至 ${payload.end_date} 的后台收支数据，指定 Sheet：${payload.sheet_name || defaultSheetName || "当前月份"}`);
         HQYL.appendLog(`店铺数量：${payload.store_names.length}，钉钉文档：${payload.workbook_id}`);
@@ -255,13 +317,24 @@
 
   async function refreshInfo(showMessage = true) {
     const revisions = { ...preferenceRevisions };
+    const pathRevisions = { ...directoryRevisions };
     try {
       if (showMessage && !await savePreferences()) return;
+      if (showMessage && !await saveCountryDirectories()) return;
       await preferenceSaveQueue;
+      await directorySaveQueue;
       const result = await HQYL.api().get_lazada_bill_detail_info();
       if (!result.ok) throw new Error(result.error || "默认配置加载失败");
       const runtime = result.runtime || result;
-      countryProfiles = Object.fromEntries((result.countries || []).map((item) => [item.code, item]));
+      const previousProfiles = countryProfiles;
+      countryProfiles = Object.fromEntries((result.countries || []).map((item) => {
+        const profile = { ...item };
+        ["output_dir", "screenshot_root"].forEach((field) => {
+          const key = `${item.code}:${field}`;
+          if ((directoryRevisions[key] || 0) !== (pathRevisions[key] || 0)) profile[field] = previousProfiles[item.code]?.[field] || "";
+        });
+        return [item.code, profile];
+      }));
       defaultWorkbookId = result.workbook_id || defaultWorkbookId;
       defaultSheetName = result.default_sheet_name || defaultSheetName;
       // 运行前就提示 F 列图片能不能写入：dws 缺失时不阻塞任务，但必须让用户看见。
@@ -289,11 +362,6 @@
         savedPreferences.client_path = runtime.client_path || "";
         delete preferenceErrors.client_path;
       }
-      if (preferenceRevisions.screenshot_root === revisions.screenshot_root) {
-        $("lazadaBillScreenshotDir").value = runtime.screenshot_root || runtime.screenshot_dir || "";
-        savedPreferences.screenshot_root = runtime.screenshot_root || runtime.screenshot_dir || "";
-        delete preferenceErrors.screenshot_root;
-      }
       if (preferenceRevisions.workbook_id === revisions.workbook_id) {
         defaultWorkbookId = result.workbook_id || defaultWorkbookId;
         savedPreferences.workbook_id = defaultWorkbookId;
@@ -303,9 +371,8 @@
       persistDefaultWorkbook();
       renderPreferenceStatus();
       renderImageHint();
-      renderScreenshotHint();
+      applyCountryDirectories();
       $("lazadaBillWindowMode").value = "normal";
-      if (result.output_dir) $("lazadaBillOutputDir").value = result.output_dir;
       if (result.default_dingtalk_operator_name && !$("lazadaBillOperatorName").value) {
         $("lazadaBillOperatorName").value = result.default_dingtalk_operator_name;
       }
@@ -394,7 +461,6 @@
     title: "Lazada 后台收支数据",
     async init(info) {
       $("lazadaBillEndDate").max = todayIso();
-      $("lazadaBillOutputDir").value = (info.settings || {}).output_dir || "";
       renderOperators(((info.settings || {}).dingtalk || {}).operator_names || []);
       Object.entries(PREFERENCE_TARGETS).forEach(([key, target]) => {
         $(target.id).addEventListener("input", () => {
@@ -403,18 +469,22 @@
           renderPreferenceStatus();
         });
         $(target.id).addEventListener("change", () => {
-          if (key === "screenshot_root") renderScreenshotHint();
           if (key === "workbook_id") renderImageHint();
           savePreferences([key]);
           if (key === "workbook_id") loadSheets(false);
         });
       });
       $("lazadaBillCountry").addEventListener("change", () => {
+        if (activeCountry) saveCountryDirectories(activeCountry);
         activeCountry = currentCountry();
         preferredSheetName = "";
         renderPreferenceStatus();
-        renderScreenshotHint();
+        applyCountryDirectories();
         loadSheets(false);
+      });
+      [["output_dir", "lazadaBillOutputDir"], ["screenshot_root", "lazadaBillScreenshotDir"]].forEach(([field, id]) => {
+        $(id).addEventListener("input", () => markDirectoryEdited(field));
+        $(id).addEventListener("change", () => saveCountryDirectories());
       });
       await refreshInfo(false);
       $("lazadaBillForm").addEventListener("submit", (event) => { event.preventDefault(); runCollection(); });
@@ -424,8 +494,8 @@
       $("lazadaBillRefreshBtn").addEventListener("click", () => refreshInfo(true));
       $("lazadaBillRefreshSheetsBtn").addEventListener("click", () => loadSheets(true));
       $("lazadaBillChooseClientBtn").addEventListener("click", () => choosePath("choose_client_path", "lazadaBillClientPath", "选择客户端失败"));
-      $("lazadaBillChooseScreenshotBtn").addEventListener("click", () => choosePath("choose_output_dir", "lazadaBillScreenshotDir", "选择截图保存位置失败", true));
-      $("lazadaBillChooseOutputBtn").addEventListener("click", () => choosePath("choose_output_dir", "lazadaBillOutputDir", "选择输出目录失败", true));
+      $("lazadaBillChooseScreenshotBtn").addEventListener("click", () => chooseDirectory("screenshot"));
+      $("lazadaBillChooseOutputBtn").addEventListener("click", () => chooseDirectory("output"));
       $("lazadaBillOpenOutputBtn").addEventListener("click", () => HQYL.openOutput(resultOutputDir || $("lazadaBillOutputDir").value));
       updateStoreCount();
     },
@@ -456,9 +526,10 @@
       $("failedCount").textContent = `失败 ${result.failed_store_count ?? failed} / 跳过 ${result.skipped_store_count ?? skipped}`;
       const imageNote = result.image_sync_note
         || `F 列图片：上传 ${result.image_uploaded_count ?? 0}，失败 ${result.image_failed_count ?? 0}，仅本地 ${result.image_local_only_count ?? 0}`;
-      $("lazadaBillScreenshotHint").textContent = result.screenshot_dir
-        ? `本次截图保存目录：${result.screenshot_dir}`
-        : "本次截图保存目录：按「国家 + 账单区间」在截图根目录下自动创建";
+      renderScreenshotHint();
+      $("lazadaBillScreenshotSummary").textContent = result.screenshot_dir
+        ? `本次结果截图：${result.screenshot_dir}；钉钉截图写入 F 列`
+        : "截图按国家与账单区间保存；钉钉截图写入 F 列";
       $("lazadaBillImageHint").textContent = result.workbook_id
         ? `钉钉截图写入：${result.workbook_id} 的 F 列（不会写入 A～E 列）；${imageNote}`
         : `钉钉截图写入同一文档的 F 列（不会写入 A～E 列）；${imageNote}`;

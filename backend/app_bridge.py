@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from backend.config_store import AppSettings, BoundAccount, ConfigStore, default_date_range
+from backend.output_paths import directory_scope_key, resolve_output_directories
 from backend.sidebar_preferences import SidebarPreferencesStore
 from backend.services.kec_reconciliation import (
     inspect_kec_source_workbook,
@@ -34,6 +35,12 @@ from backend.services.mabang_income_expense_report import (
 from backend.services.mabang_arrival_query import (
     run_mabang_arrival_query,
     validate_arrival_query_payload,
+)
+from backend.services.lz_warehouse_inventory import (
+    TARGET_WAREHOUSE_NAMES as LZ_INVENTORY_WAREHOUSES,
+    fetch_lz_inventory_warehouses,
+    run_lz_inventory_export,
+    validate_lz_inventory_payload,
 )
 from backend.services.captcha_service import query_ttshitu_account_info
 from backend.services.purchase_log import run_purchase_log_query, validate_query_payload
@@ -154,6 +161,7 @@ from backend.update_service import (
 
 APP_VERSION = "0.2.72"
 APP_NAME = "寰球云联自动化平台"
+LZ_INVENTORY_ACCOUNT_USERNAME = "15587701966"
 
 
 class AppBridge:
@@ -232,6 +240,13 @@ class AppBridge:
                     "key": "sku_inventory_query",
                     "name": "SKU库存与可售天数查询",
                     "description": "按开发人员和SKU创建时间查询所有仓库有库存、未发货或在途的明细。",
+                    "status": "ready",
+                    "vendor": "mabang",
+                },
+                {
+                    "key": "lz_warehouse_inventory",
+                    "name": "lz各仓实时库存",
+                    "description": "多选账号有权限的仓库，每仓独立导出 Excel，仓内全部分页自动合并。",
                     "status": "ready",
                     "vendor": "mabang",
                 },
@@ -495,6 +510,50 @@ class AppBridge:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    def save_scoped_output_dirs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            if not isinstance(payload, dict):
+                raise ValueError("保存内容必须是对象")
+            tool = str(payload.get("tool") or "").strip()
+            country = str(payload.get("country") or "TH").strip()
+            updates = {}
+            # Validate every requested field before writing any preference.
+            directory_scope_key(tool, country)
+            for field, kind in (("output_dir", "output"), ("screenshot_root", "screenshot")):
+                if field in payload:
+                    key = directory_scope_key(tool, country, kind)
+                    value = payload.get(field)
+                    if value is not None and not isinstance(value, str):
+                        raise ValueError("目录必须是文本路径")
+                    updates[key] = str(value or "").strip().strip('"')
+            settings = self.config_store.save({"tool_output_dirs": updates}) if updates else self.config_store.load()
+            return {"ok": True, **resolve_output_directories(settings, tool, country)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def choose_scoped_output_dir(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            if not isinstance(payload, dict):
+                raise ValueError("目录选择参数必须是对象")
+            # Capture the scope before the native dialog opens.
+            tool = str(payload.get("tool") or "").strip()
+            country = str(payload.get("country") or "TH").strip()
+            kind = str(payload.get("kind") or "output").strip()
+            directory_scope_key(tool, country, kind)
+            field = "screenshot_root" if kind == "screenshot" else "output_dir"
+            directories = resolve_output_directories(self.config_store.load(), tool, country)
+            current_dir = str(payload.get("current_dir") or directories[field]).strip()
+            import webview
+
+            result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG, directory=current_dir or None)
+            if not result:
+                return {"ok": False, "cancelled": True}
+            selected = result[0] if isinstance(result, (list, tuple)) else result
+            saved = self.save_scoped_output_dirs({"tool": tool, "country": country, field: str(selected)})
+            return {**saved, "path": str(selected)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def start_purchase_log_query(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             request_payload = self._payload_with_account(payload, "mabang")
@@ -564,6 +623,103 @@ class AppBridge:
                 "output_root": str(job.output_dir),
             },
         )
+
+    def _lz_inventory_account(self) -> BoundAccount:
+        settings = self.config_store.load()
+        account = next(
+            (item for item in settings.accounts
+             if item.vendor == "mabang" and item.username.strip() == LZ_INVENTORY_ACCOUNT_USERNAME),
+            None,
+        )
+        if account is None:
+            raise AccountRequiredError("mabang", "请先绑定 lz各仓实时库存指定的马帮账号")
+        return account
+
+    def get_lz_warehouse_inventory_info(self) -> dict[str, Any]:
+        try:
+            account = self._lz_inventory_account()
+            return {
+                "ok": True,
+                "account_id": account.id,
+                "account_name": account.name,
+                "warehouses": list(LZ_INVENTORY_WAREHOUSES),
+                **resolve_output_directories(self.config_store.load(), "lz_warehouse_inventory"),
+            }
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def start_lz_warehouse_inventory(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            account = self._lz_inventory_account()
+            request_payload = {
+                **dict(payload or {}),
+                "account_id": account.id,
+                "username": account.username,
+                "password": account.password,
+            }
+            directories = resolve_output_directories(self.config_store.load(), "lz_warehouse_inventory")
+            if not str(request_payload.get("output_dir") or "").strip():
+                request_payload["output_dir"] = directories["output_dir"]
+            job = validate_lz_inventory_payload(request_payload)
+            self.config_store.save({"tool_output_dirs": {directory_scope_key("lz_warehouse_inventory"): str(job.output_dir)}})
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+        def runner(progress):
+            result = run_lz_inventory_export(job, progress)
+            rows = list(result.preview_rows[:100])
+            return {
+                "output_file": str(result.output_file) if result.output_file else "",
+                "output_files": [str(path) for path in result.output_files],
+                "output_dir": str(job.output_dir),
+                "output_root": str(job.output_dir),
+                "record_count": result.record_count,
+                "source_record_count": result.source_record_count,
+                "export_page_count": result.export_page_count,
+                "warehouse_counts": dict(result.warehouse_counts),
+                "warehouse_count": len(result.warehouse_counts),
+                "selected_warehouse_count": len(job.warehouse_names),
+                "preview_columns": list(result.preview_columns),
+                "rows": rows,
+                "preview_limit": 100,
+                "preview_truncated": result.record_count > len(rows),
+                "exports": [
+                    {
+                        "warehouse_name": item.warehouse_name,
+                        "output_file": str(item.output_file),
+                        "record_count": item.record_count,
+                        "source_record_count": item.source_record_count,
+                        "export_page_count": item.export_page_count,
+                        "preview_columns": list(item.preview_columns),
+                        "rows": list(item.preview_rows[:100]),
+                    }
+                    for item in result.exports
+                ],
+                "failures": [dict(item) for item in result.failures],
+                "is_complete": result.is_complete,
+                "completion_message": result.completion_message,
+            }
+
+        return self.tasks.start(
+            "lz各仓实时库存",
+            runner,
+            tool="lz_warehouse_inventory",
+            context={"account_id": account.id, "output_root": str(job.output_dir), "warehouse_names": list(job.warehouse_names)},
+        )
+
+    def get_lz_warehouse_inventory_warehouses(self) -> dict[str, Any]:
+        try:
+            account = self._lz_inventory_account()
+            warehouses = fetch_lz_inventory_warehouses(account.username, account.password)
+            return {"ok": True, "warehouses": [dict(item) for item in warehouses]}
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def get_sku_inventory_developers(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
@@ -1469,7 +1625,7 @@ class AppBridge:
                 },
                 "operator_names": [binding.name for binding in settings.dingtalk.users],
                 "dingtalk_configured": bool(settings.dingtalk.app_key and settings.dingtalk.app_secret),
-                "output_dir": settings.output_dir,
+                **resolve_output_directories(settings, "lazada_ads_data"),
                 "client_path": settings.lazada_ads_client_path or paths.get("client_path", ""),
                 "webdriver_path": paths.get("webdriver_path", ""),
             }
@@ -1576,7 +1732,7 @@ class AppBridge:
             self._campaign_operation_lock.release()
             return {"ok": False, "error": "表格处理任务启动失败，请稍后重试"}
 
-    def get_lazada_bill_detail_info(self) -> dict[str, Any]:
+    def get_lazada_bill_detail_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         """返回账单明细页的国家选项、默认 Sheet/区间与已保存偏好。"""
         try:
             settings = self.config_store.load()
@@ -1584,9 +1740,16 @@ class AppBridge:
                 paths = resolve_lazada_monthly_report_runtime_paths()
             except RuntimeError:
                 paths = {}
+            countries = lazada_bill_detail.country_options()
+            directory_preferences = {
+                item["code"]: resolve_output_directories(settings, "lazada_bill_detail", item["code"])
+                for item in countries
+            }
+            country = lazada_bill_detail.resolve_country((payload or {}).get("country") or "TH").code
             return {
                 "ok": True,
-                "countries": lazada_bill_detail.country_options(),
+                "countries": [{**item, **directory_preferences[item["code"]]} for item in countries],
+                "directory_preferences": directory_preferences,
                 "default_sheet_name": lazada_bill_detail.default_sheet_name(),
                 "date_range": lazada_bill_detail.previous_month_range(),
                 "workbook_id": settings.lazada_bill_workbook_id
@@ -1599,9 +1762,7 @@ class AppBridge:
                 "dws_hint": (
                     "" if lazada_bill_detail.dws_available() else lazada_bill_detail.DWS_MISSING_HINT
                 ),
-                "output_dir": settings.output_dir,
-                "screenshot_root": settings.lazada_bill_screenshot_dir
-                or lazada_bill_detail.default_screenshot_root(),
+                **directory_preferences[country],
                 "operator_names": [binding.name for binding in settings.dingtalk.users],
                 "default_dingtalk_operator_name": (
                     settings.dingtalk.users[0].name if len(settings.dingtalk.users) == 1 else ""
@@ -1616,7 +1777,7 @@ class AppBridge:
             return {"ok": False, "error": str(exc)}
 
     def save_lazada_bill_preferences(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """保存账单明细页的共用钉钉文档、图片节点、客户端路径与截图根目录。"""
+        """保存共用文档和客户端偏好；截图目录仅属于指定国家。"""
         try:
             if not isinstance(payload, dict):
                 raise ValueError("保存内容必须是对象")
@@ -1626,11 +1787,12 @@ class AppBridge:
                     str(payload.get("client_path") or "").strip().strip('"')
                 )
             if "screenshot_root" in payload or "screenshot_dir" in payload:
-                preferences["lazada_bill_screenshot_dir"] = (
-                    str(payload.get("screenshot_root", payload.get("screenshot_dir")) or "")
-                    .strip()
-                    .strip('"')
-                )
+                country = lazada_bill_detail.resolve_country(payload.get("country") or "TH").code
+                preferences["tool_output_dirs"] = {
+                    directory_scope_key("lazada_bill_detail", country, "screenshot"): (
+                        str(payload.get("screenshot_root", payload.get("screenshot_dir")) or "").strip().strip('"')
+                    )
+                }
             if "workbook_id" in payload:
                 raw_workbook = str(payload.get("workbook_id") or "").strip()
                 preferences["lazada_bill_workbook_id"] = (
@@ -2078,8 +2240,12 @@ class AppBridge:
                 "dingtalk_user_id": user_id,
             })
             job = lazada_ads_data.validate_lazada_ads_payload(
-                request_payload, default_output_root=settings.output_dir,
+                request_payload,
+                default_output_root=resolve_output_directories(settings, "lazada_ads_data")["output_dir"],
             )
+            self.config_store.save({"tool_output_dirs": {
+                directory_scope_key("lazada_ads_data"): str(job.output_root),
+            }})
         except AccountRequiredError as exc:
             return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
         except Exception as exc:
@@ -2106,6 +2272,8 @@ class AppBridge:
         try:
             settings = self.config_store.load()
             request_payload = self._payload_with_account(payload, "ziniao")
+            country = lazada_bill_detail.resolve_country(request_payload.get("country")).code
+            directories = resolve_output_directories(settings, "lazada_bill_detail", country)
             if not str(request_payload.get("workbook_id") or "").strip():
                 request_payload["workbook_id"] = (
                     settings.lazada_bill_workbook_id or lazada_bill_detail.DEFAULT_WORKBOOK_ID
@@ -2115,7 +2283,7 @@ class AppBridge:
             request_payload.setdefault("client_path", settings.lazada_bill_client_path)
             request_payload.setdefault(
                 "screenshot_root",
-                request_payload.get("screenshot_dir") or settings.lazada_bill_screenshot_dir,
+                request_payload.get("screenshot_dir") or directories["screenshot_root"],
             )
             operator_name = str(request_payload.get("dingtalk_operator_name") or "").strip()
             if not operator_name and len(settings.dingtalk.users) == 1:
@@ -2136,9 +2304,13 @@ class AppBridge:
             )
             job = lazada_bill_detail.validate_lazada_bill_detail_payload(
                 request_payload,
-                default_output_root=settings.output_dir,
-                default_screenshot_root_value=settings.lazada_bill_screenshot_dir,
+                default_output_root=directories["output_dir"],
+                default_screenshot_root_value=directories["screenshot_root"],
             )
+            self.config_store.save({"tool_output_dirs": {
+                directory_scope_key("lazada_bill_detail", country): str(job.output_root),
+                directory_scope_key("lazada_bill_detail", country, "screenshot"): str(job.screenshot_root),
+            }})
         except AccountRequiredError as exc:
             return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
         except Exception as exc:

@@ -22,6 +22,7 @@ PAGE_SCRIPTS = {
     FRONTEND / "pages" / "temu-shipping-channel.html": FRONTEND / "assets" / "pages" / "temu-shipping-channel.js",
     FRONTEND / "pages" / "purchase-log.html": FRONTEND / "assets" / "pages" / "purchase-log.js",
     FRONTEND / "pages" / "sku-inventory-query.html": FRONTEND / "assets" / "pages" / "sku-inventory-query.js",
+    FRONTEND / "pages" / "lz-warehouse-realtime-inventory.html": FRONTEND / "assets" / "pages" / "lz-warehouse-realtime-inventory.js",
     FRONTEND / "pages" / "developer-sales-income-summary.html": FRONTEND / "assets" / "pages" / "developer-sales-income-summary.js",
     FRONTEND / "pages" / "mabang-warehouse-permission.html": FRONTEND / "assets" / "pages" / "mabang-warehouse-permission.js",
     FRONTEND / "pages" / "mabang-developer-permission.html": FRONTEND / "assets" / "pages" / "mabang-developer-permission.js",

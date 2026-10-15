@@ -133,7 +133,9 @@ class LazadaBillFrontendTests(unittest.TestCase):
 
     def test_frontend_shows_the_resolved_screenshot_folder(self) -> None:
         self.assertIn("function renderScreenshotHint()", self.javascript)
-        self.assertIn("Lazada${name}账单明细截图", self.javascript)
+        self.assertNotIn("${root}\\\\Lazada${name}账单明细截图", self.javascript)
+        self.assertIn("function applyCountryDirectories()", self.javascript)
+        self.assertIn("choose_scoped_output_dir", self.javascript)
         self.assertIn("${start}到${end}", self.javascript)
         self.assertIn('$("lazadaBillStartDate").addEventListener("change", renderScreenshotHint);',
                       self.javascript)

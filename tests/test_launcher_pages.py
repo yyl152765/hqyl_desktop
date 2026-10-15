@@ -35,6 +35,13 @@ class LauncherPageTests(unittest.TestCase):
         page = resolve_entry_html(["--page=sku-inventory-query"])
         self.assertEqual(page.name, "sku-inventory-query.html")
 
+    def test_lz_inventory_has_separate_development_entry_and_navigation(self) -> None:
+        page = resolve_entry_html(["--page=lz-warehouse-realtime-inventory"])
+        self.assertEqual(page.name, "lz-warehouse-realtime-inventory.html")
+        frontend = Path(__file__).resolve().parents[1] / "frontend" / "assets"
+        self.assertIn('id: "lz_warehouse_inventory", href: "lz-warehouse-realtime-inventory.html"', (frontend / "common.js").read_text(encoding="utf-8"))
+        self.assertIn('lz_warehouse_inventory: { href: "lz-warehouse-realtime-inventory.html"', (frontend / "pages" / "dashboard.js").read_text(encoding="utf-8"))
+
     def test_mabang_income_expense_report_has_development_entry(self) -> None:
         page = resolve_entry_html(["--page=mabang-income-expense-report"])
         self.assertEqual(page.name, "mabang-income-expense-report.html")

@@ -307,9 +307,9 @@ class ValidationTests(LazadaBillDetailTestCase):
         query = self.query(store_names="店铺 A，店铺 B,店铺 C")
         self.assertEqual(query.store_names, ("店铺 A", "店铺 B", "店铺 C"))
 
-    def test_screenshot_root_defaults_to_desktop_log_and_explicit_root_wins(self) -> None:
+    def test_screenshot_root_defaults_to_country_directory_and_explicit_root_wins(self) -> None:
         default_root = service.default_screenshot_root()
-        self.assertTrue(default_root.endswith("log"), default_root)
+        self.assertEqual(Path(default_root).name, "Lazada泰国账单明细截图")
         self.assertEqual(self.query().screenshot_root, default_root)
         explicit = str(self.root / "shots")
         self.assertEqual(self.query(screenshot_root=explicit).screenshot_root, explicit)
@@ -319,11 +319,11 @@ class ValidationTests(LazadaBillDetailTestCase):
         )
 
     def test_screenshot_folder_groups_by_country_and_bill_range(self) -> None:
-        folder = service.screenshot_folder(self.root, "泰国", "2026-09-01", "2026-09-30")
-        self.assertEqual(folder.parent.parent, Path(self.root))
-        self.assertEqual(folder.parent.name, "Lazada泰国账单明细截图")
+        thai_root = self.root / "Lazada泰国账单明细截图"
+        folder = service.screenshot_folder(thai_root, "泰国", "2026-09-01", "2026-09-30")
+        self.assertEqual(folder.parent, thai_root)
         self.assertEqual(folder.name, "2026-09-01到2026-09-30")
-        other = service.screenshot_folder(self.root, "菲律宾", "2026-09-01", "2026-09-30")
+        other = service.screenshot_folder(self.root / "Lazada菲律宾账单明细截图", "菲律宾", "2026-09-01", "2026-09-30")
         self.assertEqual(other.parent.name, "Lazada菲律宾账单明细截图")
         self.assertNotEqual(other.parent, folder.parent)
         other_range = service.screenshot_folder(self.root, "泰国", "2026-08-01", "2026-08-31")
@@ -599,6 +599,7 @@ class RunnerTests(LazadaBillDetailTestCase):
         self.assertTrue(runtime.shutdown_called)
         self.assertEqual(len(runtime.closed), 2)
         self.assertTrue(Path(payload["output_file"]).is_file())
+        self.assertEqual(Path(payload["output_dir"]).parent, self.root)
         self.assertTrue(Path(payload["log_file"]).is_file())
         saved = json.loads(Path(payload["output_file"]).read_text(encoding="utf-8"))
         self.assertEqual(saved["success_store_count"], 2)
@@ -862,7 +863,7 @@ class RunnerTests(LazadaBillDetailTestCase):
         self.assertEqual(tags, ["first-store", "second-store"], "每家店都必须用自己的页面截图")
 
     def test_runner_saves_screenshots_into_country_and_range_folder(self) -> None:
-        root = str(self.root / "log")
+        root = str(self.root / "log" / "Lazada泰国账单明细截图")
         payload, _sheet, _runtime = self.run_service(
             self.query(store_names="店铺 A", screenshot_root=root),
             rows={2: ["店铺 A", "", "", ""]},

@@ -75,6 +75,16 @@ class PackagingContractTests(unittest.TestCase):
         self.assertIn("xlrd", requirements)
         self.assertIn('collect_submodules("xlrd")', spec)
 
+    def test_lz_inventory_is_statically_imported_and_its_page_is_packaged(self):
+        spec = (PROJECT_ROOT / "HQYLAutomation.spec").read_text(encoding="utf-8")
+        bridge = (PROJECT_ROOT / "backend" / "app_bridge.py").read_text(encoding="utf-8")
+        launcher = (PROJECT_ROOT / "launcher" / "main.py").read_text(encoding="utf-8")
+        self.assertIn('("frontend", "frontend")', spec)
+        self.assertIn("from backend.services.lz_warehouse_inventory import (", bridge)
+        self.assertIn('"lz-warehouse-realtime-inventory": "lz-warehouse-realtime-inventory.html"', launcher)
+        self.assertTrue((PROJECT_ROOT / "frontend/pages/lz-warehouse-realtime-inventory.html").is_file())
+        self.assertTrue((PROJECT_ROOT / "frontend/assets/pages/lz-warehouse-realtime-inventory.js").is_file())
+
     def test_lazada_monthly_report_runtime_is_bundled(self):
         spec = (PROJECT_ROOT / "HQYLAutomation.spec").read_text(encoding="utf-8")
 
