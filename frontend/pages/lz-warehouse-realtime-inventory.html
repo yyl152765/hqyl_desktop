@@ -25,10 +25,11 @@
           <form id="lzInventoryForm" class="surface form-surface">
             <div class="section-head"><div><h2>选择仓库并导出</h2><p>勾选要查询的仓库，每个仓库单独生成一个 Excel，仓内全部分页自动合并。</p></div><span class="section-badge">马帮 ERP</span></div>
             <div class="flow-account-bar">
-              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">正在加载指定账号</strong></span>
+              <span class="flow-account-icon">M</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未选择马帮账号</strong></span>
               <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
             </div>
-            <p id="lzAccountNote" class="form-note" style="margin:12px 18px 0" aria-live="polite">正在检查本功能指定的马帮账号…</p>
+            <p id="lzAccountNote" class="form-note" style="margin:12px 18px 0" aria-live="polite">正在加载当前选择的马帮账号…</p>
+            <div class="actions"><button id="lzBindAccountBtn" class="secondary" type="button" hidden>绑定马帮账号</button></div>
             <section class="developer-panel" aria-labelledby="lzWarehouseTitle">
               <div class="developer-panel-head"><div><strong id="lzWarehouseTitle">仓库多选</strong><small id="lzWarehouseSelection">正在加载仓库</small></div><button id="lzRefreshWarehousesBtn" class="secondary compact-btn" type="button">刷新仓库</button></div>
               <label class="developer-search-field"><span class="sr-only">搜索仓库</span><input id="lzWarehouseSearch" type="search" placeholder="按仓库名称搜索" disabled /></label>
@@ -58,7 +59,7 @@
       </main>
     </div>
     <div id="toast" class="toast hidden"></div>
-    <script src="../assets/common.js?v=20261015-scoped-output"></script>
-    <script src="../assets/pages/lz-warehouse-realtime-inventory.js?v=20261015-scoped-output"></script>
+    <script src="../assets/common.js?v=20261016-bridge-version-hint"></script>
+    <script src="../assets/pages/lz-warehouse-realtime-inventory.js?v=20261016-bridge-version-hint"></script>
   </body>
 </html>

@@ -834,13 +834,24 @@ const HQYL = (() => {
       async start_mabang_income_expense_report() { return startPreviewTask("mabang_income_expense_report", { target_count: 3, category_count: 0, warehouse_count: 3, csv_file_count: 3, record_count: 1286, output_files: ["C:\\Preview\\印尼雅仓海外仓_收支报表.csv", "C:\\Preview\\菲律宾雅仓海外仓_收支报表.csv", "C:\\Preview\\马来雅仓海外仓_收支报表.csv"], output_dir: "C:\\Preview\\马帮收支报表" }); },
       async start_purchase_log_query() { return startPreviewTask("purchase_log", { sku_count: 2, record_count: 8, output_file: "C:\\Preview\\采购.xlsx", output_dir: "C:\\Preview" }); },
       async start_mabang_arrival_query() { return startPreviewTask("mabang_arrival_query", { remark_count: 3, matched_remark_count: 2, matched_batch_count: 2, exported_batch_count: 2, unmatched_remarks: ["未命中示例备注"], output_file: "C:\\Preview\\到货查询\\到货查询_20260825_090000_第一车.xls", output_files: ["C:\\Preview\\到货查询\\到货查询_20260825_090000_第一车.xls", "C:\\Preview\\到货查询\\到货查询_20260825_090000_第二车.xls"], file_count: 2, output_dir: "C:\\Preview\\到货查询", output_root: "C:\\Preview", exports: [{ remark: "第一车", matched_batch_count: 1, output_file: "C:\\Preview\\到货查询\\到货查询_20260825_090000_第一车.xls" }, { remark: "第二车", matched_batch_count: 1, output_file: "C:\\Preview\\到货查询\\到货查询_20260825_090000_第二车.xls" }] }); },
-      async get_lz_warehouse_inventory_info() { return { ok: true, account_id: accounts.find((account) => account.vendor === "mabang")?.id || "", account_name: "预览马帮账号", output_dir: previewScopedDirs("lz_warehouse_inventory").output_dir, warehouses: ["泰国TH04仓", "泰国TH05仓", "泰国TH06仓"] }; },
-      async get_lz_warehouse_inventory_warehouses() { return { ok: true, warehouses: ["泰国TH04仓", "泰国TH05仓", "泰国TH06仓", "菲律宾PH01仓"].map((name, index) => ({ id: `preview-${index}`, name })) }; },
+      async get_lz_warehouse_inventory_info(payload = {}) {
+        const id = payload.account_id || activeAccountIds.mabang;
+        const account = accounts.find((item) => item.vendor === "mabang" && item.id === id);
+        return account ? { ok: true, account_id: account.id, account_name: account.name, output_dir: previewScopedDirs("lz_warehouse_inventory").output_dir, warehouses: ["泰国TH04仓", "泰国TH05仓", "泰国TH06仓"] }
+          : { ok: false, requires_account: true, vendor: "mabang", error: "请先绑定并选择马帮账号" };
+      },
+      async get_lz_warehouse_inventory_warehouses(payload = {}) {
+        const id = payload.account_id || activeAccountIds.mabang;
+        if (!accounts.some((item) => item.vendor === "mabang" && item.id === id)) return { ok: false, requires_account: true, vendor: "mabang", error: "请先绑定并选择马帮账号" };
+        return { ok: true, account_id: id, warehouses: ["泰国TH04仓", "泰国TH05仓", "泰国TH06仓", "菲律宾PH01仓"].map((name, index) => ({ id: `preview-${index}`, name })) };
+      },
       async start_lz_warehouse_inventory(payload = {}) {
         const columns = ["库存SKU", "仓库", "可用库存量"];
         const exports = (payload.warehouse_names || []).map((name, index) => ({ warehouse_name: name, output_file: `C:/Preview/lz各仓实时库存_${name}.xlsx`, record_count: 1, source_record_count: 1, export_page_count: 1, preview_columns: columns, rows: [{ "库存SKU": `SKU-${index + 1}`, "仓库": name, "可用库存量": (index + 1) * 10 }] }));
         const files = exports.map((item) => item.output_file);
-        return startPreviewTask("lz_warehouse_inventory", { output_file: files[0] || "", output_files: files, output_dir: "C:/Preview", output_root: "C:/Preview", record_count: exports.length, source_record_count: exports.length, export_page_count: exports.length, warehouse_count: exports.length, selected_warehouse_count: exports.length, warehouse_counts: Object.fromEntries(exports.map((item) => [item.warehouse_name, item.record_count])), preview_columns: columns, rows: exports.flatMap((item) => item.rows), exports, failures: [], is_complete: true, completion_message: "所选仓库均已导出", preview_limit: 100, preview_truncated: false });
+        const task = startPreviewTask("lz_warehouse_inventory", { output_file: files[0] || "", output_files: files, output_dir: "C:/Preview", output_root: "C:/Preview", record_count: exports.length, source_record_count: exports.length, export_page_count: exports.length, warehouse_count: exports.length, selected_warehouse_count: exports.length, warehouse_counts: Object.fromEntries(exports.map((item) => [item.warehouse_name, item.record_count])), preview_columns: columns, rows: exports.flatMap((item) => item.rows), exports, failures: [], is_complete: true, completion_message: "所选仓库均已导出", preview_limit: 100, preview_truncated: false });
+        task.context = { account_id: payload.account_id || activeAccountIds.mabang || "", warehouse_names: payload.warehouse_names || [] };
+        return task;
       },
       async get_sku_inventory_developers() { return { ok: true, developer_count: 3, developers: [{ id: "101", name: "张三-开发" }, { id: "102", name: "李四-欧美开发" }, { id: "103", name: "王五-开发" }] }; },
       async start_sku_inventory_query(payload = {}) {

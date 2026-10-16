@@ -161,7 +161,6 @@ from backend.update_service import (
 
 APP_VERSION = "0.2.72"
 APP_NAME = "寰球云联自动化平台"
-LZ_INVENTORY_ACCOUNT_USERNAME = "15587701966"
 
 
 class AppBridge:
@@ -624,20 +623,23 @@ class AppBridge:
             },
         )
 
-    def _lz_inventory_account(self) -> BoundAccount:
+    def _lz_inventory_account(self, payload: dict[str, Any] | None = None) -> BoundAccount:
         settings = self.config_store.load()
+        request = payload or {}
+        raw_account_id = request.get("account_id") if "account_id" in request else settings.active_account_ids.get("mabang")
+        account_id = raw_account_id.strip() if isinstance(raw_account_id, str) else ""
         account = next(
             (item for item in settings.accounts
-             if item.vendor == "mabang" and item.username.strip() == LZ_INVENTORY_ACCOUNT_USERNAME),
+             if account_id and item.vendor == "mabang" and item.id == account_id),
             None,
         )
         if account is None:
-            raise AccountRequiredError("mabang", "请先绑定 lz各仓实时库存指定的马帮账号")
+            raise AccountRequiredError("mabang", "请先绑定并选择马帮账号")
         return account
 
-    def get_lz_warehouse_inventory_info(self) -> dict[str, Any]:
+    def get_lz_warehouse_inventory_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
-            account = self._lz_inventory_account()
+            account = self._lz_inventory_account(payload)
             return {
                 "ok": True,
                 "account_id": account.id,
@@ -652,7 +654,7 @@ class AppBridge:
 
     def start_lz_warehouse_inventory(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
-            account = self._lz_inventory_account()
+            account = self._lz_inventory_account(payload)
             request_payload = {
                 **dict(payload or {}),
                 "account_id": account.id,
@@ -711,11 +713,11 @@ class AppBridge:
             context={"account_id": account.id, "output_root": str(job.output_dir), "warehouse_names": list(job.warehouse_names)},
         )
 
-    def get_lz_warehouse_inventory_warehouses(self) -> dict[str, Any]:
+    def get_lz_warehouse_inventory_warehouses(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
-            account = self._lz_inventory_account()
+            account = self._lz_inventory_account(payload)
             warehouses = fetch_lz_inventory_warehouses(account.username, account.password)
-            return {"ok": True, "warehouses": [dict(item) for item in warehouses]}
+            return {"ok": True, "account_id": account.id, "warehouses": [dict(item) for item in warehouses]}
         except AccountRequiredError as exc:
             return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
         except Exception as exc:

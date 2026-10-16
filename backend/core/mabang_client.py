@@ -63,6 +63,35 @@ class MabangApiError(RuntimeError):
     """Raised when Mabang ERP returns an invalid or failed response."""
 
 
+class MabangLoginError(MabangApiError):
+    """A login rejection whose public message never contains remote payloads."""
+
+    MESSAGES = {
+        "incorrect_credentials": "马帮登录失败：账号或密码不正确，请在“管理账号”中核对并重新绑定当前账号。",
+        "verification_required": "马帮登录需要验证码或安全验证，请先在马帮官网确认并处理验证要求。",
+        "account_locked": "马帮账号已被锁定，请按马帮提示解锁或稍后再试。",
+        "invalid_response": "马帮登录返回格式异常，请稍后重试。",
+        "unknown": "马帮拒绝登录，未返回可识别的原因，请检查当前账号的登录状态。",
+    }
+
+    def __init__(self, reason: str = "unknown") -> None:
+        self.reason = reason if reason in self.MESSAGES else "unknown"
+        super().__init__(self.MESSAGES[self.reason])
+
+
+def _login_rejection_reason(payload: dict[str, Any]) -> str:
+    # Classify known server messages, but never return their potentially secret text.
+    message = " ".join(str(payload[key]) for key in ("message", "msg", "error")
+                       if isinstance(payload.get(key), str)).casefold()
+    if any(value in message for value in ("已锁定", "已被锁定", "账号被锁定", "账户被锁定", "account locked", "account is locked")):
+        return "account_locked"
+    if any(value in message for value in ("验证码", "安全验证", "二次验证", "短信验证", "captcha", "verification code", "two-factor")):
+        return "verification_required"
+    if any(value in message for value in ("账号或密码", "帐号或密码", "账户或密码", "密码不正确", "密码错误", "用户名或密码", "incorrect password", "invalid credentials", "invalid username")):
+        return "incorrect_credentials"
+    return "unknown"
+
+
 @dataclass(slots=True)
 class MabangExportFile:
     file_name: str
@@ -108,6 +137,7 @@ class MabangClient:
         self.close()
 
     def login(self, username: str, password: str) -> None:
+        self._logged_in = False
         login_page = self.client.get(self._url(LOGIN_PAGE_PATH))
         login_page.raise_for_status()
         response = self.client.post(
@@ -129,9 +159,14 @@ class MabangClient:
             },
         )
         response.raise_for_status()
-        payload = _response_json_dict(response, context="马帮登录")
+        try:
+            payload = response.json()
+        except ValueError:
+            raise MabangLoginError("invalid_response") from None
+        if not isinstance(payload, dict):
+            raise MabangLoginError("invalid_response")
         if not payload.get("success"):
-            raise MabangApiError(f"登录失败: {payload}")
+            raise MabangLoginError(_login_rejection_reason(payload))
         finalize_response = self.client.get(self._url(LOGIN_FINALIZE_PATH))
         finalize_response.raise_for_status()
         self._logged_in = True

@@ -30,9 +30,6 @@ class ToolOutputDirectoryIsolationTests(unittest.TestCase):
             patcher = patch.object(config_store, target, return_value=value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        account_patch = patch.object(app_bridge, "LZ_INVENTORY_ACCOUNT_USERNAME", "fixture-stock-user")
-        account_patch.start()
-        self.addCleanup(account_patch.stop)
         self.store = ConfigStore(self.root / "settings.json")
         self.store.save(AppSettings(
             output_dir=self.global_output,

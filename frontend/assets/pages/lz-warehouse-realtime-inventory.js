@@ -7,6 +7,9 @@
   let savedOutputDir = "";
   let outputRevision = 0;
   let accountId = "";
+  let accountGeneration = 0;
+  let initialized = false;
+  let outputInitialized = false;
   let ready = false;
   let starting = false;
   let running = false;
@@ -17,6 +20,79 @@
   let previewExports = [];
   let pendingWarehouseSelection = null;
   const DEFAULT_WAREHOUSES = ["泰国TH04仓", "泰国TH05仓", "泰国TH06仓"];
+  const TASK_KEYS = ["lz_warehouse_inventory"];
+  const BACKEND_UPDATE_HINT = "后台版本尚未更新，请关闭整个工作台后重新启动；刷新页面无法更新后台";
+
+  function inventoryErrorMessage(error) {
+    const message = String(error?.message || error || "请求失败");
+    return /get_lz_warehouse_inventory_(?:info|warehouses)\(\)/.test(message)
+      && /\btakes\b[\s\S]*\bpositional arguments?\b[\s\S]*\bgiven\b/.test(message)
+      ? BACKEND_UPDATE_HINT : message;
+  }
+
+  function isCurrentAccount(generation, id) {
+    return generation === accountGeneration && id === accountId
+      && id === String(HQYL.activeAccount("mabang")?.id || "");
+  }
+
+  function clearAccountView() {
+    if (HQYL.state.pollTimer) window.clearInterval(HQYL.state.pollTimer);
+    HQYL.state.pollTimer = 0;
+    HQYL.state.taskId = "";
+    HQYL.state.outputFile = "";
+    ready = false;
+    starting = false;
+    running = false;
+    loadingWarehouses = false;
+    warehousesLoaded = false;
+    warehouseNames = [];
+    selectedWarehouses.clear();
+    pendingWarehouseSelection = null;
+    $("lzWarehouseSearch").value = "";
+    $("logBox").textContent = "";
+    $("taskBadge").className = "status-pill idle";
+    $("taskBadge").textContent = "待运行";
+    $("statusText").textContent = "等待任务启动";
+    page.resetResult();
+    renderWarehouses();
+  }
+
+  async function switchAccount(force = false, restoreTask = true) {
+    const account = HQYL.activeAccount("mabang");
+    const id = String(account?.id || "");
+    if (!force && id === accountId) return;
+    accountId = id;
+    const generation = ++accountGeneration;
+    clearAccountView();
+    $("lzBindAccountBtn").hidden = !!id;
+    if (!id) {
+      $("lzAccountNote").textContent = "请先绑定并选择马帮账号，再加载该账号有权限的仓库。";
+      $("lzWarehouseStatus").textContent = "等待选择马帮账号。";
+      return;
+    }
+    $("lzAccountNote").textContent = `正在加载当前账号 ${account.name || account.username || ""}…`;
+    try {
+      const info = await prepareAccount(generation, id);
+      if (!info || !isCurrentAccount(generation, id)) return;
+      if (!outputInitialized) {
+        if (!outputRevision) {
+          outputDir = info.output_dir || "";
+          savedOutputDir = outputDir;
+          $("lzOutputDir").value = outputDir;
+        }
+        outputInitialized = true;
+      }
+      await loadWarehouses(generation, id);
+      if (restoreTask && isCurrentAccount(generation, id)) {
+        await HQYL.restoreLatestTaskFromKeys(TASK_KEYS, (context) => isCurrentAccount(generation, id) && page.taskContextFilter(context));
+      }
+    } catch (error) {
+      if (!isCurrentAccount(generation, id)) return;
+      const message = inventoryErrorMessage(error);
+      $("lzAccountNote").textContent = message;
+      HQYL.showToast(message);
+    }
+  }
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
@@ -71,14 +147,16 @@
     updateControls();
   }
 
-  async function loadWarehouses() {
-    if (starting || running || loadingWarehouses) return;
+  async function loadWarehouses(generation = accountGeneration, id = accountId) {
+    if (!id || !isCurrentAccount(generation, id) || starting || running || loadingWarehouses) return;
     loadingWarehouses = true;
     $("lzWarehouseStatus").textContent = "正在读取账号有权限的全部仓库…";
     updateControls();
     try {
-      const result = await HQYL.api().get_lz_warehouse_inventory_warehouses();
+      const result = await HQYL.api().get_lz_warehouse_inventory_warehouses({ account_id: id });
+      if (!isCurrentAccount(generation, id)) return;
       if (!result.ok) throw new Error(result.error || "仓库列表加载失败");
+      if (result.account_id && String(result.account_id) !== id) throw new Error("仓库列表与当前账号不一致，请刷新重试");
       warehouseNames = Array.from(new Set((Array.isArray(result.warehouses) ? result.warehouses : [])
         .map((item) => String(typeof item === "string" ? item : item?.name || "").trim()).filter(Boolean)));
       const previous = pendingWarehouseSelection || (warehousesLoaded ? selectedWarehouses : new Set(DEFAULT_WAREHOUSES));
@@ -91,30 +169,35 @@
         : "该账号暂无有权限的仓库，请检查权限后刷新。";
       renderWarehouses();
     } catch (error) {
-      $("lzWarehouseStatus").textContent = `仓库加载失败：${error.message || String(error)}，可点击“刷新仓库”重试。`;
-      HQYL.showToast(error.message || String(error));
+      if (!isCurrentAccount(generation, id)) return;
+      const message = inventoryErrorMessage(error);
+      if (message === BACKEND_UPDATE_HINT) {
+        ready = false;
+        $("lzAccountNote").textContent = message;
+      }
+      $("lzWarehouseStatus").textContent = message === BACKEND_UPDATE_HINT
+        ? message : `仓库加载失败：${message}，可点击“刷新仓库”重试。`;
+      HQYL.showToast(message);
     } finally {
-      loadingWarehouses = false;
-      updateControls();
+      if (isCurrentAccount(generation, id)) {
+        loadingWarehouses = false;
+        updateControls();
+      }
     }
   }
 
-  async function prepareAccount() {
+  async function prepareAccount(generation = accountGeneration, id = accountId) {
+    if (!id || !isCurrentAccount(generation, id)) return null;
     ready = false;
     $("lzRunBtn").disabled = true;
-    const info = await HQYL.api().get_lz_warehouse_inventory_info();
+    const info = await HQYL.api().get_lz_warehouse_inventory_info({ account_id: id });
+    if (!isCurrentAccount(generation, id)) return null;
     if (!info.ok) {
-      $("lzAccountNote").textContent = info.error || "指定账号加载失败，请检查账号设置。";
+      $("lzAccountNote").textContent = info.error || "当前账号加载失败，请检查账号设置。";
       throw new Error($("lzAccountNote").textContent);
     }
-    accountId = String(info.account_id || "");
-    if (!accountId) throw new Error("未找到本功能指定的马帮账号");
-    if (HQYL.activeAccount("mabang")?.id !== accountId) {
-      const selected = await HQYL.api().select_account("mabang", accountId);
-      if (!selected.ok) throw new Error(selected.error || "指定账号选择失败");
-      HQYL.applyAccountState(selected.account_state || {});
-    }
-    $("lzAccountNote").textContent = `本功能固定使用 ${info.account_name || "已绑定的指定马帮账号"}，已自动选择。`;
+    if (String(info.account_id || "") !== id) throw new Error("返回账号与当前选择不一致，请刷新重试");
+    $("lzAccountNote").textContent = `本次使用当前马帮账号：${info.account_name || HQYL.activeAccount("mabang")?.name || ""}；切换账号后会重新加载仓库。`;
     ready = true;
     updateControls();
     return info;
@@ -126,21 +209,32 @@
     const selectedOutputDir = $("lzOutputDir").value.trim();
     if (!selectedOutputDir) { HQYL.showToast("请选择输出目录"); return; }
     starting = true;
+    const generation = accountGeneration;
+    const id = accountId;
+    const names = warehouseNames.filter((name) => selectedWarehouses.has(name));
     updateControls();
     try {
-      await prepareAccount();
+      const info = await prepareAccount(generation, id);
+      if (!info || !isCurrentAccount(generation, id)) return;
       if (!await saveOutputDir()) return;
+      if (!isCurrentAccount(generation, id)) return;
       outputDir = selectedOutputDir;
       await HQYL.startTask(() => HQYL.api().start_lz_warehouse_inventory({
-        account_id: accountId,
-        warehouse_names: warehouseNames.filter((name) => selectedWarehouses.has(name)),
+        account_id: id,
+        warehouse_names: names,
         output_dir: outputDir,
-      }));
+      }), () => isCurrentAccount(generation, id));
     } catch (error) {
-      HQYL.showToast(error.message || String(error));
+      if (isCurrentAccount(generation, id)) {
+        const message = inventoryErrorMessage(error);
+        if (message === BACKEND_UPDATE_HINT) $("lzAccountNote").textContent = message;
+        HQYL.showToast(message);
+      }
     } finally {
-      starting = false;
-      page.setRunning(running);
+      if (isCurrentAccount(generation, id)) {
+        starting = false;
+        page.setRunning(running);
+      }
     }
   }
 
@@ -172,13 +266,16 @@
 
   const page = {
     key: "lz_warehouse_inventory",
-    taskKeys: ["lz_warehouse_inventory"],
     title: "lz各仓实时库存",
-    taskContextFilter(context) { return !context.account_id || String(context.account_id) === accountId; },
+    taskContextFilter(context) { return !!accountId && String(context.account_id || "") === accountId && isCurrentAccount(accountGeneration, accountId); },
+    onAccountsChanged() {
+      if (initialized) switchAccount();
+    },
     async init(info) {
       $("lzInventoryForm").addEventListener("submit", (event) => { event.preventDefault(); runQuery(); });
       $("lzWarehouseSearch").addEventListener("input", renderWarehouses);
-      $("lzRefreshWarehousesBtn").addEventListener("click", loadWarehouses);
+      $("lzRefreshWarehousesBtn").addEventListener("click", () => loadWarehouses());
+      $("lzBindAccountBtn").addEventListener("click", () => HQYL.openAccountDialog("mabang"));
       $("lzSelectWarehousesBtn").addEventListener("click", () => {
         visibleWarehouses().forEach((name) => selectedWarehouses.add(name));
         $("warehouseCount").textContent = `${selectedWarehouses.size} 个仓库`;
@@ -207,11 +304,8 @@
       $("lzOutputDir").addEventListener("change", () => saveOutputDir());
       $("lzOpenOutputBtn").addEventListener("click", () => HQYL.openOutput(outputFile || resultOutputDir || outputDir));
       $("lzOpenFileBtn").addEventListener("click", () => openExcel(outputFile));
-      const moduleInfo = await prepareAccount();
-      outputDir = moduleInfo.output_dir || "";
-      savedOutputDir = outputDir;
-      $("lzOutputDir").value = outputDir;
-      await loadWarehouses();
+      initialized = true;
+      await switchAccount(true);
     },
     setRunning(value) {
       running = value;
@@ -229,6 +323,11 @@
       $("lzResult").hidden = true;
       $("lzOpenFileBtn").disabled = true;
       $("lzOpenOutputBtn").disabled = true;
+      $("lzExportFilesBody").innerHTML = "";
+      $("lzTableHead").innerHTML = "";
+      $("lzTableBody").innerHTML = "";
+      $("lzPreviewWarehouse").innerHTML = "";
+      $("lzFailureSummary").innerHTML = "";
     },
     onTaskRestored(task) {
       const names = task?.context?.warehouse_names;

@@ -28,7 +28,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.exceptions import IllegalCharacterError
 import xlrd
 
-from backend.core.mabang_client import MabangApiError, MabangClient, decode_html_page
+from backend.core.mabang_client import MabangApiError, MabangClient, MabangLoginError, decode_html_page
 from backend.output_paths import default_output_directories
 
 
@@ -173,8 +173,16 @@ def parse_target_warehouses(
 def _login(client: MabangClient, username: str, password: str) -> None:
     try:
         client.login(username, password)
+    except MabangLoginError as exc:
+        raise MabangApiError(str(exc)) from None
+    except httpx.TimeoutException:
+        raise MabangApiError("马帮登录请求超时，请检查网络后重试") from None
+    except httpx.HTTPStatusError as exc:
+        raise MabangApiError(f"马帮登录请求失败（HTTP {exc.response.status_code}），请稍后重试") from None
+    except httpx.RequestError:
+        raise MabangApiError("马帮登录网络连接失败，请检查网络后重试") from None
     except (MabangApiError, httpx.HTTPError):
-        raise MabangApiError("马帮登录失败，请检查指定账号凭证、验证码或授权状态") from None
+        raise MabangApiError("马帮登录未能完成认证，请检查当前账号的登录状态") from None
 
 
 def fetch_lz_inventory_warehouses(username: str, password: str) -> tuple[dict[str, str], ...]:

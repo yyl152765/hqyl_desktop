@@ -19,37 +19,88 @@ class LzWarehouseInventoryBridgeTests(unittest.TestCase):
             accounts=[
                 BoundAccount("other", "mabang", "其他测试账号", "other-user", "other-secret"),
                 BoundAccount("target", "mabang", "指定测试账号", "fixture-lz-user", "fixture-lz-secret"),
+                BoundAccount("foreign", "ziniao", "其他平台测试账号", "foreign-user", "foreign-secret"),
             ],
             active_account_ids={"mabang": "other"},
         )
         self.bridge.tasks = Mock()
         self.bridge.tasks.start.return_value = {"ok": True, "id": "lz-task"}
-        account_patch = patch("backend.app_bridge.LZ_INVENTORY_ACCOUNT_USERNAME", "fixture-lz-user")
-        account_patch.start()
-        self.addCleanup(account_patch.stop)
 
-    def test_info_finds_designated_bound_account_without_returning_credentials(self):
+    def test_current_active_account_takes_precedence_over_previous_fixed_account(self):
+        result = self.bridge.get_lz_warehouse_inventory_info()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["account_id"], "other")
+        self.assertEqual(result["account_name"], "其他测试账号")
+
+    def test_info_follows_active_bound_account_without_returning_credentials(self):
         with patch("backend.app_bridge.fetch_lz_inventory_warehouses") as loader:
             result = self.bridge.get_lz_warehouse_inventory_info()
         loader.assert_not_called()
         self.assertEqual(result, {
-            "ok": True, "account_id": "target", "account_name": "指定测试账号",
+            "ok": True, "account_id": "other", "account_name": "其他测试账号",
             "warehouses": ["泰国TH04仓", "泰国TH05仓", "泰国TH06仓"],
             **resolve_output_directories(self.bridge.config_store.load(), "lz_warehouse_inventory"),
         })
         self.assertNotIn("secret", str(result))
+        self.assertNotIn("username", result)
+        self.assertNotIn("password", result)
         self.bridge.config_store.save.assert_not_called()
 
-    def test_missing_designated_account_never_falls_back_to_active_account(self):
-        self.bridge.config_store.load.return_value.accounts.pop()
-        for result in (
-            self.bridge.get_lz_warehouse_inventory_info(),
-            self.bridge.get_lz_warehouse_inventory_warehouses(),
-            self.bridge.start_lz_warehouse_inventory({"account_id": "other", "output_dir": "unused"}),
-        ):
-            self.assertFalse(result["ok"])
-            self.assertTrue(result["requires_account"])
-            self.assertEqual(result["vendor"], "mabang")
+    def test_invalid_or_missing_selection_never_falls_back_to_another_bound_account(self):
+        cases = (
+            ("", {}),
+            ("missing", {}),
+            ("foreign", {}),
+            ("other", {"account_id": "missing"}),
+            ("other", {"account_id": "foreign"}),
+        )
+        for active_id, selection in cases:
+            self.bridge.config_store.load.return_value.active_account_ids = {"mabang": active_id}
+            request = {**selection, "username": "forged-user", "password": "forged-secret"}
+            with self.subTest(active=active_id, selection=selection), patch("backend.app_bridge.fetch_lz_inventory_warehouses") as loader:
+                for result in (
+                    self.bridge.get_lz_warehouse_inventory_info(request),
+                    self.bridge.get_lz_warehouse_inventory_warehouses(request),
+                    self.bridge.start_lz_warehouse_inventory({**request, "warehouse_names": ["泰国TH04仓"], "output_dir": "unused"}),
+                ):
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(result["requires_account"])
+                    self.assertEqual(result["vendor"], "mabang")
+                    self.assertNotIn("secret", str(result))
+                loader.assert_not_called()
+        self.bridge.tasks.start.assert_not_called()
+        self.bridge.config_store.save.assert_not_called()
+
+    def test_explicit_account_can_be_selected_without_any_active_account(self):
+        self.bridge.config_store.load.return_value.active_account_ids = {}
+        result = self.bridge.get_lz_warehouse_inventory_info({"account_id": "target"})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual((result["account_id"], result["account_name"]), ("target", "指定测试账号"))
+        self.assertNotIn("secret", str(result))
+
+    def test_active_account_start_uses_bound_credentials_and_context(self):
+        names = ("泰国TH04仓",)
+        job = SimpleNamespace(username="other-user", password="other-secret", output_dir=Path("exports"), warehouse_names=names)
+        with patch("backend.app_bridge.validate_lz_inventory_payload", return_value=job) as validator:
+            result = self.bridge.start_lz_warehouse_inventory({
+                "username": "forged-user", "password": "forged-secret", "warehouse_names": list(names), "output_dir": "exports",
+            })
+        self.assertTrue(result["ok"], result)
+        validated = validator.call_args.args[0]
+        self.assertEqual((validated["account_id"], validated["username"], validated["password"]), ("other", "other-user", "other-secret"))
+        self.assertEqual(self.bridge.tasks.start.call_args.kwargs["context"]["account_id"], "other")
+        self.assertNotIn("secret", str(self.bridge.tasks.start.call_args.kwargs["context"]))
+
+    def test_forged_credentials_cannot_repair_missing_bound_credentials(self):
+        settings = self.bridge.config_store.load.return_value
+        for username, password in (("", "stored-secret"), ("stored-user", "")):
+            settings.accounts = [BoundAccount("other", "mabang", "测试账号", username, password)]
+            with self.subTest(username_set=bool(username), password_set=bool(password)):
+                result = self.bridge.start_lz_warehouse_inventory({
+                    "username": "forged-user", "password": "forged-secret", "warehouse_names": ["泰国TH04仓"], "output_dir": "exports",
+                })
+                self.assertFalse(result["ok"], result)
+                self.assertNotIn("secret", str(result))
         self.bridge.tasks.start.assert_not_called()
         self.bridge.config_store.save.assert_not_called()
 
@@ -58,7 +109,7 @@ class LzWarehouseInventoryBridgeTests(unittest.TestCase):
         job = SimpleNamespace(username="fixture-lz-user", password="fixture-lz-secret", output_dir=Path("exports"), warehouse_names=names)
         with patch("backend.app_bridge.validate_lz_inventory_payload", return_value=job) as validator:
             result = self.bridge.start_lz_warehouse_inventory({
-                "account_id": "other", "username": "untrusted", "password": "untrusted", "output_dir": "exports", "warehouse_names": list(names),
+                "account_id": "target", "username": "untrusted", "password": "untrusted", "output_dir": "exports", "warehouse_names": list(names),
             })
         self.assertEqual(result, {"ok": True, "id": "lz-task"})
         self.assertEqual(validator.call_args.args[0], {
@@ -97,15 +148,24 @@ class LzWarehouseInventoryBridgeTests(unittest.TestCase):
         self.assertEqual(output["failures"], [])
         self.assertNotIn("secret", str(output))
 
-    def test_warehouse_loader_uses_only_the_designated_account_and_surfaces_network_errors(self):
+    def test_warehouse_loader_uses_active_account_and_identifies_its_result(self):
         warehouses = ({"id": "W1", "name": "任意仓库"}, {"id": "W2", "name": "菲律宾PH01仓"})
         with patch("backend.app_bridge.fetch_lz_inventory_warehouses", return_value=warehouses) as loader:
             result = self.bridge.get_lz_warehouse_inventory_warehouses()
-        loader.assert_called_once_with("fixture-lz-user", "fixture-lz-secret")
-        self.assertEqual(result, {"ok": True, "warehouses": list(warehouses)})
+        loader.assert_called_once_with("other-user", "other-secret")
+        self.assertEqual(result, {"ok": True, "account_id": "other", "warehouses": list(warehouses)})
+        self.assertNotIn("secret", str(result))
         with patch("backend.app_bridge.fetch_lz_inventory_warehouses", side_effect=RuntimeError("目录接口暂时不可用")):
             result = self.bridge.get_lz_warehouse_inventory_warehouses()
         self.assertEqual(result, {"ok": False, "error": "目录接口暂时不可用"})
+
+    def test_warehouse_loader_explicit_selection_overrides_active_account(self):
+        warehouses = ({"id": "A-only", "name": "A账号可见仓库"},)
+        with patch("backend.app_bridge.fetch_lz_inventory_warehouses", return_value=warehouses) as loader:
+            result = self.bridge.get_lz_warehouse_inventory_warehouses({"account_id": "target", "username": "forged", "password": "forged"})
+        loader.assert_called_once_with("fixture-lz-user", "fixture-lz-secret")
+        self.assertEqual(result, {"ok": True, "account_id": "target", "warehouses": list(warehouses)})
+        self.assertEqual(self.bridge.config_store.load.return_value.active_account_ids["mabang"], "other")
 
     def test_all_failed_result_keeps_failure_details_without_a_fake_file_path(self):
         names = ("泰国TH04仓", "菲律宾PH01仓")
