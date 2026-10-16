@@ -36,7 +36,7 @@
                 <label for="discountThreshold"><span>最低折扣率</span><div class="campaign-percent-field"><input id="discountThreshold" type="number" min="0.01" max="100" step="0.01" value="95" required disabled /><span>%</span></div></label>
               </div>
               <p class="campaign-rule">折扣率 = 活动价 ÷ 原价。低于 <strong id="thresholdLabel">95%</strong> 的行移出结果，等于该值时保留。</p>
-              <p class="campaign-note">通用表头：原价、活动价，推荐价选填。自动识别通用表时沿用已有活动价；需要填充推荐价时可切换处理方式。缺失价格或无法核算的行另存异常明细。</p>
+              <p class="campaign-note">通用表头：原价、活动价，推荐价选填。普通活动模板中活动价为空时，自动取推荐价格上限填入，例如 0 &lt; Price &lt;= 95 按 95 计算。通用表按已有活动价筛选；缺失价格或无法核算的行另存异常明细。</p>
               <label class="campaign-output-field" for="campaignOutputDir"><span>结果保存目录</span><div class="input-action"><input id="campaignOutputDir" placeholder="输入或选择本地保存目录" required disabled /><button id="chooseOutputBtn" type="button" class="secondary" disabled>选择</button></div></label>
               <p id="templateNotice" class="campaign-note" hidden role="status"></p>
               <div id="formIssues" class="campaign-notice" hidden role="alert"></div>

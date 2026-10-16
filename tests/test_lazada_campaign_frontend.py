@@ -219,6 +219,47 @@ class CampaignFrontendTests(unittest.TestCase):
             book.close()
         self.assertFalse(self.errors)
 
+    def test_regular_recommended_range_fills_empty_campaign_price(self):
+        source = self.root / "普通推荐范围.xlsx"
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["卖家SKU", "Sku ID", "店铺sku", "商品名", "商品链接", "售价", "大促价格 (必填)",
+                      "推荐价格", "库存", "促销库存", "促销限购", "品牌", "类目", "备注"])
+        instruction = "大促价格是你提到这个活动的商品价格。如果你同一商品在相同的时间段提报了2个价格，提报的最低价会被应用。"
+        sheet.append([None, None, None, None, None, None, instruction,
+                      "大促推荐价是你可以提报这个活动价格范围", "库存代表当前存货", None, None, None, None, None])
+        for sku, base, recommended in (("0001", 100, "0 < Price <= 95"),
+                                       ("0002", 100, "0 < Price <= 94.99"),
+                                       ("0003", 0, "0 < Price <= 95")):
+            sheet.append([sku, sku, "店铺SKU", "商品", "https://example.invalid/product", base, None,
+                          recommended, 8, None, None, None, None, None])
+        book.save(source)
+        book.close()
+        original = source.read_bytes()
+        self.selected = [str(source)]
+        self.open_page()
+        self.choose_files()
+        self.page.locator("#inspectBtn").click()
+        expect(self.page.locator("#inspectionMessage")).to_contain_text("普通活动模板，3 行，异常 1 行")
+        self.page.locator("#startBtn").click()
+        expect(self.page.locator("#completedCount")).to_have_text("完成 1 · 失败 0")
+        expect(self.page.locator("#totalCount")).to_have_text("3")
+        expect(self.page.locator("#keptCount")).to_have_text("1")
+        expect(self.page.locator("#exceptionCount")).to_contain_text("异常行 1")
+        task = self.bridge.get_latest_task_status("lazada_campaign_workbook")
+        result = task["result"]["files"][0]
+        self.assertEqual((result["mode"], result["removed_rows"]), ("regular", 1))
+        output = load_workbook(result["processed_file"])
+        try:
+            self.assertEqual((output.active["A3"].value, output.active["G3"].value,
+                              output.active["H3"].value), ("0001", 95, "0 < Price <= 95"))
+            self.assertEqual(output.active["G2"].value, instruction)
+            self.assertEqual(output.active.max_row, 3)
+        finally:
+            output.close()
+        self.assertEqual(source.read_bytes(), original)
+        self.assertFalse(self.errors)
+
     def test_manual_paths_deduplicate_limit_and_picker_cancel(self):
         self.open_page()
         self.choose_files()

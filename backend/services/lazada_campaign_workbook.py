@@ -148,25 +148,36 @@ def _sheet_layout(sheet: Any, requested_mode: str) -> dict[str, Any] | None:
         used_fields = {"base_price", "campaign_price"}
         if mode == "invited":
             used_fields.add("recommended_price")
-        elif mode == "regular" and "maximum_price" in columns:
-            used_fields.add("maximum_price")
+        elif mode == "regular":
+            if "maximum_price" in columns:
+                used_fields.add("maximum_price")
+            if "recommended_price" in columns:
+                used_fields.add("recommended_price")
         duplicates = [key for key in used_fields if len(found[key]) != 1]
         if duplicates:
             raise ValueError(f"工作表「{sheet.title}」表头重复或有歧义：{'、'.join(duplicates)}")
         columns = {key: columns[key] for key in used_fields}
         header_row = row[0].row
         first_data_row = header_row + 1
-        if mode == "regular" and first_data_row <= sheet.max_row:
+        if first_data_row <= sheet.max_row:
             values = [sheet.cell(first_data_row, col).value for col in range(1, sheet.max_column + 1)]
             price_values = [sheet.cell(first_data_row, columns[key]).value for key in ("campaign_price", "base_price")]
             price_columns = {column for matches in found.values() for column in matches}
-            other_values = [value for col, value in enumerate(values, 1) if col not in price_columns]
+            other_values = [(col, value) for col, value in enumerate(values, 1) if col not in price_columns]
             campaign_help = str(price_values[0] or "")
-            help_only_row = (not any(value is not None and str(value).strip() for value in other_values)
-                             and not str(price_values[1] or "").strip()
+            other_fields_are_help = all(value is None or not str(value).strip()
+                                        or (isinstance(value, str)
+                                            and _header(sheet.cell(header_row, col).value) in {
+                                                "stock", "inventory", "currentstock", "库存", "存货", "当前库存", "当前存货"}
+                                            and re.search(
+                                            r"^(?:库存|存货).*(?:代表|表示|显示)|^(?:stock|inventory)\b.*\b(?:represents|shows|displayed)\b",
+                                            value.strip(), re.I)) for col, value in other_values)
+            help_only_row = (other_fields_are_help
+                             and (price_values[1] is None or not str(price_values[1]).strip())
                              and len(campaign_help) >= 40
-                             and re.search(r"campaign\s+price\s+is|price.*(?:submit|campaign|eligible)|活动价.*(?:填写|是|说明)", campaign_help, re.I))
-            typed_instruction_row = (sum(bool(_INSTRUCTION.search(str(value or ""))) for value in values) >= 2
+                             and re.search(r"campaign\s+price\s+is|price.*(?:submit|campaign|eligible)|(?:大促价格|活动价).*(?:填写|是|说明)", campaign_help, re.I))
+            typed_instruction_row = (other_fields_are_help
+                                     and sum(bool(_INSTRUCTION.search(str(value or ""))) for value in values) >= 2
                                      and all(isinstance(value, str) and _INSTRUCTION.search(value) for value in price_values))
             if help_only_row or typed_instruction_row:
                 first_data_row += 1
@@ -209,7 +220,9 @@ def _read_price(cell: Any, *, recommended: bool = False) -> Decimal:
         raise ValueError(f"{cell.coordinate} 含 Excel 错误")
     value = cell.value
     if recommended and isinstance(value, str):
-        value = re.sub(r"^(?:<=|≤)\s*", "", value.strip())
+        text = value.strip()
+        upper_bound = re.fullmatch(r"0\s*<\s*Price\s*(?:<=|≤)\s*(.+)", text, re.I)
+        value = upper_bound.group(1) if upper_bound else re.sub(r"^(?:<=|≤)\s*", "", text)
     try:
         return _currency(value)
     except ValueError as exc:
@@ -235,10 +248,13 @@ def _prices(sheet: Any, layout: dict[str, Any], row: int) -> tuple[Decimal, Deci
         if candidate.value is not None and str(candidate.value).strip():
             selected_cell, recommended = candidate, True
     elif layout["mode"] == "regular" and (campaign_cell.value is None or not str(campaign_cell.value).strip()):
-        if "maximum_price" in columns:
-            selected_cell = sheet.cell(row, columns["maximum_price"])
+        maximum = sheet.cell(row, columns["maximum_price"]) if "maximum_price" in columns else None
+        if maximum is not None and maximum.value is not None and str(maximum.value).strip():
+            selected_cell = maximum
+        elif "recommended_price" in columns:
+            selected_cell, recommended = sheet.cell(row, columns["recommended_price"]), True
         else:
-            raise ValueError(f"{campaign_cell.coordinate} 缺少平台最高活动价；请重新导出并勾选「Fill in with Maximum Campaign Price / 使用最高活动价格填充」")
+            raise ValueError(f"{campaign_cell.coordinate} 缺少活动价，且没有最高活动价或推荐价格可用于填充")
     elif layout["mode"] == "plain" and (campaign_cell.value is None or not str(campaign_cell.value).strip()):
         raise ValueError(f"{campaign_cell.coordinate} 缺少活动价，请在源 Excel 中填写后再筛选")
     return base, _read_price(selected_cell, recommended=recommended), selected_cell is not campaign_cell

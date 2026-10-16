@@ -146,17 +146,24 @@ class CampaignWorkbookTests(unittest.TestCase):
         self.assertEqual(sheet["G3"].value, 151.36)
         self.assertEqual(sheet["H3"].value, "0 < Price <= 151.36")
 
-    def test_regular_missing_price_requires_explicit_maximum_column(self):
+    def test_regular_missing_price_uses_recommended_upper_bound_with_maximum_column_priority(self):
         path = self.write(mode="regular", rows=[
             ["001", "1", "s1", "A", "url", 100, None, "0 < Price <= 99"],
             ["002", "2", "s2", "B", "url", 100, 96, "0 < Price <= 97"],
         ])
         result = self.run_job([path])
-        self.assertEqual(result["unparseable_rows"], 1)
-        self.assertEqual(result["kept_rows"], 1)
-        self.assertEqual(self.output(result).active["A3"].value, "002")
+        self.assertEqual(result["unparseable_rows"], 0)
+        self.assertEqual(result["kept_rows"], 2)
+        self.assertEqual(result["updated_rows"], 1)
+        self.assertEqual(self.output(result).active["G3"].value, 99)
+        self.assertEqual(self.output(result).active["G4"].value, 96)
         book = load_workbook(path)
         book.active["I1"] = "Maximum Campaign Price (PHP)"
+        book.save(path)
+        book.close()
+        maximum_blank = self.run_job([path])
+        self.assertEqual(self.output(maximum_blank).active["G3"].value, 99)
+        book = load_workbook(path)
         book.active["I3"] = 98
         book.save(path)
         book.close()
@@ -164,6 +171,82 @@ class CampaignWorkbookTests(unittest.TestCase):
         self.assertEqual(filled["unparseable_rows"], 0)
         self.assertEqual(filled["updated_rows"], 1)
         self.assertEqual(self.output(filled).active["G3"].value, 98)
+        book = load_workbook(path)
+        book.active["I3"] = 0
+        book.save(path)
+        book.close()
+        maximum_invalid = self.run_job([path])
+        self.assertEqual((maximum_invalid["unparseable_rows"], maximum_invalid["kept_rows"]), (1, 1))
+
+    def test_regular_chinese_range_fills_activity_and_preserves_instruction_row(self):
+        source = self.root / "范围价普通.xlsx"
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["卖家SKU", "Sku ID", "店铺sku", "商品名", "商品链接", "售价",
+                      "大促价格 (必填)", "推荐价格", "库存"])
+        help_text = "大促价格是你提到到这个活动的商品价格。如果你同一商品在相同的时间段提报了2个价格，提报的最低价会被应用。"
+        sheet.append([None] * 6 + [help_text, "大促推荐价是你可以提报这个活动价格范围", "库存代表当前库存并显示在买方页面上"])
+        sheet.row_dimensions[2].height = 118
+        sheet.append(["0001", "1", "shop1", "保留", "url", 100, None, "0 < Price <= 95", 5])
+        sheet.append(["0002", "2", "shop2", "剔除", "url", 100, None, "0 < Price <= 94.99", 5])
+        sheet.append(["0003", "3", "shop3", "已有价", "url", 100, 96, "0 < Price <= 1", 5])
+        sheet.append(["0004", "4", "shop4", "异常", "url", 0, None, "0 < Price <= 95", 5])
+        book.save(source)
+        book.close()
+        before = source.read_bytes()
+        for mode in ("auto", "invited", "plain"):
+            with self.subTest(mode=mode):
+                inspection = inspect_campaign_files({"source_files": [str(source)], "mode": mode})["files"][0]
+                self.assertEqual(inspection["total_rows"], 4)
+                self.assertEqual(inspection["sheets"][0]["first_data_row"], 3)
+                result = self.run_job([source], mode=mode)
+                self.assertTrue(result["is_complete"], result)
+                output = self.output(result).active
+                self.assertEqual(output["G2"].value, help_text)
+                self.assertEqual(output.row_dimensions[2].height, 118)
+                if mode == "plain":
+                    self.assertEqual((result["kept_rows"], result["updated_rows"], result["unparseable_rows"]), (1, 0, 3))
+                    self.assertEqual(output["A3"].value, "0003")
+                else:
+                    self.assertEqual(output["G3"].value, 95)
+                    self.assertEqual(output["H3"].value, "0 < Price <= 95")
+                    self.assertEqual(result["unparseable_rows"], 1)
+                    self.assertEqual(result["updated_rows"], 3 if mode == "invited" else 2)
+                    self.assertEqual(result["kept_rows"], 1 if mode == "invited" else 2)
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_recommended_ranges_are_strict_and_malformed_rows_are_audited(self):
+        valid = ("0 < Price <= 95", "0<price≤95", "<=95", "95")
+        invalid = ("0 < Price < 95", "1 < Price <= 95", "0 < Price <= 95 or 99", "0 < Price <= NaN",
+                   "0 < Price <= Infinity", "0 < Price <= 0", "0 < Price <= -95", "price 95", "=95", None)
+        for mode in ("auto", "invited"):
+            with self.subTest(mode=mode):
+                source = self.write(name=f"范围校验_{mode}.xlsx", mode="regular", rows=[
+                    [str(index), str(index), "sku", "商品", "url", 100, None, value]
+                    for index, value in enumerate((*valid, *invalid))
+                ])
+                result = self.run_job([source], mode=mode)
+                self.assertEqual(result["total_rows"], len(valid) + len(invalid))
+                self.assertEqual((result["kept_rows"], result["updated_rows"], result["unparseable_rows"]),
+                                 (len(valid), len(valid), len(invalid)))
+                output = self.output(result).active
+                self.assertEqual([output.cell(row, 7).value for row in range(3, 3 + len(valid))], [95] * len(valid))
+
+    def test_instruction_detection_does_not_skip_incomplete_product_row(self):
+        def extra(book):
+            book.active.delete_rows(2)
+        for index, first_row in enumerate((
+            ["0001", "1", "s1", "商品", "url", None, HELP, "0 < Price <= 95"],
+            ["库存代表当前商品SKU", None, None, None, None, None, HELP, "0 < Price <= 95"],
+            ["0001", None, None, None, None, "请填写原价", "请填写活动价", None],
+        )):
+            with self.subTest(index=index):
+                source = self.write(name=f"不完整商品{index}.xlsx", mode="regular", rows=[
+                    first_row,
+                    ["0002", "2", "s2", "商品", "url", 100, 95, "0 < Price <= 95"],
+                ], extra=extra)
+                result = self.run_job([source])
+                self.assertEqual((result["total_rows"], result["unparseable_rows"], result["kept_rows"]), (2, 1, 1))
 
     def test_all_matching_sheets_and_other_sheets_are_preserved(self):
         def extra(book):
@@ -280,7 +363,8 @@ class CampaignWorkbookTests(unittest.TestCase):
         self.assertEqual(result["file_count"], 2)
         self.assertTrue(result["files"][0]["ok"])
         self.assertFalse(result["files"][1]["ok"])
-        self.assertEqual(result["files"][0]["unparseable_rows"], 1)
+        self.assertEqual(result["files"][0]["unparseable_rows"], 0)
+        self.assertEqual(result["files"][0]["missing_price_rows"], 1)
         self.assertEqual(result["files"][0]["sheets"][0]["first_data_row"], 3)
         self.assertEqual(path.read_bytes(), before)
         self.assertFalse((self.root / "Lazada活动处理").exists())
