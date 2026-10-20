@@ -232,6 +232,48 @@ class CampaignWorkbookTests(unittest.TestCase):
                 output = self.output(result).active
                 self.assertEqual([output.cell(row, 7).value for row in range(3, 3 + len(valid))], [95] * len(valid))
 
+    def test_same_row_textafter_price_formulas_are_materialized_without_excel(self):
+        source = self.write(mode="regular", rows=[
+            ["0001", "1", "sku1", "商品", "url", 100, '=TRIM(_xlfn.TEXTAFTER(H3,"<=",-1))', "0 < Price <= 95"],
+            ["0002", "2", "sku2", "商品", "url", 100, '=TEXTAFTER($H$4,"<=")', "0 < Price <= 94"],
+            ["0003", "3", "sku3", "商品", "url", 100, '=trim(TEXTAFTER(h5,"≤",1))', "0 < Price ≤ 96"],
+        ])
+        before = source.read_bytes()
+        inspection = inspect_campaign_files({"source_files": [str(source)]})["files"][0]
+        self.assertEqual(inspection["unparseable_rows"], 0)
+        result = self.run_job([source])
+        self.assertTrue(result["is_complete"], result)
+        self.assertEqual((result["updated_rows"], result["kept_rows"], result["removed_rows"], result["unparseable_rows"]), (3, 2, 1, 0))
+        output = self.output(result).active
+        self.assertEqual([output.cell(row, 7).value for row in (3, 4)], [95, 96])
+        self.assertEqual(output["G3"].data_type, "n")
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_textafter_formula_must_reference_recommended_price_in_same_row(self):
+        formulas = ('=TEXTAFTER(H4,"<=")', '=TEXTAFTER(F3,"<=")', '=TEXTAFTER(Other!H3,"<=")',
+                    '=TEXTAFTER(H3,"<=")+1', '=TEXTAFTER(H3,"<=",2)', '=TRIM(H3)', '=95',
+                    '=TEXTAFTER(H3,"≤")', '=TEXTAFTER(H3,"<=",-1,0,0,"95")')
+        for index, formula in enumerate(formulas):
+            with self.subTest(formula=formula):
+                source = self.write(name=f"拒绝公式{index}.xlsx", mode="regular", rows=[
+                    ["0001", "1", "sku1", "商品", "url", 100, formula, "0 < Price <= 95"],
+                ])
+                result = self.run_job([source])
+                self.assertEqual((result["kept_rows"], result["unparseable_rows"]), (0, 1))
+
+    def test_plain_mode_keeps_price_formula_guard_and_recommendation_formula_is_not_evaluated(self):
+        source = self.write(mode="regular", rows=[
+            ["0001", "1", "sku1", "商品", "url", 100, '=TRIM(TEXTAFTER(H3,"<="))', "0 < Price <= 95"],
+        ])
+        plain = self.run_job([source], mode="plain")
+        self.assertEqual((plain["kept_rows"], plain["unparseable_rows"]), (0, 1))
+        book = load_workbook(source)
+        book.active["H3"] = '="0 < Price <= 95"'
+        book.save(source)
+        book.close()
+        result = self.run_job([source])
+        self.assertEqual((result["kept_rows"], result["unparseable_rows"]), (0, 1))
+
     def test_instruction_detection_does_not_skip_incomplete_product_row(self):
         def extra(book):
             book.active.delete_rows(2)

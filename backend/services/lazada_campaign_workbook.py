@@ -235,12 +235,31 @@ def _data_rows(sheet: Any, layout: dict[str, Any]):
             yield row[0].row
 
 
+def _is_recommended_textafter(cell: Any, recommended: Any) -> bool:
+    """Recognize a same-row extraction recipe; never evaluate spreadsheet code."""
+    expression = str(cell.value or "").strip()
+    if not expression.startswith("="):
+        return False
+    expression = expression[1:].strip()
+    trim = re.fullmatch(r"TRIM\s*\((.*)\)", expression, re.I)
+    if trim:
+        expression = trim.group(1).strip()
+    match = re.fullmatch(r'(?:_xlfn\.)?TEXTAFTER\s*\(\s*(\$?[A-Z]{1,3}\$?[1-9]\d*)\s*,\s*"(<=|≤)"\s*(?:,\s*-?1\s*)?\)', expression, re.I)
+    return bool(match and match.group(1).replace("$", "").upper() == recommended.coordinate
+                and isinstance(recommended.value, str) and match.group(2) in recommended.value)
+
+
 def _prices(sheet: Any, layout: dict[str, Any], row: int) -> tuple[Decimal, Decimal, bool]:
     columns = layout["columns"]
     base = _read_price(sheet.cell(row, columns["base_price"]))
     campaign_cell = sheet.cell(row, columns["campaign_price"])
-    # Do not replace formula prices blindly, even if another column has a number.
     if campaign_cell.data_type == "f":
+        # Read a verified extraction directly from its literal recommendation.
+        # Other formulas still need conversion to values in Excel/WPS.
+        if layout["mode"] in {"regular", "invited"} and "recommended_price" in columns:
+            candidate = sheet.cell(row, columns["recommended_price"])
+            if _is_recommended_textafter(campaign_cell, candidate):
+                return base, _read_price(candidate, recommended=True), True
         _read_price(campaign_cell)
     selected_cell, recommended = campaign_cell, False
     if layout["mode"] == "invited":
@@ -362,7 +381,7 @@ def export_campaign_template(payload: Any) -> dict[str, Any]:
         ("活动价", "必填正数，也支持折后价、促销价、Discount Price、Sale Price等表头。"),
         ("推荐价", "选填。通用筛选只比较原价和活动价，不会读取推荐价来覆盖或补填活动价。"),
         ("筛选规则", "折扣率=活动价÷原价。低于指定最低折扣率的行移出结果，等于最低值时保留。"),
-        ("异常处理", "缺价、非正数或价格公式等行移出结果，记录到单独的异常明细中；源文件不改动。"),
+        ("异常处理", "缺价、非正数或无法验证的价格公式等行移出结果，记录到单独的异常明细中；源文件不改动。"),
         ("填写位置", "请从商品数据工作表第2行开始填写商品。本模板不含示例商品，字段说明不参与筛选。"),
     ]
     for note in notes:
