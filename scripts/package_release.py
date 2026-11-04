@@ -15,7 +15,7 @@ def _release_output_path(release_dir: Path, name: str) -> Path:
     return output_path
 
 
-def package_release(version: str = "0.2.89"):
+def package_release(version: str = "0.2.90"):
     if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("Release version must use the numeric major.minor.patch format")
 
@@ -49,7 +49,7 @@ def package_release(version: str = "0.2.89"):
     latest_json_data = {
         "version": version,
         "mandatory": False,
-        "notes": "新增 TEMU 全球财务明细导出：按自定义日期下载列表与账务详情，每个 sheet 添加完整店铺名并合并同名 sheet，兼容两行合并表头。合入 SKU 参考价筛选与删除 SKU 明细导出，保留 Lazada 受限账单、钉钉配置与操作人选择等已有功能。更新完全自愿，不更新也可继续使用；仅在设置中点击“检查更新”，再点击“下载并安装”才更新。",
+        "notes": "修复 TEMU 财务导出在店名尚未加载时提前报错的问题：等待真实店名出现后再核对身份，登录失效时给出明确提示，兼容同一店名的重复页面元素。保留全球财务明细汇总、SKU 参考价筛选及已有业务功能。更新完全自愿，不更新也可继续使用；仅在设置中点击“检查更新”，再点击“下载并安装”才更新。安装后请重启客户端。",
         "frontend_url": "",
         "package_url": f"http://rpa.whhqyl.com.cn/hqyl/{installer_name}",
         "sha256": sha256_hash,
@@ -164,5 +164,5 @@ pause
     print(f"Release packaging complete for version {version}.")
 
 if __name__ == "__main__":
-    ver = sys.argv[1] if len(sys.argv) > 1 else "0.2.89"
+    ver = sys.argv[1] if len(sys.argv) > 1 else "0.2.90"
     package_release(ver)

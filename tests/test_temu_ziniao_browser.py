@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from backend.core.ziniao_browser import (
-    ZiniaoBrowser, ZiniaoBrowserError, ZiniaoTransportError, account_profile,
+    ZiniaoBrowser, ZiniaoBrowserError, ZiniaoPageNavigatingError, ZiniaoTransportError, account_profile,
 )
 from backend.core.ziniao_ip_check import ZiniaoIPCheckError
 
@@ -15,6 +15,20 @@ ROW = {'browserId':'123','browserName':'泰国-testSeller','platform_name':'TEMU
 
 
 class NativeAccountBrowserTests(unittest.TestCase):
+    def test_read_interrupted_by_navigation_is_typed_without_exposing_driver_details(self):
+        client, runtime, driver, store = self.opened()
+        client.open_store(store)
+        for message in ('execution context was destroyed', 'cannot find context with specified id',
+                        'document unloaded while waiting for result'):
+            driver.execute_script.side_effect = RuntimeError(message + REQUEST['password'])
+            with self.subTest(message=message), self.assertRaises(ZiniaoPageNavigatingError) as caught:
+                client.evaluate('123', 'JSON.stringify({})')
+            self.assertNotIn(REQUEST['password'], str(caught.exception))
+        driver.execute_script.side_effect = RuntimeError('no such window')
+        with self.assertRaises(ZiniaoBrowserError) as caught:
+            client.evaluate('123', 'JSON.stringify({})')
+        self.assertNotIsInstance(caught.exception, ZiniaoPageNavigatingError)
+
     def make(self):
         runtime = Mock()
         runtime.get_browser_list.return_value = [dict(ROW)]

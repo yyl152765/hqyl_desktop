@@ -6,6 +6,7 @@ import time
 from datetime import date, datetime, timedelta
 from urllib.parse import urlsplit
 
+from backend.core.ziniao_browser import ZiniaoPageNavigatingError
 from backend.services.temu_fee_refund_controls import (
     _evaluate,
     _script,
@@ -321,16 +322,43 @@ class TemuFinancialGateway:
         click_control(self.browser, identity, choices[0]["selector"])
 
     @staticmethod
+    def _seller_name(state):
+        sellers = {}
+        for item in state.get("sellers", []):
+            name = str(item or "").strip()
+            key = re.sub(r"\s+", "", name).casefold()
+            if key not in {"", "-", "--"}:
+                sellers.setdefault(key, name)
+        if len(sellers) > 1:
+            raise ValueError("页面出现多个不同的 TEMU 卖家身份，请核对后重试")
+        return next(iter(sellers.values()), "")
+
+    @staticmethod
     def verify_seller(store, state):
-        sellers = [str(item or "").strip() for item in state.get("sellers", [])]
-        if len(sellers) != 1 or sellers[0] in {"", "-", "--"}:
-            raise ValueError("无法唯一确认当前 TEMU 卖家身份")
-        seller = sellers[0]
+        seller = TemuFinancialGateway._seller_name(state)
+        if not seller:
+            raise ValueError("TEMU 卖家名称尚未加载完成，请稍后重试")
         store_key = re.sub(r"\s+", "", str(store.get("store_name") or "")).casefold()
         seller_key = re.sub(r"\s+", "", seller).casefold()
         if not (seller_key == store_key or any(store_key.endswith(mark + seller_key) for mark in "-－—–")):
             raise ValueError("当前 TEMU 卖家身份与所选紫鸟店铺不一致，请核对后重试")
         return seller
+
+    def _wait_for_seller(self, identity, store, labels=(), seconds=60):
+        def loaded():
+            try:
+                state = self.state(identity, labels)
+            except ZiniaoPageNavigatingError:
+                return None
+            # The real page mounts an empty mallInfo container before the
+            # seller request finishes (or redirects an expired session to
+            # login). A single DOM node does not establish an identity.
+            if not self._seller_name(state):
+                return None
+            self.verify_seller(store, state)
+            return None if state.get("busy") else state
+
+        return _wait(loaded, seconds, "TEMU 卖家名称未能加载，请确认该店铺已登录且页面加载正常后重试")
 
     @staticmethod
     def _looks_reconciliation(state) -> bool:
@@ -345,11 +373,7 @@ class TemuFinancialGateway:
         # centre even when the requested report is the global finance detail.
         self._navigate(identity, RECONCILIATION_URL)
         labels = ["账户资金", "对账中心", "查询", "导出", "导出历史", "重置"]
-        state = self.wait(
-            identity,
-            lambda s: len(s.get("sellers", [])) == 1,
-            labels, 60,
-        )
+        state = self._wait_for_seller(identity, store, labels)
         seller = self.verify_seller(store, state)
         if not self._looks_reconciliation(state):
             books = state["found"].get("对账中心", [])
@@ -362,6 +386,7 @@ class TemuFinancialGateway:
                 )
             self._click_label(identity, "对账中心", labels)
             state = self.wait(identity, self._looks_reconciliation, labels, 60)
+            state = self._wait_for_seller(identity, store, labels)
         self.verify_seller(store, state)
         return seller, state
 
@@ -591,7 +616,7 @@ class TemuFinancialGateway:
                 set_custom_range(self.browser, identity, DATE_LABEL, start, end)
             self._ensure_filters(identity, start, end)
             query_and_wait(self.browser, identity)
-            self.verify_seller(store, self.state(identity))
+            self._wait_for_seller(identity, store, seconds=30)
             self._select_export_options(identity)
             submitted_text = _evaluate(self.browser, identity, CLOCK_STATE)
             submitted = datetime.strptime(submitted_text, "%Y-%m-%d %H:%M:%S")

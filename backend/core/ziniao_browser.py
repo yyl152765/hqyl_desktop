@@ -30,6 +30,10 @@ class ZiniaoClickInterceptedError(ZiniaoBrowserError):
     """Selenium confirmed that an overlay prevented the click from occurring."""
 
 
+class ZiniaoPageNavigatingError(ZiniaoBrowserError):
+    """A read-only script lost its document while the page was navigating."""
+
+
 class ZiniaoTransportError(ZiniaoBrowserError):
     """The local automation request has no trustworthy response."""
 
@@ -392,7 +396,13 @@ class ZiniaoBrowser:
             return json.loads(value) if isinstance(value, str) else value
         except ZiniaoBrowserError:
             raise
-        except Exception:
+        except Exception as exc:
+            if any(marker in str(exc).casefold() for marker in (
+                'execution context was destroyed',
+                'cannot find context with specified id',
+                'document unloaded while waiting for result',
+            )):
+                raise ZiniaoPageNavigatingError('店铺页面正在跳转，请稍后重试') from None
             raise ZiniaoBrowserError('读取紫鸟店铺页面失败，请检查页面、登录状态或人工验证') from None
 
     def click(self, identity: str, selector: str):

@@ -50,7 +50,12 @@ class DOMBrowser:
         self.page.goto(url)
 
     def evaluate(self, _, script):
-        result = self.page.evaluate(script)
+        try:
+            result = self.page.evaluate(script)
+        except Exception as exc:
+            if 'Execution context was destroyed' in str(exc):
+                raise gateway.ZiniaoPageNavigatingError('店铺页面正在跳转') from None
+            raise
         return json.loads(result) if isinstance(result, str) else result
 
     def click(self, _, selector):
@@ -122,3 +127,23 @@ class FinancialDOMTests(TestCase):
         self.page.goto(gateway.RECONCILIATION_URL)
         instance = gateway.TemuFinancialGateway('p', browser=self.transport)
         self.assertEqual(instance.state('1')['sellers'], ['Seller'])
+
+    def test_reconciliation_waits_for_name_in_the_initially_empty_visible_container(self):
+        loading = HTML.replace('>Seller</div>', '><div class="account-info_mallName__fixture"></div></div>', 1)
+        loading += '''<script>setTimeout(() => {
+          document.querySelector('.account-info_mallName__fixture').textContent='Seller';
+        }, 500);</script>'''
+        self.page.route(gateway.RECONCILIATION_URL, lambda route: route.fulfill(body=loading, content_type='text/html'))
+        instance = gateway.TemuFinancialGateway('p', browser=self.transport)
+        seller, state = instance._open_reconciliation('1', {'store_name': '示例-Seller'})
+        self.assertEqual(seller, 'Seller')
+        self.assertEqual(state['sellers'], ['Seller'])
+        self.assertEqual(self.page.evaluate('window.queries'), 0)
+
+    def test_empty_identity_then_login_redirect_reports_expired_session(self):
+        loading = HTML.replace('>Seller</div>', '><div class="account-info_mallName__fixture"></div></div>', 1)
+        loading += '<script>setTimeout(() => { location.href="/login"; }, 500);</script>'
+        self.page.route(gateway.RECONCILIATION_URL, lambda route: route.fulfill(body=loading, content_type='text/html'))
+        instance = gateway.TemuFinancialGateway('p', browser=self.transport)
+        with self.assertRaisesRegex(ValueError, '登录已失效'):
+            instance._open_reconciliation('1', {'store_name': '示例-Seller'})

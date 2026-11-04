@@ -127,6 +127,40 @@ class FinancialGatewayTests(TestCase):
             self.gateway.export({**self.store, 'store_name': '另一店'}, START.isoformat(), END.isoformat(), Path('.'))
         self.browser.open_store.assert_not_called()
 
+    def test_duplicate_renderings_of_the_same_seller_are_not_different_identities(self):
+        state = {'sellers': ['', '--', 'Seller', ' seller ']}
+        self.assertEqual(self.gateway.verify_seller(self.store, state), 'Seller')
+        with self.assertRaisesRegex(ValueError, '多个不同'):
+            self.gateway.verify_seller(self.store, {'sellers': ['Seller', 'Other Seller']})
+        with self.assertRaisesRegex(ValueError, '不一致'):
+            self.gateway.verify_seller(self.store, {'sellers': ['Other Seller', 'other seller']})
+
+    def test_unloaded_seller_wait_has_a_bounded_specific_error(self):
+        for sellers in ([], [''], [' ', '--']):
+            with self.subTest(sellers=sellers), patch.object(self.gateway, 'state', return_value={'sellers': sellers}):
+                with self.assertRaisesRegex(ValueError, '卖家名称未能加载'):
+                    self.gateway._wait_for_seller('1', self.store, seconds=0)
+
+    def test_wrong_seller_is_rejected_during_wait_without_exporting(self):
+        with patch.object(self.gateway, 'state', return_value={'sellers': ['Other Seller']}):
+            with self.assertRaisesRegex(ValueError, '不一致'):
+                self.gateway._wait_for_seller('1', self.store, seconds=0)
+
+    def test_identity_wait_retries_only_interrupted_navigation_reads(self):
+        ready = {'sellers': ['Seller']}
+        with patch.object(self.gateway, 'state', side_effect=[
+            gateway.ZiniaoPageNavigatingError('页面正在跳转'), {'sellers': ['']}, ready,
+        ]) as state:
+            self.assertEqual(self.gateway._wait_for_seller('1', self.store, seconds=2), ready)
+        self.assertEqual(state.call_count, 3)
+        with patch.object(self.gateway, 'state', side_effect=RuntimeError('connection lost')) as state:
+            with self.assertRaisesRegex(RuntimeError, 'connection lost'):
+                self.gateway._wait_for_seller('1', self.store, seconds=2)
+        state.assert_called_once()
+        with patch.object(self.gateway, 'state', side_effect=gateway.ZiniaoPageNavigatingError('页面正在跳转')):
+            with self.assertRaisesRegex(ValueError, '卖家名称未能加载'):
+                self.gateway._wait_for_seller('1', self.store, seconds=0)
+
     def test_opened_store_closes_and_original_error_survives_cleanup_failure(self):
         with patch.object(self.gateway, '_open_reconciliation', side_effect=ValueError('页面错误')):
             with self.assertRaisesRegex(ValueError, '页面错误'):
