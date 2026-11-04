@@ -34,8 +34,8 @@ class BridgeHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         method = request["method"]
-        allowed = {"get_lazada_campaign_workbook_info", "choose_lazada_campaign_files", "inspect_lazada_campaign_files",
-                   "export_lazada_campaign_template", "start_lazada_campaign_workbook", "get_task_status", "get_latest_task_status", "open_path"}
+        allowed = {"get_lazada_campaign_workbook_info", "choose_lazada_campaign_files", "choose_lazada_campaign_sku_price_file", "inspect_lazada_campaign_files",
+                   "export_lazada_campaign_template", "export_lazada_campaign_removed_skus", "start_lazada_campaign_workbook", "get_task_status", "get_latest_task_status", "open_path"}
         if method == "get_app_info":
             settings = self.bridge.config_store.load()
             result = {"ok": True, "app": {"name": "测试工作台", "version": "test"},
@@ -77,13 +77,15 @@ class CampaignFrontendTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.sources = [write_prices(self.root / "第一.xlsx"), write_prices(self.root / "第二.xlsx")]
         self.selected = [str(path) for path in self.sources]
+        self.reference_selected = None
+        self.save_selected = None
         self.bridge = AppBridge()
         self.bridge.config_store = Mock()
         self.bridge.config_store.load.return_value = AppSettings(output_dir=str(self.root / "输出"))
         self.bridge._payload_with_account = Mock(side_effect=AssertionError("不能读取业务账号"))
         self.window = Mock()
-        self.window.create_file_dialog.side_effect = lambda *args, **kwargs: self.selected
-        picker = patch.dict("sys.modules", {"webview": SimpleNamespace(OPEN_DIALOG=1, windows=[self.window])})
+        self.window.create_file_dialog.side_effect = lambda *args, **kwargs: self.save_selected if args and args[0] == 30 else self.selected if kwargs.get("allow_multiple") else self.reference_selected
+        picker = patch.dict("sys.modules", {"webview": SimpleNamespace(OPEN_DIALOG=1, FileDialog=SimpleNamespace(SAVE=30), windows=[self.window])})
         picker.start()
         self.addCleanup(picker.stop)
         BridgeHandler.bridge = self.bridge
@@ -112,6 +114,16 @@ class CampaignFrontendTests(unittest.TestCase):
     def choose_files(self):
         self.page.locator("#chooseFilesBtn").click()
         expect(self.page.locator("#sourceFileList [data-remove-file]")).to_have_count(len(self.selected))
+
+    def write_sku_reference(self, entries):
+        reference = self.root / "SKU价格.xlsx"
+        book = Workbook()
+        book.active.append(["SKU", "价格"])
+        for entry in entries:
+            book.active.append(entry)
+        book.save(reference)
+        book.close()
+        return reference
 
     def test_batch_without_accounts_then_open_outputs_and_restore(self):
         originals = [path.read_bytes() for path in self.sources]
@@ -143,6 +155,8 @@ class CampaignFrontendTests(unittest.TestCase):
         expect(self.page.locator("#completedCount")).to_have_text("完成 2 · 失败 0")
         expect(self.page.locator("#sourceFileList [data-remove-file]")).to_have_count(2)
         expect(self.page.locator("#discountThreshold")).to_have_value("95")
+        expect(self.page.locator("#skuPriceFile")).to_have_value("")
+        expect(self.page.locator("#skuRemovedCount")).to_have_text("SKU价格剔除 0 行")
         self.assertFalse(self.errors)
         self.assertIn(task["result"]["archive_file"], self.opened)
         self.bridge._payload_with_account.assert_not_called()
@@ -277,6 +291,279 @@ class CampaignFrontendTests(unittest.TestCase):
         expect(self.page.locator("#sourceFileList")).to_contain_text("尚未选择文件")
         expect(self.page.locator("#startBtn")).to_be_disabled()
         self.assertFalse(self.errors)
+
+    def test_optional_sku_reference_filters_restores_and_removes(self):
+        source = self.root / "活动表.xlsx"
+        book = Workbook()
+        book.active.append(["SKU", "商品名称", "原价", "活动价"])
+        for row in (("0001", "低于底价", 100, 95), ("0002", "等于底价", 100, 95),
+                    ("未匹配", "无参考SKU", 100, 95), ("0004", "折扣先剔除", 100, 94.99),
+                    ("bad", "原价为零", 0, 95)):
+            book.active.append(row)
+        book.save(source)
+        book.close()
+        reference = self.write_sku_reference([("0001", 96), ("0002", 95), ("0004", 200), ("bad", 100)])
+        original = (source.read_bytes(), reference.read_bytes())
+        self.selected = [str(source)]
+        self.reference_selected = [str(reference)]
+        self.open_page()
+        self.choose_files()
+        self.page.locator("#chooseSkuPriceBtn").click()
+        expect(self.page.locator("#skuPriceFile")).to_have_value(str(reference))
+        self.assertFalse(self.window.create_file_dialog.call_args.kwargs["allow_multiple"])
+        self.page.locator("#inspectBtn").click()
+        expect(self.page.locator("#inspectionMessage")).to_contain_text("SKU价格表：已读取 4 个SKU")
+        self.page.locator("#startBtn").click()
+        expect(self.page.locator("#completedCount")).to_have_text("完成 1 · 失败 0")
+        expect(self.page.locator("#keptCount")).to_have_text("2")
+        expect(self.page.locator("#removedCount")).to_have_text("3")
+        expect(self.page.locator("#skuRemovedCount")).to_have_text("SKU价格剔除 1 行")
+        expect(self.page.locator("#exceptionCount")).to_contain_text("异常行 1")
+        expect(self.page.locator("#fileResults tr td")).to_have_count(9)
+        task = self.bridge.get_latest_task_status("lazada_campaign_workbook")
+        self.assertEqual(task["context"]["sku_price_file"], str(reference))
+        result = task["result"]
+        self.assertEqual((result["total_rows"], result["removed_rows"], result["sku_removed_rows"], result["unparseable_rows"]), (5, 1, 1, 1))
+        output = load_workbook(result["files"][0]["processed_file"])
+        try:
+            self.assertEqual([output.active.cell(row, 1).value for row in (2, 3)], ["0002", "未匹配"])
+            self.assertEqual(output.active.max_row, 3)
+        finally:
+            output.close()
+        self.page.reload()
+        expect(self.page.locator("#skuPriceFile")).to_have_value(str(reference))
+        expect(self.page.locator("#skuRemovedCount")).to_have_text("SKU价格剔除 1 行")
+        self.page.locator("#clearSkuPriceBtn").click()
+        expect(self.page.locator("#skuPriceFile")).to_have_value("")
+        expect(self.page.locator("#skuRemovedCount")).to_have_text("SKU价格剔除 0 行")
+        expect(self.page.locator("#clearSkuPriceBtn")).to_be_disabled()
+        self.page.locator("#startBtn").click()
+        expect(self.page.locator("#completedCount")).to_have_text("完成 1 · 失败 0")
+        expect(self.page.locator("#keptCount")).to_have_text("3")
+        expect(self.page.locator("#skuRemovedCount")).to_have_text("SKU价格剔除 0 行")
+        self.assertEqual((source.read_bytes(), reference.read_bytes()), original)
+        self.bridge._payload_with_account.assert_not_called()
+        self.assertFalse(self.errors)
+
+    def test_conflicting_reference_blocks_inspect_and_start(self):
+        reference = self.write_sku_reference([("0001", 95), ("0001", 96)])
+        self.reference_selected = [str(reference)]
+        self.open_page()
+        self.choose_files()
+        self.page.locator("#chooseSkuPriceBtn").click()
+        expect(self.page.locator("#skuPriceFile")).to_have_value(str(reference))
+        with patch.object(self.bridge.tasks, "start", wraps=self.bridge.tasks.start) as start_task:
+            self.page.locator("#inspectBtn").click()
+            expect(self.page.locator("#formIssues")).to_contain_text("冲突")
+            expect(self.page.locator("#inspectBtn")).to_be_enabled()
+            self.page.locator("#startBtn").click()
+            expect(self.page.locator("#resultBadge")).to_have_text("启动失败")
+            expect(self.page.locator("#logBox")).to_contain_text("冲突")
+            start_task.assert_not_called()
+        expect(self.page.locator("#openArchiveBtn")).to_be_disabled()
+        self.assertFalse(self.errors)
+
+    def test_removed_skus_preview_full_export_cancel_restore_and_busy(self):
+        first, second = self.root / "第一份活动.xlsx", self.root / "第二份活动.xlsx"
+        sku = '<img src=x onerror="alert(1)">'
+        book = Workbook()
+        book.active.title = "商品表"
+        book.active.append(["SKU", "原价", "活动价"])
+        for _ in range(102):
+            book.active.append([sku, 100, 95])
+        for row in (("折扣剔除", 100, 94.99), ("原价异常", 0, 95), ("保留", 100, 95)):
+            book.active.append(row)
+        book.save(first)
+        book.close()
+        book = Workbook()
+        book.active.append(["SKU", "原价", "活动价"])
+        book.active.append(["OTHER", 100, 95])
+        book.save(second)
+        book.close()
+        reference = self.write_sku_reference([(sku, 96), ("折扣剔除", 1000), ("原价异常", 1000), ("保留", 95), ("OTHER", 100)])
+        originals = [path.read_bytes() for path in (first, second, reference)]
+        self.selected, self.reference_selected = [str(first), str(second)], [str(reference)]
+        self.open_page()
+        self.choose_files()
+        self.page.locator("#chooseSkuPriceBtn").click()
+        expect(self.page.locator("#skuPriceFile")).to_have_value(str(reference))
+        self.page.locator("#startBtn").click()
+        expect(self.page.locator("#completedCount")).to_have_text("完成 2 · 失败 0")
+        first_button = self.page.locator('[data-view-removed-skus="0"]')
+        first_button.click()
+        expect(self.page.locator("#removedSkusPanel")).to_be_visible()
+        expect(self.page.locator("#removedSkusTitle")).to_contain_text("第一份活动.xlsx · SKU价格剔除（102）")
+        expect(self.page.locator("#removedSkusDescription")).to_contain_text("预览前 100 行")
+        expect(self.page.locator("#removedSkusRows tr")).to_have_count(100)
+        expect(self.page.locator("#removedSkusRows tr").first.locator("td").first).to_have_text(sku)
+        self.assertEqual(self.page.locator("#removedSkusRows img").count(), 0)
+        self.assertLessEqual(self.page.locator(".campaign-removed-table").bounding_box()["height"], 342)
+        self.page.keyboard.press("Escape")
+        expect(self.page.locator("#removedSkusPanel")).to_be_hidden()
+        expect(first_button).to_be_focused()
+        self.page.locator('[data-view-removed-skus="1"]').click()
+        expect(self.page.locator("#removedSkusTitle")).to_contain_text("第二份活动.xlsx")
+        expect(self.page.locator("#removedSkusRows tr")).to_have_count(1)
+        expect(self.page.locator("#removedSkusRows")).to_contain_text("OTHER")
+        first_button.click()
+        target = self.root / "导出删除SKU.xlsx"
+        self.save_selected = [str(target)]
+        self.page.locator("#exportRemovedSkusBtn").click()
+        expect(self.page.locator("#removedSkusMessage")).to_contain_text(str(target))
+        self.assertEqual(self.window.create_file_dialog.call_args.args[0], 30)
+        output = load_workbook(target)
+        try:
+            rows = list(output.active.values)
+            self.assertEqual(rows[0], ("SKU", "活动价", "参考价格", "工作表", "原始行号", "删除原因", "源文件"))
+            self.assertEqual(len(rows), 103)
+            self.assertTrue(all(row[0] == sku and row[1:3] == (95, 96) and row[3] == "商品表" for row in rows[1:]))
+            self.assertEqual([row[4] for row in rows[1:]], list(range(2, 104)))
+            self.assertEqual(output.active["A2"].data_type, "s")
+        finally:
+            output.close()
+        exported = target.read_bytes()
+        message = self.page.locator("#removedSkusMessage").inner_text()
+        self.save_selected = None
+        self.page.locator("#exportRemovedSkusBtn").click()
+        expect(self.page.locator("#exportRemovedSkusBtn")).to_be_enabled()
+        expect(self.page.locator("#removedSkusMessage")).to_have_text(message)
+        self.assertEqual(target.read_bytes(), exported)
+        self.page.reload()
+        expect(self.page.locator("#completedCount")).to_have_text("完成 2 · 失败 0")
+        self.page.locator('[data-view-removed-skus="0"]').click()
+        expect(self.page.locator("#removedSkusRows tr")).to_have_count(100)
+        restored_target = self.root / "恢复后导出.xlsx"
+        self.save_selected = str(restored_target)
+        self.page.locator("#exportRemovedSkusBtn").click()
+        expect(self.page.locator("#removedSkusMessage")).to_contain_text(str(restored_target))
+        self.assertEqual(restored_target.read_bytes(), exported)
+        self.page.evaluate("""() => {
+            const realApi = window.pywebview.api; window.exportCalls = 0;
+            window.pywebview.api = new Proxy(realApi, {get: (target, method) => method === 'export_lazada_campaign_removed_skus'
+                ? () => { window.exportCalls++; return new Promise(resolve => {window.finishExport = resolve;}); } : target[method]});
+        }""")
+        self.page.locator("#exportRemovedSkusBtn").click()
+        expect(self.page.locator("#exportRemovedSkusBtn")).to_be_disabled()
+        expect(self.page.locator("#clearFilesBtn")).to_be_disabled()
+        self.page.locator("#exportRemovedSkusBtn").dispatch_event("click")
+        self.assertEqual(self.page.evaluate("window.exportCalls"), 1)
+        self.page.evaluate("() => window.finishExport({ok:false,error:'保存失败示例'})")
+        expect(self.page.locator("#removedSkusMessage")).to_have_text("保存失败示例")
+        expect(self.page.locator("#exportRemovedSkusBtn")).to_be_enabled()
+        self.page.locator("#closeRemovedSkusBtn").click()
+        expect(self.page.locator('[data-view-removed-skus="0"]')).to_be_focused()
+        self.page.locator('[data-view-removed-skus="0"]').click()
+        self.page.locator("#clearFilesBtn").click()
+        expect(self.page.locator("#removedSkusPanel")).to_be_hidden()
+        self.assertEqual([path.read_bytes() for path in (first, second, reference)], originals)
+        self.assertFalse(self.errors)
+
+    def test_reference_picker_cancel_and_busy_controls(self):
+        reference = self.write_sku_reference([("0001", 95)])
+        self.open_page()
+        self.choose_files()
+        self.page.locator("#skuPriceFile").fill(str(reference))
+        self.page.locator("#chooseSkuPriceBtn").click()
+        expect(self.page.locator("#chooseSkuPriceBtn")).to_be_enabled()
+        expect(self.page.locator("#skuPriceFile")).to_have_value(str(reference))
+        self.page.evaluate("""() => {
+            const realApi = window.pywebview.api;
+            window.pywebview.api = new Proxy(realApi, {get: (target, method) => method === 'choose_lazada_campaign_sku_price_file'
+                ? () => new Promise(resolve => { window.finishReferencePicker = resolve; }) : target[method]});
+        }""")
+        self.page.locator("#chooseSkuPriceBtn").click()
+        expect(self.page.locator("#skuPriceFile")).to_be_disabled()
+        expect(self.page.locator("#clearSkuPriceBtn")).to_be_disabled()
+        expect(self.page.locator("#chooseFilesBtn")).to_be_disabled()
+        expect(self.page.locator("#startBtn")).to_be_disabled()
+        self.page.evaluate("() => window.finishReferencePicker({ok:true,cancelled:true})")
+        expect(self.page.locator("#skuPriceFile")).to_be_enabled()
+        expect(self.page.locator("#clearSkuPriceBtn")).to_be_enabled()
+        expect(self.page.locator("#skuPriceFile")).to_have_value(str(reference))
+        self.assertFalse(self.errors)
+
+    def test_removed_skus_preview_survives_missing_complete_artifact(self):
+        file_result = {"name": "部分完成.xlsx", "status": "success", "sku_removed_rows": 1,
+                       "processed_file": str(self.sources[0]), "removed_sku_file": "",
+                       "error": "删除SKU完整明细保存失败", "removed_sku_preview": [
+                           {"sku": "0001", "activity_price": "95", "reference_price": "96",
+                            "worksheet": "商品", "source_row": 2, "reason": "活动价低于SKU参考价格"}]}
+        self.bridge.tasks.start("明细保存失败任务", lambda progress: {"file_count": 1, "success_count": 1,
+                                                                    "is_complete": False, "files": [file_result]},
+                                tool="lazada_campaign_workbook", context={"workflow": "local_excel", "source_files": [str(self.sources[0])]})
+        self.open_page()
+        expect(self.page.get_by_role("button", name="筛选 Excel", exact=True)).to_be_enabled()
+        self.page.get_by_role("button", name="SKU价格剔除（1）", exact=True).click()
+        expect(self.page.locator("#removedSkusRows")).to_contain_text("0001")
+        expect(self.page.locator("#removedSkusDescription")).to_contain_text("完整明细未生成，暂不能导出")
+        expect(self.page.locator("#exportRemovedSkusBtn")).to_be_disabled()
+        self.assertFalse(self.errors)
+
+    def test_old_local_context_without_sku_reference_still_restores(self):
+        self.bridge.tasks.start("旧本地任务", lambda progress: {"file_count": 1, "kept_rows": 1,
+                                                              "files": [{"name": "旧结果.xlsx", "status": "success", "sku_removed_rows": 1}]},
+                                tool="lazada_campaign_workbook", context={"workflow": "local_excel", "source_files": [str(self.sources[0])], "mode": "plain"})
+        self.open_page()
+        expect(self.page.locator("#sourceFileList [data-remove-file]")).to_have_count(1)
+        expect(self.page.locator("#skuPriceFile")).to_have_value("")
+        expect(self.page.locator("#skuRemovedCount")).to_have_text("SKU价格剔除 0 行")
+        expect(self.page.locator("[data-view-removed-skus]")).to_have_count(0)
+        self.assertFalse(self.errors)
+
+    def test_older_backend_cannot_silently_ignore_sku_filter(self):
+        old_info = self.bridge.get_lazada_campaign_workbook_info()
+        old_info.pop("supports_sku_price_filter", None)
+        with patch.object(self.bridge, "get_lazada_campaign_workbook_info", return_value=old_info):
+            self.open_page()
+        expect(self.page.locator("#chooseSkuPriceBtn")).to_be_disabled()
+        expect(self.page.locator("#skuPriceFile")).to_be_disabled()
+        expect(self.page.locator("#skuSupportNotice")).to_contain_text("当前后端未支持SKU筛选")
+        self.choose_files()
+        self.page.evaluate("""() => {
+            const input = document.querySelector('#skuPriceFile');
+            input.value = 'C:\\\\Reference\\\\SKU.xlsx'; input.dispatchEvent(new Event('input'));
+        }""")
+        with patch.object(self.bridge, "start_lazada_campaign_workbook") as start_task:
+            self.page.locator("#inspectBtn").click()
+            expect(self.page.locator("#formIssues")).to_contain_text("当前后端未支持SKU筛选，请重启或升级工作台")
+            self.page.locator("#startBtn").click()
+            expect(self.page.locator("#formIssues")).to_contain_text("当前后端未支持SKU筛选")
+            start_task.assert_not_called()
+        expect(self.page.locator("#clearSkuPriceBtn")).to_be_enabled()
+        self.page.locator("#clearSkuPriceBtn").click()
+        expect(self.page.locator("#skuPriceFile")).to_have_value("")
+        self.assertFalse(self.errors)
+
+    def test_sku_reference_preview_is_explicit_and_does_not_call_backend(self):
+        context = self.browser.new_context(viewport={"width": 1440, "height": 1000})
+        self.addCleanup(context.close)
+        page = context.new_page()
+        posts, errors = [], []
+        page.on("request", lambda request: posts.append(request.url) if request.method == "POST" else None)
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(f"http://127.0.0.1:{self.server.server_port}/pages/lazada-campaign-workbook.html?preview=1")
+        expect(page.locator("#chooseFilesBtn")).to_be_enabled()
+        expect(page.locator("#previewNotice")).to_be_visible()
+        page.locator("#chooseFilesBtn").click()
+        page.locator("#chooseSkuPriceBtn").click()
+        expect(page.locator("#skuPriceFile")).to_have_value("C:\\Preview\\SKU价格表.xlsx")
+        expect(page.locator("#sourceFileList")).to_contain_text("商品表格.xlsx")
+        page.locator("#inspectBtn").click()
+        expect(page.locator("#inspectionMessage")).to_contain_text("界面演示，未读取真实 Excel")
+        expect(page.locator("#inspectionMessage")).to_contain_text("示例 8 个SKU")
+        page.locator("#startBtn").click()
+        expect(page.locator("#completedCount")).to_have_text("演示数据 · 未处理真实文件")
+        expect(page.locator("#skuRemovedCount")).to_have_text("SKU价格剔除 2 行")
+        expect(page.locator("#removedCount")).to_have_text("6")
+        expect(page.locator("#openArchiveBtn")).to_be_disabled()
+        expect(page.locator("#openSummaryBtn")).to_be_disabled()
+        expect(page.locator("#openDirectoryBtn")).to_be_disabled()
+        page.get_by_role("button", name="SKU价格剔除（2）", exact=True).click()
+        expect(page.locator("#removedSkusRows tr")).to_have_count(2)
+        expect(page.locator("#removedSkusDescription")).to_contain_text("界面演示")
+        expect(page.locator("#exportRemovedSkusBtn")).to_be_disabled()
+        self.assertFalse(posts)
+        self.assertFalse(errors)
 
     def test_old_download_task_does_not_restore_or_request_account(self):
         self.bridge.tasks.start("旧紫鸟任务", lambda progress: {"file_count": 99, "kept_rows": 99},

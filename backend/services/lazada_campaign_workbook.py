@@ -19,12 +19,15 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter, range_boundaries
 
+from backend.services.campaign_sku_prices import find_activity_sku_column, load_sku_prices, sku_value
+
 MAX_FILES = 100
 MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_ROWS = 100_000
 MAX_COLUMNS = 200
+REMOVED_SKU_PREVIEW_LIMIT = 100
 MODES = {"auto", "plain", "invited", "regular"}
-COUNTERS = ("total_rows", "updated_rows", "removed_rows", "unparseable_rows", "kept_rows")
+COUNTERS = ("total_rows", "updated_rows", "removed_rows", "unparseable_rows", "kept_rows", "sku_removed_rows")
 _ALIASES = {
     "campaign_price": ("campaignprice", "discountprice", "saleprice", "活动价格", "活动价", "市场活动价格", "市场活动价", "大促价格", "大促价", "折后价", "促销价"),
     "base_price": ("currentproductprice", "currentprice", "originalprice", "salesprice", "sellingprice", "retailprice",
@@ -41,6 +44,7 @@ class CampaignWorkbookJob:
     output_dir: Path
     mode: str = "auto"
     threshold: Decimal = Decimal("0.95")
+    sku_price_file: Path | None = None
 
 
 def _threshold(value: Any) -> Decimal:
@@ -85,7 +89,20 @@ def validate_campaign_payload(payload: Any) -> CampaignWorkbookJob:
     output_dir = Path(output).expanduser().resolve()
     if output_dir.exists() and not output_dir.is_dir():
         raise ValueError("结果输出目录不能是文件")
-    return CampaignWorkbookJob(tuple(files), output_dir, mode, _threshold(payload.get("threshold", "0.95")))
+    reference = payload.get("sku_price_file")
+    sku_price_file = None
+    if reference is not None:
+        if not isinstance(reference, (str, Path)):
+            raise ValueError("SKU 价格表路径必须是字符串")
+        if str(reference).strip():
+            sku_price_file = Path(reference).expanduser().resolve()
+            if sku_price_file.suffix.lower() not in {".xlsx", ".xlsm"} or not sku_price_file.is_file():
+                raise ValueError("请选择有效的 .xlsx 或 .xlsm SKU 价格表")
+            if not 0 < sku_price_file.stat().st_size <= MAX_FILE_BYTES:
+                raise ValueError("SKU 价格表必须非空且不超过 50 MiB")
+            if os.path.normcase(str(sku_price_file)) in seen:
+                raise ValueError("SKU 价格表请单独导入，不要同时作为活动表格处理")
+    return CampaignWorkbookJob(tuple(files), output_dir, mode, _threshold(payload.get("threshold", "0.95")), sku_price_file)
 
 
 def _header(value: Any) -> str:
@@ -294,11 +311,13 @@ def _close_book(book: Any) -> None:
 
 def _base_result(source: Path) -> dict[str, Any]:
     return {"source_file": str(source), "name": source.name, "status": "failed", "ok": False, "mode": "",
-            "processed_file": "", "error": "", "sheets": [], **dict.fromkeys(COUNTERS, 0)}
+            "processed_file": "", "error": "", "sheets": [], "removed_sku_file": "",
+            "removed_sku_preview": [], **dict.fromkeys(COUNTERS, 0)}
 
 
 def inspect_campaign_files(payload: Any) -> dict[str, Any]:
     job = validate_campaign_payload(payload)
+    sku_prices = load_sku_prices(job.sku_price_file) if job.sku_price_file else None
     results = []
     for source in job.source_files:
         result = _base_result(source)
@@ -307,13 +326,16 @@ def inspect_campaign_files(payload: Any) -> dict[str, Any]:
             book = _book(source)
             for layout in _layouts(book, job.mode):
                 sheet, invalid, missing, rows = book[layout["worksheet"]], 0, 0, 0
+                sku_column = find_activity_sku_column(sheet, layout["header_row"]) if sku_prices is not None else None
                 for row in _data_rows(sheet, layout):
                     rows += 1
                     cell = sheet.cell(row, layout["columns"]["campaign_price"])
                     if cell.value is None or not str(cell.value).strip():
                         missing += 1
                     try:
-                        _prices(sheet, layout, row)
+                        base, price, _ = _prices(sheet, layout, row)
+                        if sku_column is not None and not _below_threshold(base, price, job.threshold):
+                            sku_value(sheet.cell(row, sku_column))
                     except ValueError:
                         invalid += 1
                 result["sheets"].append({**layout, "total_rows": rows, "unparseable_rows": invalid,
@@ -332,7 +354,18 @@ def inspect_campaign_files(payload: Any) -> dict[str, Any]:
         results.append(result)
     success = sum(result["status"] == "success" for result in results)
     return {"file_count": len(results), "success_count": success,
-            "failed_count": len(results) - success, "files": results}
+            "failed_count": len(results) - success, "files": results,
+            "sku_reference": _sku_reference(job, sku_prices)}
+
+
+def _sku_reference(job: CampaignWorkbookJob, prices: dict[str, Decimal] | None) -> dict[str, Any]:
+    return {"enabled": prices is not None, "source_file": str(job.sku_price_file or ""), "sku_count": len(prices or {})}
+
+
+def _below_threshold(base: Decimal, price: Decimal, threshold: Decimal) -> bool:
+    with localcontext() as context:
+        context.prec = max(50, len(threshold.as_tuple().digits) + 20)
+        return price < base * threshold
 
 
 def _result_mode(sheets: list[dict[str, Any]]) -> str:
@@ -469,15 +502,19 @@ def _audit_row(source: Path, sheet: Any, row: int, status: str, reason: str,
             json.dumps(values, ensure_ascii=False, default=str)]
 
 
-def _process(source: Path, output: Path, mode: str, threshold: Decimal, audit: list[list[Any]]) -> dict[str, Any]:
+def _process(source: Path, output: Path, mode: str, threshold: Decimal, audit: list[list[Any]],
+             sku_prices: dict[str, Decimal] | None = None,
+             removed_skus: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     result = _base_result(source)
     book = _book(source)
     local_audit = []
+    local_removed_skus = []
     try:
         layouts = _layouts(book, mode)
         deletion_plans = {}
         for layout in layouts:
             sheet, remove = book[layout["worksheet"]], []
+            sku_column = find_activity_sku_column(sheet, layout["header_row"]) if sku_prices is not None else None
             column_count = sheet.max_column
             summary = {**layout, **dict.fromkeys(COUNTERS, 0)}
             for row in _data_rows(sheet, layout):
@@ -493,15 +530,31 @@ def _process(source: Path, output: Path, mode: str, threshold: Decimal, audit: l
                 if updated:
                     sheet.cell(row, layout["columns"]["campaign_price"]).value = int(price) if price == price.to_integral() else float(price)
                     summary["updated_rows"] += 1
-                with localcontext() as context:
-                    context.prec = max(50, len(threshold.as_tuple().digits) + 20)
-                    below_threshold = price < base * threshold
-                if below_threshold:
+                if _below_threshold(base, price, threshold):
                     summary["removed_rows"] += 1
                     remove.append(row)
                     local_audit.append(_audit_row(source, sheet, row, "折扣筛除", f"活动价/原价低于 {threshold}", layout, base, price, source_values))
-                else:
-                    summary["kept_rows"] += 1
+                    continue
+                if sku_column is not None:
+                    try:
+                        sku = sku_value(sheet.cell(row, sku_column))
+                    except ValueError as exc:
+                        summary["unparseable_rows"] += 1
+                        remove.append(row)
+                        local_audit.append(_audit_row(source, sheet, row, "异常", str(exc), layout, base, price, source_values))
+                        continue
+                    floor = sku_prices.get(sku)
+                    if floor is not None and price < floor:
+                        summary["sku_removed_rows"] += 1
+                        remove.append(row)
+                        reason = f"SKU {sku}：活动价 {price} 低于参考价格 {floor}"
+                        local_removed_skus.append({"sku": sku, "worksheet": sheet.title, "source_row": row,
+                                                   "activity_price": str(price), "reference_price": str(floor),
+                                                   "reason": reason})
+                        local_audit.append(_audit_row(source, sheet, row, "SKU价格筛除", reason,
+                                                      layout, base, price, source_values))
+                        continue
+                summary["kept_rows"] += 1
             deletion_plans[sheet.title] = set(remove)
             result["sheets"].append(summary)
         if any(deletion_plans.values()):
@@ -516,6 +569,9 @@ def _process(source: Path, output: Path, mode: str, threshold: Decimal, audit: l
                 _remove_rows(sheet, list(rows))
         _atomic_save(book, output)
         audit.extend(local_audit)
+        if removed_skus is not None:
+            removed_skus.extend(local_removed_skus)
+        result["removed_sku_preview"] = local_removed_skus[:REMOVED_SKU_PREVIEW_LIMIT]
         result.update(status="success", ok=True, processed_file=str(output), mode=_result_mode(result["sheets"]))
         for key in COUNTERS:
             result[key] = sum(sheet[key] for sheet in result["sheets"])
@@ -533,18 +589,48 @@ def _text_row(sheet: Any, values: list[Any]) -> None:
             sheet.cell(row, column).data_type = "s"
 
 
-def _report(files: list[dict[str, Any]], audit: list[list[Any]], output: Path, threshold: Decimal) -> None:
+def _write_removed_skus(rows: list[dict[str, Any]], output: Path, source: Path) -> None:
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "删除SKU明细"
+    _text_row(sheet, ["SKU", "活动价", "参考价格", "工作表", "原始行号", "删除原因", "源文件"])
+    for row in rows:
+        price, floor = Decimal(row["activity_price"]), Decimal(row["reference_price"])
+        _text_row(sheet, [row["sku"], int(price) if price == price.to_integral() else float(price),
+                         int(floor) if floor == floor.to_integral() else float(floor), row["worksheet"],
+                         row["source_row"], row["reason"], source.name])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="245B87")
+    for column, width in {"A": 28, "B": 18, "C": 18, "D": 22, "E": 14, "F": 64, "G": 40}.items():
+        sheet.column_dimensions[column].width = width
+    try:
+        _atomic_save(book, output)
+    finally:
+        book.close()
+
+
+def _report(files: list[dict[str, Any]], audit: list[list[Any]], output: Path, threshold: Decimal,
+            sku_reference: dict[str, Any] | None = None) -> None:
     book = Workbook()
     sheet = book.active
     sheet.title = "处理汇总"
-    _text_row(sheet, ["源文件", "结果", "模板类型", "商品行", "填充行", "折扣筛除行", "异常行", "保留行", "结果文件", "错误", "最低活动价/原价"])
+    _text_row(sheet, ["源文件", "结果", "模板类型", "商品行", "填充行", "折扣筛除行", "异常行", "保留行", "SKU价格筛除行", "结果文件", "错误", "最低活动价/原价", "删除SKU明细"])
     for result in files:
         _text_row(sheet, [result["source_file"], result["status"], result["mode"],
-                          *(result[key] for key in COUNTERS), result["processed_file"], result["error"], str(threshold)])
+                          *(result[key] for key in COUNTERS), result["processed_file"], result["error"], str(threshold),
+                          result.get("removed_sku_file", "")])
     detail = book.create_sheet("筛除与异常明细")
     _text_row(detail, ["源文件名", "源文件路径", "工作表", "原始行号", "模板类型", "处理分类", "原因", "活动价", "原价", "活动价/原价", "源行数据 JSON"])
     for row in audit:
         _text_row(detail, row)
+    if sku_reference and sku_reference["enabled"]:
+        settings = book.create_sheet("SKU价格筛选设置")
+        _text_row(settings, ["参考价格表", "有效SKU数", "规则"])
+        _text_row(settings, [sku_reference["source_file"], sku_reference["sku_count"],
+                             "先筛折扣，再按卖家SKU/SKU精确匹配；活动价低于参考价移出，相等/更高/未匹配保留。"])
     for worksheet in book:
         worksheet.freeze_panes = "A2"
         worksheet.auto_filter.ref = worksheet.dimensions
@@ -562,28 +648,42 @@ def _report(files: list[dict[str, Any]], audit: list[list[Any]], output: Path, t
 def run_campaign_batch(job: CampaignWorkbookJob, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     # Recheck direct callers as well as bridge callers before creating outputs.
     job = validate_campaign_payload({"source_files": job.source_files, "output_dir": job.output_dir,
-                                     "mode": job.mode, "threshold": job.threshold})
+                                     "mode": job.mode, "threshold": job.threshold, "sku_price_file": job.sku_price_file})
+    # Load once for the entire batch; conflicts fail before any outputs exist.
+    sku_prices = load_sku_prices(job.sku_price_file) if job.sku_price_file else None
+    sku_reference = _sku_reference(job, sku_prices)
+    if progress and sku_prices is not None:
+        progress(f"SKU 价格表已读取：{len(sku_prices)} 个 SKU；先筛折扣，再检查 SKU 参考价格")
     output_dir = job.output_dir / f"Excel折扣筛选_{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:8]}"
     output_dir.mkdir(parents=True, exist_ok=False)
-    files, audit = [], []
+    files, audit, completion_errors = [], [], []
     total = len(job.source_files)
     for index, source in enumerate(job.source_files, 1):
         if progress:
             progress(f"[{index}/{total}] 筛选 Excel 表格：{source.name}")
         output = output_dir / f"{index:03d}_{source.stem}_已处理{source.suffix.lower()}"
+        removed_skus = []
         try:
-            result = _process(source, output, job.mode, job.threshold, audit)
+            result = _process(source, output, job.mode, job.threshold, audit, sku_prices, removed_skus)
         except Exception as exc:
             result = _base_result(source)
             result["error"] = str(exc)
+        if result["status"] == "success" and removed_skus:
+            try:
+                removed_file = output_dir / f"{index:03d}_{source.stem}_删除SKU.xlsx"
+                _write_removed_skus(removed_skus, removed_file, source)
+                result["removed_sku_file"] = str(removed_file)
+            except Exception:
+                result["error"] = "筛选结果已保存，但删除SKU明细保存失败，请查看汇总与异常明细后重试"
+                completion_errors.append(f"{source.name}：删除SKU明细导出失败")
         files.append(result)
         if progress:
             progress(f"[{index}/{total}] {source.name}：{'已完成' if result['status'] == 'success' else '处理失败'}")
     report = output_dir / "Excel折扣筛选汇总与异常明细.xlsx"
-    output_files = [result["processed_file"] for result in files if result["status"] == "success"]
-    completion_errors = []
+    output_files = [path for result in files if result["status"] == "success"
+                    for path in (result["processed_file"], result["removed_sku_file"]) if path]
     try:
-        _report(files, audit, report, job.threshold)
+        _report(files, audit, report, job.threshold, sku_reference)
         output_files.append(str(report))
         for result in files:
             result["audit_file"] = str(report)
@@ -607,4 +707,4 @@ def run_campaign_batch(job: CampaignWorkbookJob, progress: Callable[[str], None]
             "failed_count": total - success, **{key: sum(result[key] for result in files) for key in COUNTERS},
             "output_dir": str(output_dir), "output_file": str(report) if report.exists() else "",
             "archive_file": str(archive) if archive.exists() else "", "completion_message": "；".join(completion_errors),
-            "output_files": output_files, "files": files}
+            "output_files": output_files, "files": files, "sku_reference": sku_reference}

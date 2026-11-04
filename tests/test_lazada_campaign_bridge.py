@@ -72,6 +72,122 @@ class CampaignBridgeTests(unittest.TestCase):
             window.create_file_dialog.side_effect = RuntimeError("internal detail")
             self.assertNotIn("internal detail", self.bridge.choose_lazada_campaign_files()["error"])
 
+    def reference(self, rows):
+        source = self.root / "参考价格.xlsx"
+        book = Workbook()
+        book.active.append(["SKU", "价格"])
+        for row in rows:
+            book.active.append(row)
+        book.save(source)
+        book.close()
+        return source
+
+    def test_reference_picker_is_single_and_can_cancel(self):
+        reference = self.reference([["0001", 96]])
+        window = Mock()
+        window.create_file_dialog.return_value = (str(reference),)
+        with patch.dict("sys.modules", {"webview": SimpleNamespace(OPEN_DIALOG=1, windows=[window])}):
+            selected = self.bridge.choose_lazada_campaign_sku_price_file()
+            self.assertEqual(selected["path"], str(reference))
+            self.assertFalse(window.create_file_dialog.call_args.kwargs["allow_multiple"])
+            window.create_file_dialog.return_value = None
+            self.assertTrue(self.bridge.choose_lazada_campaign_sku_price_file()["cancelled"])
+
+    def test_sku_reference_runs_after_discount_and_restores_in_context(self):
+        reference = self.reference([["0001", 96]])
+        inspected = self.bridge.inspect_lazada_campaign_files(self.payload(sku_price_file=str(reference)))
+        self.assertTrue(inspected["ok"], inspected)
+        self.assertEqual(inspected["sku_reference"]["sku_count"], 1)
+        task = self.wait_task(self.bridge.start_lazada_campaign_workbook(self.payload(sku_price_file=str(reference))))
+        self.assertEqual(task["status"], "success", task)
+        self.assertEqual([task["result"][key] for key in ("kept_rows", "removed_rows", "sku_removed_rows", "unparseable_rows")], [0, 1, 1, 1])
+        self.assertEqual(task["context"]["sku_price_file"], str(reference))
+        self.assertNotIn("account_id", task["context"])
+        self.assert_lock_released()
+        no_reference = self.wait_task(self.bridge.start_lazada_campaign_workbook(self.payload(sku_price_file="")))
+        self.assertEqual((no_reference["result"]["kept_rows"], no_reference["result"]["sku_removed_rows"]), (1, 0))
+
+    def test_conflicting_reference_is_reported_without_starting_or_creating_outputs(self):
+        reference = self.reference([["0001", 96], ["0001", 95]])
+        self.bridge.tasks = Mock()
+        response = self.bridge.start_lazada_campaign_workbook(self.payload(sku_price_file=str(reference)))
+        self.assertFalse(response["ok"])
+        self.assertIn("0001", response["error"])
+        self.bridge.tasks.start.assert_not_called()
+        self.assertFalse((self.root / "输出").exists())
+        self.assertFalse(self.bridge.inspect_lazada_campaign_files(self.payload(sku_price_file=str(reference)))["ok"])
+        self.assert_lock_released()
+
+    def deleted_sku_task(self):
+        reference = self.reference([["0001", 96]])
+        task = self.wait_task(self.bridge.start_lazada_campaign_workbook(self.payload(sku_price_file=str(reference))))
+        self.assertEqual(task["status"], "success", task)
+        return task
+
+    def test_export_removed_skus_uses_registered_artifact_and_save_dialog(self):
+        task = self.deleted_sku_task()
+        artifact = Path(task["result"]["files"][0]["removed_sku_file"])
+        window = Mock()
+        destination = self.root / "另存的删除SKU"
+        window.create_file_dialog.return_value = (str(destination),)
+        with patch.dict("sys.modules", {"webview": SimpleNamespace(FileDialog=SimpleNamespace(SAVE=30), windows=[window])}):
+            response = self.bridge.export_lazada_campaign_removed_skus({"task_id": task["id"], "file_index": 0})
+        self.assertTrue(response["ok"], response)
+        saved = destination.with_suffix(".xlsx")
+        self.assertEqual(saved.read_bytes(), artifact.read_bytes())
+        self.assertEqual(window.create_file_dialog.call_args.args[0], 30)
+        self.assertEqual(window.create_file_dialog.call_args.kwargs["save_filename"], artifact.name)
+        book = load_workbook(saved)
+        try:
+            self.assertEqual(book.active["A2"].value, "0001")
+            self.assertEqual(book.active["A2"].data_type, "s")
+            self.assertEqual(book.active["B2"].value, 95)
+            self.assertEqual(book.active.max_row, 2)
+        finally:
+            book.close()
+
+    def test_removed_sku_export_cancel_and_invalid_tasks_do_not_write(self):
+        task = self.deleted_sku_task()
+        window = Mock()
+        window.create_file_dialog.return_value = None
+        with patch.dict("sys.modules", {"webview": SimpleNamespace(FileDialog=SimpleNamespace(SAVE=30), windows=[window])}):
+            self.assertTrue(self.bridge.export_lazada_campaign_removed_skus({"task_id": task["id"], "file_index": 0})["cancelled"])
+            window.reset_mock()
+            for payload in ({}, {"task_id": "missing", "file_index": 0}, {"task_id": task["id"], "file_index": -1},
+                            {"task_id": task["id"], "file_index": True}, {"task_id": task["id"], "file_index": 1}):
+                with self.subTest(payload=payload):
+                    self.assertFalse(self.bridge.export_lazada_campaign_removed_skus(payload)["ok"])
+            window.create_file_dialog.assert_not_called()
+
+    def test_removed_sku_export_protects_input_reference_and_other_results(self):
+        task = self.deleted_sku_task()
+        window = Mock()
+        protected = (self.source, Path(task["context"]["sku_price_file"]), Path(task["result"]["files"][0]["processed_file"]))
+        with patch.dict("sys.modules", {"webview": SimpleNamespace(FileDialog=SimpleNamespace(SAVE=30), windows=[window])}):
+            for target in protected:
+                with self.subTest(target=target):
+                    before = target.read_bytes()
+                    window.create_file_dialog.return_value = (str(target),)
+                    response = self.bridge.export_lazada_campaign_removed_skus({"task_id": task["id"], "file_index": 0})
+                    self.assertFalse(response["ok"])
+                    self.assertIn("不能覆盖", response["error"])
+                    self.assertEqual(target.read_bytes(), before)
+
+    def test_removed_sku_export_handles_missing_artifact_and_save_failure(self):
+        task = self.deleted_sku_task()
+        artifact = Path(task["result"]["files"][0]["removed_sku_file"])
+        window = Mock()
+        window.create_file_dialog.return_value = (str(self.root / "saved.xlsx"),)
+        with patch.dict("sys.modules", {"webview": SimpleNamespace(FileDialog=SimpleNamespace(SAVE=30), windows=[window])}):
+            with patch("backend.app_bridge.shutil.copyfile", side_effect=PermissionError("private error")):
+                response = self.bridge.export_lazada_campaign_removed_skus({"task_id": task["id"], "file_index": 0})
+                self.assertFalse(response["ok"])
+                self.assertNotIn("private error", response["error"])
+            artifact.unlink()
+            window.reset_mock()
+            self.assertFalse(self.bridge.export_lazada_campaign_removed_skus({"task_id": task["id"], "file_index": 0})["ok"])
+            window.create_file_dialog.assert_not_called()
+
     def test_inspection_reads_local_files_and_reports_partial_invalid_input(self):
         corrupt = self.root / "损坏.xlsx"
         corrupt.write_bytes(b"not an Excel")

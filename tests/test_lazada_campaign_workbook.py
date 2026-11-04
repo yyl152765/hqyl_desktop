@@ -57,6 +57,180 @@ class CampaignWorkbookTests(unittest.TestCase):
         self.addCleanup(book.close)
         return book
 
+    def reference(self, rows, name="SKU价格表.xlsx"):
+        source = self.root / name
+        book = Workbook()
+        book.active.append(["SKU", "价格"])
+        for row in rows:
+            book.active.append(row)
+        book.save(source)
+        book.close()
+        return source
+
+    def test_sku_floor_runs_after_discount_and_records_separate_reasons(self):
+        source = self.write(rows=[
+            ["A", "1", "shop1", "低于底价", 100, 5, None, "<=95"],
+            ["B", "2", "shop2", "等于底价", 100, 5, None, "<=95"],
+            ["C", "3", "shop3", "高于底价", 100, 5, None, "<=95"],
+            ["D", "4", "shop4", "未匹配", 100, 5, None, "<=95"],
+            ["E", "5", "shop5", "折扣不合格", 100, 5, None, "<=94"],
+            ["F", "6", "shop6", "价格异常", 0, 5, None, "<=95"],
+            [None, "7", "shop7", "没有SKU", 100, 5, None, "<=95"],
+        ])
+        reference = self.reference([["A", 96], ["B", 95], ["C", 94], ["E", 99], ["F", 100], ["OTHER", 1000]])
+        before = (source.read_bytes(), reference.read_bytes())
+        result = self.run_job([source], sku_price_file=reference)
+        self.assertTrue(result["is_complete"], result)
+        self.assertEqual([result[key] for key in ("total_rows", "kept_rows", "removed_rows", "sku_removed_rows", "unparseable_rows")], [7, 4, 1, 1, 1])
+        self.assertEqual(result["total_rows"], sum(result[key] for key in ("kept_rows", "removed_rows", "sku_removed_rows", "unparseable_rows")))
+        self.assertEqual([self.output(result).active.cell(row, 1).value for row in range(2, 6)], ["B", "C", "D", None])
+        self.assertEqual(result["sku_reference"]["sku_count"], 6)
+        self.assertEqual(result["files"][0]["sheets"][0]["sku_removed_rows"], 1)
+        report = load_workbook(result["output_file"])
+        self.addCleanup(report.close)
+        reasons = list(report["筛除与异常明细"].values)[1:]
+        self.assertEqual([row[5] for row in reasons], ["SKU价格筛除", "折扣筛除", "异常"])
+        self.assertIn("SKU A", reasons[0][6])
+        self.assertIn("95", reasons[0][6])
+        self.assertIn("96", reasons[0][6])
+        self.assertIn("SKU价格筛除行", [cell.value for cell in report["处理汇总"][1]])
+        self.assertEqual(report["SKU价格筛选设置"]["A2"].value, str(reference))
+        file = result["files"][0]
+        self.assertEqual(file["removed_sku_preview"], [{"sku": "A", "worksheet": "商品", "source_row": 2,
+                                                       "activity_price": "95", "reference_price": "96",
+                                                       "reason": "SKU A：活动价 95 低于参考价格 96"}])
+        removed_book = load_workbook(file["removed_sku_file"])
+        self.addCleanup(removed_book.close)
+        rows = list(removed_book.active.values)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][:5], ("SKU", "活动价", "参考价格", "工作表", "原始行号"))
+        self.assertEqual(rows[1][:5], ("A", 95, 96, "商品", 2))
+        with ZipFile(result["archive_file"]) as archive:
+            self.assertIn(Path(file["removed_sku_file"]).name, archive.namelist())
+        self.assertEqual((source.read_bytes(), reference.read_bytes()), before)
+
+    def test_removed_sku_preview_is_bounded_but_export_includes_all_sheets_and_rows(self):
+        def extra(book):
+            second = book.create_sheet("第二活动")
+            second.append(INVITED)
+            second.append(["0000", "again", "sku", "重复SKU不同活动行", 100, 1, None, "<=95"])
+        source = self.write(rows=[[f"{index:04d}", str(index), "sku", "商品", 100, 1, None, "<=95"]
+                                  for index in range(120)], extra=extra)
+        reference = self.reference([[f"{index:04d}", 96] for index in range(120)])
+        result = self.run_job([source], sku_price_file=reference)
+        file = result["files"][0]
+        self.assertEqual(file["sku_removed_rows"], 121)
+        self.assertEqual(len(file["removed_sku_preview"]), 100)
+        self.assertEqual(file["removed_sku_preview"][0]["sku"], "0000")
+        book = load_workbook(file["removed_sku_file"])
+        self.addCleanup(book.close)
+        self.assertEqual(book.active.max_row, 122)
+        self.assertEqual(book.active["A2"].value, "0000")
+        self.assertEqual(book.active["A2"].data_type, "s")
+        self.assertEqual(book.active["B2"].data_type, "n")
+        self.assertEqual((book.active["A122"].value, book.active["D122"].value, book.active["E122"].value), ("0000", "第二活动", 2))
+
+    def test_no_sku_removal_does_not_create_empty_detail_export(self):
+        source = self.write(rows=[["0001", "1", "sku", "商品", 100, 5, None, "<=95"]])
+        result = self.run_job([source], sku_price_file=self.reference([["0001", 95]]))
+        file = result["files"][0]
+        self.assertEqual((file["removed_sku_file"], file["removed_sku_preview"]), ("", []))
+        self.assertEqual(len(result["output_files"]), 3)
+
+    def test_sku_detail_export_failure_keeps_processed_excel_and_audit(self):
+        source = self.write(rows=[["A", "1", "sku", "商品", 100, 5, None, "<=95"]])
+        reference = self.reference([["A", 96]])
+        with patch("backend.services.lazada_campaign_workbook._write_removed_skus", side_effect=PermissionError("locked")):
+            result = self.run_job([source], sku_price_file=reference)
+        self.assertFalse(result["is_complete"])
+        self.assertEqual(result["success_count"], 1)
+        file = result["files"][0]
+        self.assertTrue(Path(file["processed_file"]).is_file())
+        self.assertTrue(Path(file["audit_file"]).is_file())
+        self.assertEqual((file["removed_sku_file"], len(file["removed_sku_preview"])), ("", 1))
+        self.assertIn("删除SKU明细", result["completion_message"])
+        self.assertIn("保存失败", file["error"])
+
+    def test_reference_is_loaded_once_for_all_files_and_each_sku_row_compared(self):
+        source = self.write(rows=[
+            ["A", "1", "sku", "商品", 100, 5, None, "<=95"],
+            ["A", "2", "sku", "商品", 100, 5, None, "<=97"],
+        ])
+        second = self.write("second.xlsx", mode="regular", rows=[
+            ["A", "3", "sku", "商品", "url", 100, 95, "0 < Price <= 99"],
+        ])
+        reference = self.reference([["A", 96]])
+        from backend.services.campaign_sku_prices import load_sku_prices
+        with patch("backend.services.lazada_campaign_workbook.load_sku_prices", wraps=load_sku_prices) as read:
+            result = self.run_job([source, second], sku_price_file=reference)
+        read.assert_called_once_with(reference)
+        self.assertEqual((result["success_count"], result["sku_removed_rows"], result["kept_rows"]), (2, 2, 1))
+        self.assertEqual(self.output(result).active["G2"].value, 97)
+
+    def test_no_reference_keeps_legacy_behavior_and_missing_sku_only_fails_when_enabled(self):
+        source = self.root / "无SKU列.xlsx"
+        book = Workbook()
+        book.active.append(["原价", "活动价"])
+        book.active.append([100, 95])
+        book.save(source)
+        book.close()
+        legacy = self.run_job([source])
+        self.assertEqual((legacy["kept_rows"], legacy["sku_removed_rows"]), (1, 0))
+        self.assertFalse(legacy["sku_reference"]["enabled"])
+        reference = self.reference([["A", 95]])
+        inspected = inspect_campaign_files({"source_files": [str(source)], "sku_price_file": str(reference)})
+        self.assertFalse(inspected["files"][0]["ok"])
+        result = self.run_job([source], sku_price_file=reference)
+        self.assertEqual(result["failed_count"], 1)
+        self.assertIn("SKU", result["files"][0]["error"])
+
+    def test_sku_matching_preserves_case_zeros_and_prefers_seller_sku_over_id(self):
+        source = self.write(rows=[
+            ["0001", "ID-A", "SHOP-A", "前导零", 100, 5, None, "<=95"],
+            ["ABC", "ID-B", "SHOP-B", "大写", 100, 5, None, "<=95"],
+            ["abc", "ID-C", "SHOP-C", "小写", 100, 5, None, "<=95"],
+            ["Z", "ABC", "SHOP-D", "ID相同不可代替SKU", 100, 5, None, "<=95"],
+        ])
+        reference = self.reference([["1", 1000], ["ABC", 96], ["ID-A", 1000]])
+        result = self.run_job([source], sku_price_file=reference)
+        self.assertEqual((result["sku_removed_rows"], result["kept_rows"]), (1, 3))
+        self.assertEqual([self.output(result).active.cell(row, 1).value for row in range(2, 5)], ["0001", "abc", "Z"])
+
+    def test_sku_reference_conflict_blocks_before_creating_any_batch(self):
+        source = self.write(rows=[["A", "1", "sku", "商品", 100, 5, None, "<=95"]])
+        reference = self.reference([["A", 95], ["A", 96]])
+        with self.assertRaises(ValueError):
+            inspect_campaign_files({"source_files": [str(source)], "sku_price_file": str(reference)})
+        with self.assertRaises(ValueError):
+            self.run_job([source], sku_price_file=reference)
+        self.assertFalse((self.root / "结果").exists())
+
+    def test_invalid_sku_is_checked_only_after_discount_and_blank_is_unmatched(self):
+        source = self.write(rows=[
+            ["=1+1", "1", "sku", "折扣失败先移除", 100, 5, None, "<=94"],
+            ["=1+1", "2", "sku", "SKU公式无法验证", 100, 5, None, "<=95"],
+            [None, "3", "sku", "空SKU不匹配", 100, 5, None, "<=95"],
+        ])
+        reference = self.reference([["A", 96]])
+        result = self.run_job([source], sku_price_file=reference)
+        self.assertEqual((result["removed_rows"], result["unparseable_rows"], result["kept_rows"], result["sku_removed_rows"]), (1, 1, 1, 0))
+
+    def test_reference_validation_and_reordered_sku_price_columns(self):
+        source = self.root / "换列.xlsx"
+        book = Workbook()
+        book.active.append(["活动价", "备注", "原价", "卖家SKU"])
+        book.active.append([95, "删除", 100, "A"])
+        book.active.append([95, "保留", 100, "B"])
+        book.save(source)
+        book.close()
+        reference = self.reference([["A", 96], ["B", 95]])
+        result = self.run_job([source], sku_price_file=reference)
+        self.assertEqual((result["kept_rows"], result["sku_removed_rows"]), (1, 1))
+        self.assertEqual(self.output(result).active["D2"].value, "B")
+        for value in ([], False, "not-found.xlsx", str(source)):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate_campaign_payload({"source_files": [str(source)], "sku_price_file": value})
+
     def test_invited_fills_numeric_price_and_keeps_threshold_boundary(self):
         path = self.write(rows=[
             ["001", "1", "s1", "A", 100, 10, None, "<=95"],

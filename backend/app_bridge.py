@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 import time
 from decimal import Decimal
@@ -1659,6 +1660,8 @@ class AppBridge:
             "default_threshold": "0.95",
             "output_dir": settings.output_dir,
             "max_files": lazada_campaign_workbook.MAX_FILES,
+            "supports_sku_price_filter": True,
+            "supports_removed_sku_export": True,
             "modes": [{"value": "auto", "label": "自动识别"},
                       {"value": "plain", "label": "按已有活动价筛选"},
                       {"value": "invited", "label": "按推荐价填充并筛选"}],
@@ -1679,6 +1682,21 @@ class AppBridge:
         except Exception:
             return {"ok": False, "error": "打开文件选择器失败，请粘贴 Excel 完整路径"}
 
+    def choose_lazada_campaign_sku_price_file(self) -> dict[str, Any]:
+        try:
+            import webview
+
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=False,
+                file_types=("Excel 文件 (*.xlsx;*.xlsm)",),
+            )
+            if not result:
+                return {"ok": False, "cancelled": True}
+            selected = result[0] if isinstance(result, (list, tuple)) else result
+            return {"ok": True, "path": str(Path(selected).expanduser().resolve())}
+        except Exception:
+            return {"ok": False, "error": "打开 SKU 价格表选择器失败，请粘贴 Excel 完整路径"}
+
     def inspect_lazada_campaign_files(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             return {"ok": True, **lazada_campaign_workbook.inspect_campaign_files(payload)}
@@ -1686,6 +1704,59 @@ class AppBridge:
             return {"ok": False, "error": str(exc)}
         except Exception:
             return {"ok": False, "error": "检查表格失败，请确认文件可读取且未损坏"}
+
+    def export_lazada_campaign_removed_skus(self, payload: dict[str, Any]) -> dict[str, Any]:
+        temporary = None
+        try:
+            if not isinstance(payload, dict) or not isinstance(payload.get("task_id"), str):
+                raise ValueError("请选择已完成任务中的删除SKU明细")
+            index = payload.get("file_index")
+            if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+                raise ValueError("删除SKU明细文件序号无效")
+            task = self.tasks.snapshot(payload["task_id"])
+            if not task.get("ok") or task.get("tool") != "lazada_campaign_workbook" or task.get("status") not in {"success", "failed"}:
+                raise ValueError("该任务尚无可导出的删除SKU明细")
+            result = task.get("result") or {}
+            files = result.get("files") or []
+            if index >= len(files) or not files[index].get("removed_sku_file"):
+                raise ValueError("此文件没有可导出的删除SKU明细，请重新处理后重试")
+            source = Path(files[index]["removed_sku_file"]).resolve()
+            batch_root = Path(result["output_dir"]).resolve()
+            if not source.is_relative_to(batch_root) or not source.is_file() or source.suffix.lower() != ".xlsx":
+                raise ValueError("删除SKU明细不存在或已被移动，请重新处理")
+            import webview
+
+            selected = webview.windows[0].create_file_dialog(
+                webview.FileDialog.SAVE, directory=str(source.parent), save_filename=source.name,
+                file_types=("Excel 文件 (*.xlsx)",),
+            )
+            if not selected:
+                return {"ok": False, "cancelled": True}
+            target = Path(selected[0] if isinstance(selected, (list, tuple)) else selected).expanduser().resolve()
+            if not target.suffix:
+                target = target.with_suffix(".xlsx")
+            if target.suffix.lower() != ".xlsx":
+                raise ValueError("请将删除SKU明细保存为 .xlsx 文件")
+            context = task.get("context") or {}
+            protected = [*context.get("source_files", []), context.get("sku_price_file", "")]
+            protected.extend(value for value in result.get("output_files", []) if value and Path(value).resolve() != source)
+            if any(value and target == Path(value).resolve() for value in protected):
+                raise ValueError("请另存为新文件，不能覆盖原活动表、SKU价格表或其他处理结果")
+            if target != source:
+                temporary = target.with_name(f".{target.stem}.{uuid4().hex}.tmp.xlsx")
+                shutil.copyfile(source, temporary)
+                os.replace(temporary, target)
+            return {"ok": True, "path": str(target)}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            return {"ok": False, "error": "删除SKU明细导出失败，请检查保存位置和文件占用"}
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def export_lazada_campaign_template(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
@@ -1706,6 +1777,8 @@ class AppBridge:
             request = dict(payload)
             request.setdefault("output_dir", self.config_store.load().output_dir)
             job = lazada_campaign_workbook.validate_campaign_payload(request)
+            if job.sku_price_file:
+                lazada_campaign_workbook.load_sku_prices(job.sku_price_file)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         except Exception:
@@ -1725,7 +1798,8 @@ class AppBridge:
             task = self.tasks.start(
                 "Excel 折扣筛选", runner, tool="lazada_campaign_workbook",
                 context={"workflow": "local_excel", "source_files": [str(path) for path in job.source_files],
-                         "mode": job.mode, "threshold": str(job.threshold), "output_dir": str(job.output_dir)},
+                         "mode": job.mode, "threshold": str(job.threshold), "output_dir": str(job.output_dir),
+                         "sku_price_file": str(job.sku_price_file or "")},
             )
             if not task.get("ok"):
                 self._campaign_operation_lock.release()

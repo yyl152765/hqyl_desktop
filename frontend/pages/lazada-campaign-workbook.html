@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Excel 折扣筛选 · 寰球云联</title>
     <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
-    <link rel="stylesheet" href="../assets/pages/lazada-campaign-workbook.css?v=20261015-local-excel" />
+    <link rel="stylesheet" href="../assets/pages/lazada-campaign-workbook.css?v=20261104-sku-detail" />
   </head>
   <body>
     <div class="app-shell">
@@ -20,7 +20,7 @@
         <section class="overview-grid" aria-label="本批处理统计">
           <article class="overview-card"><span>表格数</span><strong id="fileCount">0</strong><small id="completedCount">完成 0 · 失败 0</small></article>
           <article class="overview-card accent-green"><span>保留行</span><strong id="keptCount">0</strong><small id="updatedCount">填充活动价 0 行</small></article>
-          <article class="overview-card"><span>移出结果</span><strong id="removedCount">0</strong><small id="exceptionCount">异常行 0 · 另存明细</small></article>
+          <article class="overview-card"><span>移出结果</span><strong id="removedCount">0</strong><small id="skuRemovedCount">SKU价格剔除 0 行</small><small id="exceptionCount">异常行 0 · 另存明细</small></article>
           <article class="overview-card"><span>原始数据行</span><strong id="totalCount">0</strong><small id="statusText" aria-live="polite">导入表格后开始处理</small></article>
         </section>
         <section class="content-grid campaign-layout">
@@ -30,6 +30,12 @@
               <div class="actions"><button id="chooseFilesBtn" class="secondary" type="button" disabled>批量选择 Excel</button><button id="clearFilesBtn" class="secondary" type="button" disabled>清空</button><button id="exportTemplateBtn" class="secondary" type="button" disabled>导出空白模板</button></div>
               <small id="fileLimitHint" class="campaign-note">支持 .xlsx / .xlsm，每批最多 100 个文件，单文件不超过 50 MiB。</small>
               <ul id="sourceFileList" class="campaign-file-list" aria-label="已选择文件"><li class="campaign-empty">尚未选择文件</li></ul>
+              <section class="campaign-sku-reference" aria-labelledby="skuPriceTitle">
+                <div class="campaign-sku-heading"><h3 id="skuPriceTitle">SKU价格表 <small>选填</small></h3><div class="actions"><button id="chooseSkuPriceBtn" type="button" class="secondary compact-btn" disabled>选择 SKU价格表</button><button id="clearSkuPriceBtn" type="button" class="secondary compact-btn" disabled>移除</button></div></div>
+                <label class="campaign-output-field" for="skuPriceFile"><span class="campaign-visually-hidden">SKU价格表完整路径</span><input id="skuPriceFile" placeholder="未选择时，仅按最低折扣率筛选" spellcheck="false" disabled /></label>
+                <p class="campaign-note">表格需有 SKU、价格两列，与活动价使用同一币种。第1步按最低折扣率筛选；第2步仅对保留行按卖家SKU或SKU精确匹配：活动价低于参考价格时剔除，相等、更高或未匹配时保留。同一SKU的价格冲突需先修正；移除参考表可恢复仅按折扣筛选。</p>
+                <p id="skuSupportNotice" class="campaign-note" hidden role="status">当前后端未支持SKU筛选，请重启或升级工作台。</p>
+              </section>
               <details class="campaign-paths"><summary>粘贴文件路径</summary><label class="campaign-output-field" for="sourcePaths"><span class="campaign-visually-hidden">Excel 完整路径，每行一个</span><textarea id="sourcePaths" rows="4" placeholder="Excel 完整路径，每行一个" spellcheck="false" disabled></textarea></label></details>
               <div class="campaign-options">
                 <label for="processingMode"><span>处理方式</span><select id="processingMode" disabled><option value="auto">自动识别</option><option value="plain">按已有活动价筛选</option><option value="invited">按推荐价填充并筛选</option></select></label>
@@ -49,12 +55,18 @@
         <section class="surface campaign-results" aria-labelledby="resultsTitle">
           <div class="section-head"><div><h2 id="resultsTitle">处理结果</h2><p id="resultMessage" aria-live="polite">尚未运行。选择表格并设置最低折扣率后开始处理。</p></div><span id="resultBadge" class="section-badge neutral">尚无结果</span></div>
           <div class="actions"><button id="openArchiveBtn" type="button" class="secondary" disabled>打开打包文件</button><button id="openSummaryBtn" type="button" class="secondary" disabled>打开汇总与异常明细</button><button id="openDirectoryBtn" type="button" class="secondary" disabled>打开结果目录</button></div>
-          <div class="collection-table-wrap campaign-table-wrap"><table><caption class="campaign-visually-hidden">每个文件的筛选结果与异常统计</caption><thead><tr><th scope="col">文件 / 处理方式</th><th scope="col">状态</th><th scope="col">原始行</th><th scope="col">填价行</th><th scope="col">保留行</th><th scope="col">折扣剔除</th><th scope="col">异常行</th><th scope="col">结果文件 / 原因</th></tr></thead><tbody id="fileResults"><tr><td colspan="8">尚未运行</td></tr></tbody></table></div>
+          <div class="collection-table-wrap campaign-table-wrap"><table><caption class="campaign-visually-hidden">每个文件的筛选结果与异常统计</caption><thead><tr><th scope="col">文件 / 处理方式</th><th scope="col">状态</th><th scope="col">原始行</th><th scope="col">填价行</th><th scope="col">保留行</th><th scope="col">① 折扣剔除</th><th scope="col">② SKU价格剔除</th><th scope="col">异常行</th><th scope="col">结果文件 / 原因</th></tr></thead><tbody id="fileResults"><tr><td colspan="9">尚未运行</td></tr></tbody></table></div>
+          <section id="removedSkusPanel" class="campaign-removed-panel" aria-labelledby="removedSkusTitle" hidden>
+            <div class="campaign-sku-heading"><h3 id="removedSkusTitle">SKU价格剔除</h3><div class="actions"><button id="exportRemovedSkusBtn" type="button" class="secondary compact-btn" disabled>导出 Excel</button><button id="closeRemovedSkusBtn" type="button" class="secondary compact-btn">关闭</button></div></div>
+            <p id="removedSkusDescription" class="campaign-note"></p>
+            <div class="collection-table-wrap campaign-removed-table" tabindex="0" role="region" aria-label="SKU价格剔除明细，可滚动"><table><thead><tr><th scope="col">SKU</th><th scope="col">活动价</th><th scope="col">参考价</th><th scope="col">工作表</th><th scope="col">原行号</th><th scope="col">原因</th></tr></thead><tbody id="removedSkusRows"></tbody></table></div>
+            <p id="removedSkusMessage" class="campaign-note" role="status" aria-live="polite"></p>
+          </section>
         </section>
       </main>
     </div>
     <div id="toast" class="toast hidden"></div>
-    <script src="../assets/common.js?v=20261015-local-excel"></script>
-    <script src="../assets/pages/lazada-campaign-workbook.js?v=20261015-local-excel"></script>
+    <script src="../assets/common.js?v=20261104-sku-detail"></script>
+    <script src="../assets/pages/lazada-campaign-workbook.js?v=20261104-filter-order"></script>
   </body>
 </html>
