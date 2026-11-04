@@ -147,3 +147,16 @@ class FinancialDOMTests(TestCase):
         instance = gateway.TemuFinancialGateway('p', browser=self.transport)
         with self.assertRaisesRegex(ValueError, '登录已失效'):
             instance._open_reconciliation('1', {'store_name': '示例-Seller'})
+
+    def test_seller_before_financial_form_waits_without_toggling_sidebar(self):
+        loading = HTML.replace('<div id="filters">', '<div id="filters" hidden>', 1)
+        loading += '''<script>setTimeout(() => {
+          document.getElementById('filters').hidden=false;
+        }, 700);</script>'''
+        self.page.route(gateway.RECONCILIATION_URL, lambda route: route.fulfill(body=loading, content_type='text/html'))
+        instance = gateway.TemuFinancialGateway('p', browser=self.transport)
+        with patch.object(self.transport, 'click', wraps=self.transport.click) as clicked:
+            seller, state = instance._open_reconciliation('1', {'store_name': '示例-Seller'})
+        self.assertEqual(seller, 'Seller')
+        self.assertTrue(instance._looks_reconciliation(state))
+        clicked.assert_not_called()

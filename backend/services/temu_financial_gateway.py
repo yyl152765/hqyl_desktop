@@ -344,7 +344,7 @@ class TemuFinancialGateway:
             raise ValueError("当前 TEMU 卖家身份与所选紫鸟店铺不一致，请核对后重试")
         return seller
 
-    def _wait_for_seller(self, identity, store, labels=(), seconds=60):
+    def _wait_for_seller(self, identity, store, labels=(), seconds=60, *, reconciliation=False):
         def loaded():
             try:
                 state = self.state(identity, labels)
@@ -356,9 +356,13 @@ class TemuFinancialGateway:
             if not self._seller_name(state):
                 return None
             self.verify_seller(store, state)
+            if reconciliation and not self._looks_reconciliation(state):
+                return None
             return None if state.get("busy") else state
 
-        return _wait(loaded, seconds, "TEMU 卖家名称未能加载，请确认该店铺已登录且页面加载正常后重试")
+        message = ("TEMU 对账中心查询表单未能加载，请确认该店铺已登录且页面加载正常后重试"
+                   if reconciliation else "TEMU 卖家名称未能加载，请确认该店铺已登录且页面加载正常后重试")
+        return _wait(loaded, seconds, message)
 
     @staticmethod
     def _looks_reconciliation(state) -> bool:
@@ -373,21 +377,11 @@ class TemuFinancialGateway:
         # centre even when the requested report is the global finance detail.
         self._navigate(identity, RECONCILIATION_URL)
         labels = ["账户资金", "对账中心", "查询", "导出", "导出历史", "重置"]
-        state = self._wait_for_seller(identity, store, labels)
+        # Seller data arrives before the asynchronously mounted query form.
+        # We already navigated to its route; toggling the sidebar during this
+        # gap can collapse it or target controls replaced by the loaded page.
+        state = self._wait_for_seller(identity, store, labels, reconciliation=True)
         seller = self.verify_seller(store, state)
-        if not self._looks_reconciliation(state):
-            books = state["found"].get("对账中心", [])
-            if len(books) != 1:
-                self._click_label(identity, "账户资金", labels)
-                state = self.wait(
-                    identity,
-                    lambda s: len(s.get("found", {}).get("对账中心", [])) == 1,
-                    labels, 60,
-                )
-            self._click_label(identity, "对账中心", labels)
-            state = self.wait(identity, self._looks_reconciliation, labels, 60)
-            state = self._wait_for_seller(identity, store, labels)
-        self.verify_seller(store, state)
         return seller, state
 
     def _reset_filters(self, identity):

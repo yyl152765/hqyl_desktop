@@ -100,3 +100,25 @@ class FinancialDownloadTests(TestCase):
             download._continue_global_authorization(driver, {'original'}, handled, 'Seller')
         download._continue_global_authorization(driver, {'original'}, handled, 'Seller')
         button.click.assert_called_once()
+
+    def test_plain_sharing_notice_needs_no_checkbox_and_preserves_reminder_preference(self):
+        driver, label, button = self.authorization_driver()
+        label.text = '今日不再提醒'
+        driver.execute_script.return_value['text'] += '\n您授权您的账号ID和店铺名称在卖家中心各板块共享，并已阅读并同意 隐私政策'
+        handled = set()
+        download._continue_global_authorization(driver, {'original'}, handled, 'Seller')
+        download._continue_global_authorization(driver, {'original'}, handled, 'Seller')
+        button.click.assert_called_once()
+        label.click.assert_not_called()
+        label.find_element.assert_not_called()
+        self.assertEqual(handled, {'download'})
+
+    def test_missing_sharing_notice_or_duplicate_consent_labels_are_rejected(self):
+        for mode in ('no_consent', 'duplicate_consent'):
+            with self.subTest(mode=mode):
+                driver, label, button = self.authorization_driver()
+                driver.find_elements.side_effect = lambda by, _: [button] if by == 'xpath' else ([] if mode == 'no_consent' else [label, label])
+                with self.assertRaisesRegex(ValueError, '授权控件'):
+                    download._continue_global_authorization(driver, {'original'}, set(), 'Seller')
+                button.click.assert_not_called()
+                label.click.assert_not_called()

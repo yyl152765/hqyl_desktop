@@ -47,11 +47,17 @@ def _continue_global_authorization(driver, baseline, handled, expected_seller):
                    if e.is_displayed() and e.is_enabled()]
         labels = [e for e in driver.find_elements('css selector', 'label:has(input[type="checkbox"])')
                   if e.is_displayed() and '账号ID和店铺名称' in e.text]
-        if len(buttons) != 1 or len(labels) != 1:
+        # Current TEMU also renders the sharing notice as plain text with an
+        # enabled confirmation button; its sole checkbox is 今日不再提醒.
+        # That preference is not consent and must not be toggled here.
+        notice = '您授权您的账号ID和店铺名称在卖家中心各板块共享'
+        plain_notice = notice in re.sub(r'\s+', '', state.get('text', ''))
+        if len(buttons) != 1 or len(labels) > 1 or (not labels and not plain_notice):
             raise ValueError('无法唯一确认全球财务下载授权控件')
-        checkbox = labels[0].find_element('css selector', 'input[type="checkbox"]')
-        if not checkbox.is_selected():
-            labels[0].click()
+        if labels:
+            checkbox = labels[0].find_element('css selector', 'input[type="checkbox"]')
+            if not checkbox.is_selected():
+                labels[0].click()
         handled.add(target_id)  # Never submit the handoff twice after an ambiguous result.
         buttons[0].click()
 

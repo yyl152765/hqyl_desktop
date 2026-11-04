@@ -146,6 +146,20 @@ class FinancialGatewayTests(TestCase):
             with self.assertRaisesRegex(ValueError, '不一致'):
                 self.gateway._wait_for_seller('1', self.store, seconds=0)
 
+    def test_reconciliation_wait_is_bounded_and_rechecks_identity_before_ready(self):
+        loading = {'sellers': ['Seller'], 'found': {}, 'body': '加载中...'}
+        ready = {'sellers': ['Seller'], 'found': {'查询': [{'selector': '#query'}]},
+                 'body': '账务类型 资金流向'}
+        with patch.object(self.gateway, 'state', side_effect=[loading, ready]) as state:
+            self.assertEqual(self.gateway._wait_for_seller('1', self.store, seconds=2, reconciliation=True), ready)
+            self.assertEqual(state.call_count, 2)
+        with patch.object(self.gateway, 'state', return_value=loading):
+            with self.assertRaisesRegex(ValueError, '查询表单未能加载'):
+                self.gateway._wait_for_seller('1', self.store, seconds=0, reconciliation=True)
+        with patch.object(self.gateway, 'state', side_effect=[loading, {**ready, 'sellers': ['Other']} ]):
+            with self.assertRaisesRegex(ValueError, '不一致'):
+                self.gateway._wait_for_seller('1', self.store, seconds=2, reconciliation=True)
+
     def test_identity_wait_retries_only_interrupted_navigation_reads(self):
         ready = {'sellers': ['Seller']}
         with patch.object(self.gateway, 'state', side_effect=[
