@@ -59,16 +59,31 @@ class BalanceStatisticsBridgeTests(unittest.TestCase):
         self.assertEqual({country["code"] for country in result["countries"]}, {"AUTO", "PH", "MY", "TH", "ID", "VN", "SG"})
         self.assertEqual(result["output_dir"], str(self.root))
         self.assertEqual(result["client_path"], "")
+        self.assertFalse(result['client_installed'])
         self.assertNotIn("password", json.dumps(result))
         browser.assert_not_called()
         self.browser_guard.assert_not_called()
         self.bridge.tasks.start.assert_not_called()
 
+    def test_client_selection_checks_v6_and_download_opens_only_vendor_page(self):
+        client = self.root / 'ziniao.exe'
+        client.touch()
+        old = self.root / 'SuperBrowser.exe'
+        old.touch()
+        with patch.object(app_bridge, 'ziniao_runtime_paths', return_value={}):
+            result = self.bridge.get_balance_statistics_info({'platform': 'lazada', 'client_path': str(client)})
+            self.assertTrue(result['client_installed'])
+            self.assertEqual(result['client_path'], str(client))
+            self.assertFalse(self.bridge.get_balance_statistics_info({'platform': 'lazada', 'client_path': str(old)})['client_installed'])
+        with patch('webbrowser.open', return_value=True) as browser:
+            self.assertTrue(self.bridge.open_ziniao_download()['ok'])
+        browser.assert_called_once_with('https://www.ziniao.com/download/?tab=win', new=2)
+
     def test_start_uses_bound_credentials_and_task_context_has_only_public_identity(self):
         payload = self.payload(account_id=self.other.id, username="forged", password="forged", company="forged")
         self.assertTrue(self.bridge.start_balance_statistics(payload)["ok"])
         call = self.bridge.tasks.start.call_args
-        self.assertEqual(call.kwargs, {"tool": "temu_balance_statistics", "context": {"account_id": self.other.id, "platform": "temu"}})
+        self.assertEqual(call.kwargs, {"tool": "temu_balance_statistics", "context": {"account_id": self.other.id, "platform": "temu"}, "exclusive": True})
         progress = Mock()
         with patch.object(balance_statistics, "run_balance_statistics", return_value={"is_complete": True}) as run:
             result = call.args[1](progress)
@@ -143,7 +158,7 @@ class BalanceStatisticsBridgeTests(unittest.TestCase):
         path = self.manifest("lazada")
         self.assertTrue(self.bridge.retry_balance_statistics({"platform": "lazada", "manifest_path": str(path)})["ok"])
         call = self.bridge.tasks.start.call_args
-        self.assertEqual(call.kwargs, {"tool": "lazada_balance_statistics", "context": {"account_id": self.account.id, "platform": "lazada", "manifest_path": str(path.resolve())}})
+        self.assertEqual(call.kwargs, {"tool": "lazada_balance_statistics", "context": {"account_id": self.account.id, "platform": "lazada", "manifest_path": str(path.resolve())}, "exclusive": True})
         with patch.object(balance_statistics, "retry_balance_statistics", return_value={"is_complete": False}) as retry:
             call.args[1](Mock())
         self.assertEqual(retry.call_args.args[0]["manifest_path"], str(path.resolve()))

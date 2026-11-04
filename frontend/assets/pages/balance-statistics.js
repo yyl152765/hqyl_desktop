@@ -9,6 +9,7 @@
   const statusNames = { success: "成功", partial: "部分完成", partial_success: "部分完成", failed: "失败", pending: "等待", running: "运行中", unmatched_store: "未匹配店铺", page_unavailable: "页面不可用", need_manual_review: "需人工复核" };
   let running = false, preparing = false, initialized = false;
   let snapshot = null, accountId = "";
+  let clientPath = "", clientReady = true;
   const activeId = () => HQYL.activeAccount("ziniao")?.id || "";
   const busy = () => running || preparing;
   const storeNames = () => [...new Set($("storeNames").value.split(/\r?\n/).map(name => name.trim()).filter(Boolean))];
@@ -26,11 +27,11 @@
   }
 
   function controls() {
-    ["storeNames", "balanceOutputDir", "balanceMonth", "balanceCountry", "chooseOutputBtn", "resetMonthBtn"].forEach(id => {
+    ["storeNames", "balanceOutputDir", "balanceMonth", "balanceCountry", "chooseOutputBtn", "resetMonthBtn", "chooseClientBtn", "refreshClientBtn", "downloadClientBtn"].forEach(id => {
       if ($(id)) $(id).disabled = busy();
     });
-    $("startBtn").disabled = busy() || !storeNames().length || !$("balanceOutputDir").value.trim() || (isTemu && !$("balanceMonth").value);
-    $("retryBtn").disabled = busy() || !activeId() || !snapshot?.manifest_path || snapshot.is_complete !== false || snapshot.account_id !== activeId();
+    $("startBtn").disabled = busy() || !clientReady || !storeNames().length || !$("balanceOutputDir").value.trim() || (isTemu && !$("balanceMonth").value);
+    $("retryBtn").disabled = busy() || !clientReady || !activeId() || !snapshot?.manifest_path || snapshot.is_complete !== false || snapshot.account_id !== activeId();
     $("openFileBtn").disabled = !snapshot?.output_file;
     $("openDirectoryBtn").disabled = !snapshot?.output_dir;
     $("storeCount").textContent = String(storeNames().length);
@@ -136,6 +137,7 @@
 
   async function start(retry = false) {
     if (busy()) return;
+    if (!clientReady) { showIssue("请先安装紫鸟 V6，然后点击重新检测或选择已安装的 ziniao.exe。"); return; }
     const id = activeId();
     if (!id) { HQYL.openAccountDialog("ziniao", () => start(retry)); return; }
     if (retry && (!snapshot?.manifest_path || snapshot.account_id !== id)) return;
@@ -145,6 +147,7 @@
       country: isTemu ? "AUTO" : $("balanceCountry").value,
       ...(isTemu ? { month: $("balanceMonth").value } : {}),
     };
+    if (clientPath) payload.client_path = clientPath;
     showIssue("");
     const task = await HQYL.startTask(async () => {
       HQYL.appendLog(retry ? `准备重试 ${title} 未完成店铺` : `准备启动 ${title}，按顺序逐店采集`);
@@ -164,8 +167,12 @@
   async function loadInfo(resetMonth = false) {
     const monthBeforeRequest = isTemu ? $("balanceMonth").value : "";
     try {
-      const info = await HQYL.api().get_balance_statistics_info({ platform });
+      const info = await HQYL.api().get_balance_statistics_info({ platform, ...(clientPath ? {client_path: clientPath} : {}) });
       if (!info.ok) throw new Error(info.error || "统计默认值加载失败");
+      clientReady = info.client_installed !== false;
+      $("clientStatus").textContent = clientReady ? "已检测到紫鸟 V6，驱动会按店铺内核自动检查。" : "未检测到紫鸟 V6。请先下载安装，再点击重新检测；已安装可手动选择 ziniao.exe。";
+      $("clientStatus").title = info.client_path || "";
+      $("clientSetup").classList.toggle("balance-warning", !clientReady);
       if (isTemu && (resetMonth || $("balanceMonth").value === monthBeforeRequest)) {
         $("balanceMonth").value = info.month || previousMonth();
       }
@@ -212,6 +219,29 @@
         if (busy()) return;
         preparing = true; controls();
         try { await loadInfo(true); } finally { preparing = false; controls(); }
+      });
+      $("downloadClientBtn").addEventListener("click", async () => {
+        if (busy()) return;
+        try {
+          const result = await HQYL.api().open_ziniao_download();
+          if (!result.ok) throw new Error(result.error || "下载页打开失败");
+          HQYL.showToast("已打开紫鸟官方下载页。安装 V6 后点击重新检测。");
+        } catch (error) { showIssue(error.message || String(error)); }
+      });
+      $("refreshClientBtn").addEventListener("click", async () => {
+        if (busy()) return;
+        preparing = true; controls(); clientPath = "";
+        try { await loadInfo(); } finally { preparing = false; controls(); }
+      });
+      $("chooseClientBtn").addEventListener("click", async () => {
+        if (busy()) return;
+        preparing = true; controls();
+        try {
+          const result = await HQYL.api().choose_client_path();
+          if (result.ok) { clientPath = result.path; await loadInfo(); }
+          else if (!result.cancelled) throw new Error(result.error || "客户端选择失败");
+        } catch (error) { showIssue(error.message || String(error)); }
+        finally { preparing = false; controls(); }
       });
       $("openFileBtn").addEventListener("click", () => openPath(snapshot?.output_file));
       $("openDirectoryBtn").addEventListener("click", () => openPath(snapshot?.output_dir));

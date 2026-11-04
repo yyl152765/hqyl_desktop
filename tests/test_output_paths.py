@@ -41,6 +41,7 @@ class ScopedOutputDirectoryTests(unittest.TestCase):
             ("lazada_bill_detail", "TH", "Lazada泰国账单明细"),
             ("lazada_bill_detail", "VN", "Lazada越南账单明细"),
             ("lz_warehouse_inventory", "TH", "lz各仓库存"),
+            ("temu_fee_refund_export", "TH", "TEMU面单费与退货退款"),
         )
         for tool, country, folder in expected:
             with self.subTest(tool=tool, country=country):
@@ -48,6 +49,20 @@ class ScopedOutputDirectoryTests(unittest.TestCase):
                 self.assertEqual(resolved["output_dir"], str(self.root / "Desktop" / "log" / folder))
         bill = resolve_output_directories(settings, "lazada_bill_detail", "PH")
         self.assertEqual(bill["screenshot_root"], str(self.root / "Desktop" / "log" / "Lazada菲律宾账单明细截图"))
+
+    def test_temu_picker_preserves_global_and_other_tool_preferences(self):
+        self.store.save({"tool_output_dirs": {directory_scope_key("lazada_ads_data"): "D:/existing-ads"}})
+        before = self.store.load().output_dir
+        dialog = Mock(return_value=[str(self.root / "chosen-temu")])
+        webview = SimpleNamespace(FOLDER_DIALOG=1, windows=[SimpleNamespace(create_file_dialog=dialog)])
+        with patch.dict("sys.modules", {"webview": webview}):
+            result = self.bridge.choose_scoped_output_dir({"tool": "temu_fee_refund_export", "kind": "output"})
+        self.assertTrue(result["ok"], result)
+        settings = self.store.load()
+        self.assertEqual(settings.output_dir, before)
+        self.assertEqual(resolve_output_directories(settings, "temu_fee_refund_export")["output_dir"], str(self.root / "chosen-temu"))
+        self.assertEqual(resolve_output_directories(settings, "lazada_ads_data")["output_dir"], "D:/existing-ads")
+        self.assertEqual(directory_scope_key("temu_fee_refund_export", "TH"), directory_scope_key("temu_fee_refund_export", "MY"))
 
     def test_config_map_incremental_merge_reset_and_reload_preserve_other_settings(self):
         first = directory_scope_key("lazada_ads_data", "th")

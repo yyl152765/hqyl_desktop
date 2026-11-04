@@ -1,13 +1,12 @@
 """KEC reconciliation regression tests.
 
-The migration into the desktop platform changed exactly one business rule: the
-storage fee is now reconciled on the captured **actual volume** of each bill row
+The legacy storage regression cases use February with low daily volume, where
+the prior age tiers still apply. Fees use the captured **actual volume**:
 
     长(CM) × 宽(CM) × 高(CM) × 数量(PCS) × 0.000001
 
-instead of the bill's rounded ``Total CBM within period`` column.  These tests
-pin that rule down, keep ``Total CBM`` as a comparison-only column, and cover
-the payload validation and the bridge contract around it.
+``Total CBM within period`` remains comparison-only. New contract boundaries
+and the amended fee sections are covered by test_kec_contract_rules.
 """
 
 from __future__ import annotations

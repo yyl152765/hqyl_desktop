@@ -23,11 +23,36 @@
     if (previous && Array.from(select.options).some((option) => option.value === previous)) select.value = previous;
   }
 
+  function renderOperators(info) {
+    const select = $("lazadaDingtalkOperator");
+    const previous = select.value;
+    const names = Array.isArray(info.operator_names) ? info.operator_names : [];
+    select.textContent = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = names.length ? "请选择钉钉操作人" : "请先在设置中配置钉钉用户";
+    select.appendChild(placeholder);
+    names.forEach((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      select.appendChild(option);
+    });
+    select.value = names.includes(previous) ? previous : info.default_dingtalk_operator_name || "";
+    const status = $("lazadaDingtalkStatus");
+    status.textContent = !info.dingtalk_configured
+      ? "请先在设置中保存钉钉 AppKey 和 AppSecret。"
+      : !names.length ? "钉钉应用已配置，请在设置中配置钉钉用户。"
+      : "使用已保存的钉钉应用和所选操作人上传钉盘。";
+    status.classList.toggle("error-text", !info.dingtalk_configured || !names.length);
+  }
+
   function payload(account) {
     const company = account && account.extra ? account.extra.company || "" : "";
     return {
       account_id: account ? account.id : "",
       company,
+      dingtalk_operator_name: $("lazadaDingtalkOperator").value,
       username: account ? account.username : "",
       password: "",
       country: $("lazadaCountry").value,
@@ -58,6 +83,7 @@
       const result = await HQYL.api().get_lazada_withdrawal_statistics_info();
       if (!result.ok) throw new Error(result.error || "默认配置加载失败");
       renderCountries(result.countries || []);
+      renderOperators(result);
       const period = result.period || {};
       $("lazadaStartDate").value = period.start_date || "";
       $("lazadaEndDate").value = period.end_date || "";
@@ -85,7 +111,7 @@
       no_data: "无流水（已上传空表 Excel）",
       partial_success: "部分成功",
       no_matching_statement: "无匹配账单",
-      page_unavailable: "页面未开放",
+      page_unavailable: "平台未开放",
       unmatched_store: "未匹配店铺",
       need_manual_review: "需人工复核",
       failed: "失败",
@@ -96,6 +122,18 @@
     const cell = document.createElement("td");
     cell.textContent = text;
     row.appendChild(cell);
+  }
+
+  function resultSummary(result = {}) {
+    const stores = Array.isArray(result.stores) ? result.stores : [];
+    const unavailableCount = result.unavailable_store_count
+      ?? stores.filter((store) => store.status === "page_unavailable").length;
+    const failedCount = result.error_store_count ?? Math.max(0,
+      (result.failed_store_count ?? stores.filter((store) => !["success", "no_data", "partial_success"].includes(store.status)).length)
+      - unavailableCount);
+    const partialCount = result.partial_store_count
+      ?? stores.filter((store) => store.status === "partial_success").length;
+    return `页面未开放 ${unavailableCount} / 失败或未匹配 ${failedCount} / 部分 ${partialCount}`;
   }
 
   function renderResults(stores) {
@@ -114,14 +152,20 @@
       const row = document.createElement("tr");
       appendCell(row, store.store_name || store.requested_store_name || "—");
       appendCell(row, store.country || "—");
-      appendCell(row, statusText(store.status));
-      const hasWithdrawalWorkbook = store.country !== "TH"
+      const fallbackNote = store.balance_page_unavailable ? "（未取得提现流水，账单仅归档）" : "";
+      appendCell(row, statusText(store.status) + fallbackNote);
+      const statementFiles = store.collection_method === "income_statement";
+      const hasWithdrawalWorkbook = !statementFiles
         && (store.local_files || []).some((file) => String(file).toLowerCase().endsWith(".xlsx"));
-      const recordSummary = hasWithdrawalWorkbook && Number.isInteger(store.record_count)
+      const recordSummary = statementFiles
+        ? `${(store.local_files || []).length} 个账单`
+        : hasWithdrawalWorkbook && Number.isInteger(store.record_count)
         ? `1 个 Excel / ${store.record_count} 行`
         : `${(store.local_files || []).length} 个`;
       appendCell(row, recordSummary);
-      appendCell(row, (store.drive_paths || []).join("；") || store.message || "—");
+      const paths = (store.drive_paths || []).join("；");
+      appendCell(row, paths && (store.status === "partial_success" || store.balance_page_unavailable || store.sheet_write_status)
+        ? `${paths}；${store.message || ""}` : paths || store.message || "—");
       body.appendChild(row);
     });
   }
@@ -142,11 +186,11 @@
       updateStoreCount();
     },
     setRunning(running) {
-      ["lazadaRunBtn", "lazadaRefreshBtn", "chooseClientPathBtn", "chooseDriverPathBtn"].forEach((id) => { $(id).disabled = running; });
+      ["lazadaRunBtn", "lazadaRefreshBtn", "lazadaDingtalkOperator", "chooseClientPathBtn", "chooseDriverPathBtn"].forEach((id) => { $(id).disabled = running; });
     },
     resetResult() {
       $("matchedCount").textContent = "0";
-      $("failedCount").textContent = "失败 0";
+      $("failedCount").textContent = resultSummary();
       $("lazadaOpenOutputBtn").disabled = true;
       renderResults([]);
       updateStoreCount();
@@ -154,7 +198,7 @@
     applyResult(result) {
       $("matchedCount").textContent = String(result.matched_store_count ?? 0);
       $("recordCount").textContent = String(result.success_store_count ?? 0);
-      $("failedCount").textContent = `失败 ${result.failed_store_count ?? 0} / 部分 ${result.partial_store_count ?? 0}`;
+      $("failedCount").textContent = resultSummary(result);
       outputDir = result.output_dir || outputDir;
       $("outputFile").textContent = result.output_file ? "结果已生成" : "未生成";
       $("lazadaOpenOutputBtn").disabled = !outputDir;

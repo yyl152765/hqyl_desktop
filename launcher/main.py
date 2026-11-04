@@ -20,6 +20,9 @@ from backend.app_bridge import AppBridge
 
 PAGE_ENTRIES = {
     "temu-on-sale-export": "temu-on-sale-export.html",
+    "temu-fee-refund-export": "temu-fee-refund-export.html",
+    "temu-financial-export": "temu-financial-export.html",
+    "temu-activity-export": "temu-activity-export.html",
     "temu-balance-statistics": "temu-balance-statistics.html",
     "lazada-balance-statistics": "lazada-balance-statistics.html",
     "dashboard": "dashboard.html",
@@ -139,6 +142,61 @@ def self_check() -> int:
 
     with TemporaryDirectory(prefix="hqyl-self-check-") as temp_dir:
         check_dir = Path(temp_dir)
+        # Exercise the shipped Lazada image/export dependencies using synthetic
+        # data, including the blank amount that still requires processing proof.
+        from PIL import Image as PillowImage
+        from backend.services.balance_workbook import write_balance_workbook
+        from backend.services.balance_evidence import capture_balance_page_evidence
+        from backend.services.lazada_balance_view import balance_page_view
+
+        if not callable(capture_balance_page_evidence) or not callable(balance_page_view):
+            raise RuntimeError("Lazada full-page evidence helpers are unavailable")
+        proof = check_dir / "synthetic-balance-proof.png"
+        with PillowImage.new("RGB", (640, 400), "white") as picture:
+            picture.save(proof, "PNG")
+        balance_output = write_balance_workbook("lazada", [{
+            "store_name": "self-check", "country": "TH", "currency": "THB", "status": "success",
+            "values": {"income": "0.00", "balance": "1.25", "ads": "-0.83", "processing": None},
+            "evidence": {field: str(proof) for field in ("income", "balance", "ads", "processing")},
+            "evidence_exemptions": {"processing": "withdrawal_success"},
+        }], check_dir / "lazada-balance.xlsx")
+        balance_book = load_workbook(balance_output)
+        try:
+            sheet = balance_book.active
+            if (balance_book.sheetnames != ["余额统计"]
+                    or [cell.value for cell in sheet[1]][:9] != ["店铺名称", "Income", "Income截图", "Balance", "Balance截图", "Ads", "Ads截图", "processing", "processing截图"]
+                    or [sheet[cell].value for cell in ("B2", "D2", "F2", "H2")] != [0, 1.25, -0.83, None]
+                    or [picture.anchor._from.col for picture in sheet._images] != [2, 4, 6, 8]
+                    or any(sheet[cell].value is not None for cell in ("C2", "E2", "G2", "I2"))
+                    or sheet.row_dimensions[2].height > 156):
+                raise RuntimeError("Lazada frozen workbook image/layout check failed")
+        finally:
+            balance_book.close()
+        print("LAZADA_BALANCE_SELF_CHECK=passed; sheets=1; embedded_images=4; processing_amount=blank")
+        from backend.services.temu_fee_refund_consolidated import (
+            HEADERS as TEMU_FEE_HEADERS,
+            SHEETS as TEMU_FEE_SHEETS,
+            create_consolidated_workbook,
+        )
+
+        if not any(item.get("key") == "temu_fee_refund_export" for item in info.get("tools", [])):
+            raise RuntimeError("TEMU fee/refund export is missing from the tool catalog")
+        fee_record = {
+            "start_date": "2026-09-01", "end_date": "2026-09-30",
+            "stores": [{"exports": {
+                kind: {"status": "no_data", "row_count": 0} for kind in TEMU_FEE_SHEETS
+            }}],
+        }
+        fee_output = create_consolidated_workbook(check_dir / "manifest.json", fee_record)
+        fee_book = load_workbook(check_dir / fee_output["file"], read_only=True)
+        try:
+            if fee_book.sheetnames != list(TEMU_FEE_SHEETS.values()):
+                raise RuntimeError("TEMU consolidated workbook sheets are invalid")
+            for kind, title in TEMU_FEE_SHEETS.items():
+                if list(next(fee_book[title].values)) != TEMU_FEE_HEADERS[kind]:
+                    raise RuntimeError("TEMU consolidated workbook headers are invalid")
+        finally:
+            fee_book.close()
         # Verify the new SKU coverage service is present and functional inside
         # the frozen executable without logging in or reading a real account.
         from backend.services.sku_inventory_query import DeveloperOption

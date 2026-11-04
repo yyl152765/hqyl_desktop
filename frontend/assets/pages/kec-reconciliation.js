@@ -1,9 +1,12 @@
 (() => {
   const $ = HQYL.$;
   let outputRoot = "";
+  let initialOutputRoot = "";
   let resultOutputDir = "";
   let outputFile = "";
+  let defaultBaseUrl = "https://900853.private.mabangerp.com";
   let basisText = "实际体积（长 × 宽 × 高 × 数量 × 0.000001）";
+  const QUOTE_SCOPE = "报价表仅用于原有仓储费分档、日均不超过 2000 单的操作费和包材；新条款优先";
 
   const SUMMARY_ROWS = [
     { label: "仓储费", billed: "仓储费_账单金额", expected: "仓储费_核对金额", count: "仓储费_异常数" },
@@ -43,6 +46,22 @@
     return parsed.toFixed(digits);
   }
 
+  function baseUrlValue() {
+    const value = $("kecBaseUrl").value.trim() || defaultBaseUrl;
+    try {
+      const parsed = new URL(value);
+      if (!/^https?:\/\/[^/\\?#\s]+\/?$/i.test(value) || !["http:", "https:"].includes(parsed.protocol)
+          || !parsed.hostname || parsed.username || parsed.password
+          || (parsed.pathname && parsed.pathname !== "/") || parsed.search || parsed.hash) {
+        throw new Error("invalid domain");
+      }
+      return parsed.origin;
+    } catch (_error) {
+      HQYL.showToast("请填写有效的马帮 http(s) 域名，不包含账号、密码、路径或查询参数");
+      return "";
+    }
+  }
+
   function setBillNotice(text, warning = false) {
     const box = $(warning ? "kecBillWarning" : "kecBillInfo");
     if (!box) return;
@@ -80,7 +99,7 @@
       return;
     }
     $("kecQuoteFile").value = result.path;
-    $("kecQuoteHint").textContent = `已选择报价表：${result.name || basename(result.path)}`;
+    $("kecQuoteHint").textContent = `已选择报价表：${result.name || basename(result.path)}。${QUOTE_SCOPE}`;
   }
 
   async function chooseOutputDir() {
@@ -125,6 +144,8 @@
       HQYL.showToast("请选择输出目录");
       return;
     }
+    const baseUrl = baseUrlValue();
+    if (!baseUrl) return;
     outputRoot = selectedOutputRoot;
     const account = HQYL.activeAccount("mabang");
     if (!account) {
@@ -133,12 +154,13 @@
     }
     await HQYL.startTask(() => {
       HQYL.appendLog(`仓租费核算基数：${basisText}`);
-      HQYL.appendLog(quoteFile ? `使用报价表：${quoteFile}` : "未提供报价表，使用程序内置报价规则");
+      HQYL.appendLog(quoteFile ? `使用报价表：${quoteFile}；${QUOTE_SCOPE}` : "未提供报价表，使用内置报价和本页新条款");
       return HQYL.api().start_kec_reconciliation({
         account_id: account.id,
         input_file: inputFile,
         quote_file: quoteFile,
         output_dir: selectedOutputRoot,
+        base_url: baseUrl,
       });
     });
   }
@@ -197,9 +219,15 @@
     },
     async init(info) {
       outputRoot = info.settings?.output_dir || "";
+      initialOutputRoot = outputRoot;
       $("kecOutputDir").value = outputRoot;
+      $("kecBaseUrl").value = defaultBaseUrl;
       try {
         const response = await HQYL.api().get_kec_reconciliation_info();
+        if (response?.ok && response.default_base_url) {
+          defaultBaseUrl = response.default_base_url;
+          $("kecBaseUrl").value = defaultBaseUrl;
+        }
         if (response?.ok && response.basis) {
           basisText = response.basis;
           $("kecBasisRule").textContent = `仓租费核算基数：${response.basis}`;
@@ -209,7 +237,7 @@
       }
       $("kecReconciliationForm").addEventListener("submit", (event) => {
         event.preventDefault();
-        runReconciliation();
+        return runReconciliation();
       });
       $("kecChooseBillBtn").addEventListener("click", chooseBill);
       $("kecChooseQuoteBtn").addEventListener("click", chooseQuote);
@@ -223,6 +251,7 @@
       $("kecBillFile").disabled = running;
       $("kecQuoteFile").disabled = running;
       $("kecOutputDir").disabled = running;
+      $("kecBaseUrl").disabled = running;
       $("kecChooseBillBtn").disabled = running;
       $("kecChooseQuoteBtn").disabled = running;
       $("kecChooseDirBtn").disabled = running;
@@ -243,12 +272,21 @@
     },
     onTaskRestored(task) {
       const restoredRoot = String(task?.context?.output_dir || "");
-      if (restoredRoot && !$("kecOutputDir").value.trim()) {
+      if (restoredRoot && (!$("kecOutputDir").value.trim() || $("kecOutputDir").value.trim() === initialOutputRoot)) {
         outputRoot = restoredRoot;
         $("kecOutputDir").value = restoredRoot;
       }
       const restoredInput = String(task?.context?.input_file || "");
       if (restoredInput && !$("kecBillFile").value.trim()) $("kecBillFile").value = restoredInput;
+      const restoredQuote = String(task?.context?.quote_file || "");
+      if (restoredQuote && !$("kecQuoteFile").value.trim()) {
+        $("kecQuoteFile").value = restoredQuote;
+        $("kecQuoteHint").textContent = `已恢复报价表：${basename(restoredQuote)}。${QUOTE_SCOPE}`;
+      }
+      const restoredBaseUrl = String(task?.context?.base_url || "");
+      if (restoredBaseUrl && (!$("kecBaseUrl").value.trim() || $("kecBaseUrl").value.trim() === defaultBaseUrl)) {
+        $("kecBaseUrl").value = restoredBaseUrl;
+      }
     },
     applyResult(result) {
       if (!result || result.success === false) return;

@@ -2,6 +2,9 @@
   const $ = HQYL.$;
   const TOOL_META = {
     temu_on_sale_export: { href: "temu-on-sale-export.html", icon: "导", featured: true },
+    temu_fee_refund_export: { href: "temu-fee-refund-export.html", icon: "费", featured: true },
+    temu_financial_export: { href: "temu-financial-export.html", icon: "报", featured: true },
+    temu_activity_export: { href: "temu-activity-export.html", icon: "活", featured: true },
     temu_balance_statistics: { href: "temu-balance-statistics.html", icon: "余", featured: true },
     lazada_balance_statistics: { href: "lazada-balance-statistics.html", icon: "余", featured: true },
     purchase_log: { href: "purchase-log.html", icon: "SKU" },
@@ -37,6 +40,9 @@
   };
   const PREVIEW_TOOLS = [
     { key: "temu_on_sale_export", name: "TEMU 在售商品导出", description: "自定义选店、原文件归档、全部在售 SKU 汇总与失败重试。", vendor: "ziniao" },
+    { key: "temu_fee_refund_export", name: "TEMU 面单费与退货退款导出", description: "按店铺和日期导出发货面单费、退货面单费及已退款售后单。", vendor: "ziniao" },
+    { key: "temu_financial_export", name: "TEMU 财务报表导出", description: "按店铺和日期导出全球财务明细，保留原始文件并合并全部工作表。", vendor: "ziniao" },
+    { key: "temu_activity_export", name: "TEMU 活动报名导出", description: "按店铺批量导出活动申报模板，核对站点、活动主题与报价行数。", vendor: "ziniao" },
     { key: "temu_balance_statistics", name: "TEMU 余额统计", description: "按所选月份采集待处理款项，保存当前账户总金额和页面截图。", vendor: "ziniao" },
     { key: "lazada_balance_statistics", name: "Lazada 余额统计", description: "多站点采集当前 Income、Balance、Ads 与处理中提现，并保存截图。", vendor: "ziniao" },
     { key: "mabang_arrival_query", name: "到货查询与导出", description: "批量按备注查询调拨批次并导出到货明细 Excel。", vendor: "mabang" },

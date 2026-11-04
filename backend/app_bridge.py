@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import threading
@@ -150,6 +151,12 @@ from backend.services.vietnam_final_reconciliation import (
 from backend.task_manager import TaskManager
 from backend.core.ziniao_browser import ZiniaoBrowser, account_profile as ziniao_account_profile, runtime_paths as ziniao_runtime_paths
 from backend.services import temu_on_sale_export as temu_export
+from backend.services import temu_fee_refund_export as temu_fee_refund
+from backend.services import temu_activity_export as activity_export
+from backend.services import temu_activity_page as activity_page
+from backend.services import temu_financial_export as financial_export
+from backend.services.temu_fee_refund_gateway import TemuFeeRefundGateway
+from backend.services.temu_financial_gateway import TemuFinancialGateway
 from backend.services import balance_statistics
 from backend.services.temu_on_sale_gateway import TemuOnSaleGateway
 from backend.update_service import (
@@ -160,7 +167,7 @@ from backend.update_service import (
 )
 
 
-APP_VERSION = "0.2.72"
+APP_VERSION = "0.2.89"
 APP_NAME = "寰球云联自动化平台"
 
 
@@ -307,10 +314,31 @@ class AppBridge:
                     "vendor": "local",
                 },
                 {
+                    "key": "temu_fee_refund_export",
+                    "name": "TEMU 面单费及退货退款导出",
+                    "description": "按店铺和日期导出发货面单费、退货面单费及已退款售后单。",
+                    "status": "ready",
+                    "vendor": "ziniao",
+                },
+                {
+                    "key": "temu_financial_export",
+                    "name": "TEMU 财务报表导出",
+                    "description": "按店铺和日期导出全球财务明细，保留原始文件并合并全部工作表。",
+                    "status": "ready",
+                    "vendor": "ziniao",
+                },
+                {
                     "key": "temu_on_sale_export",
                     "name": "TEMU 在售商品导出",
                     "description": "自定义选店，保留原始文件并汇总全部在售 SKU，支持失败重试。",
                     "status": "sample",
+                    "vendor": "ziniao",
+                },
+                {
+                    "key": "temu_activity_export",
+                    "name": "TEMU 活动报名导出",
+                    "description": "按店铺批量导出活动报名模板，核对站点、活动范围与报价行数。",
+                    "status": "ready",
                     "vendor": "ziniao",
                 },
                 {
@@ -1170,12 +1198,15 @@ class AppBridge:
         )
 
     def get_kec_reconciliation_info(self) -> dict[str, Any]:
+        from backend.services.kec_reconciliation import DEFAULT_MABANG_BASE_URL
+
         settings = self.config_store.load()
         return {
             "ok": True,
             "settings": _settings_payload(settings),
             "account_state": _account_state_payload(settings),
             "basis": "实际体积（长 × 宽 × 高 × 数量 × 0.000001）",
+            "default_base_url": DEFAULT_MABANG_BASE_URL,
         }
 
     def inspect_kec_reconciliation_source(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1255,6 +1286,7 @@ class AppBridge:
                 "input_file": str(job.input_file),
                 "quote_file": str(job.quote_file or ""),
                 "output_dir": str(job.output_dir),
+                "base_url": job.base_url,
                 "account_id": str(request_payload.get("account_id") or ""),
             },
         )
@@ -1344,13 +1376,25 @@ class AppBridge:
         }
 
     def get_lazada_withdrawal_statistics_info(self) -> dict[str, Any]:
-        """返回 Lazada 提现统计的国家、默认上月日期和紫鸟运行路径。"""
+        """加载提现统计默认值和钉钉配置状态，不要求已安装紫鸟。"""
         try:
-            paths = resolve_lazada_withdrawal_runtime_paths()
+            settings = self.config_store.load()
+            try:
+                paths = resolve_lazada_withdrawal_runtime_paths()
+            except Exception:
+                paths = {}
             return {
                 "ok": True,
                 "countries": lazada_withdrawal_country_options(),
                 "period": lazada_withdrawal_default_period(),
+                "operator_names": [binding.name for binding in settings.dingtalk.users],
+                "default_dingtalk_operator_name": (
+                    settings.dingtalk.users[0].name if len(settings.dingtalk.users) == 1 else ""
+                ),
+                "dingtalk_configured": bool(
+                    str(settings.dingtalk.app_key or "").strip()
+                    and str(settings.dingtalk.app_secret or "").strip()
+                ),
                 "client_path": paths.get("client_path", ""),
                 "webdriver_path": paths.get("webdriver_path", ""),
             }
@@ -1369,10 +1413,25 @@ class AppBridge:
             except Exception:
                 # Runtime discovery is optional until the user starts a task.
                 paths = {}
+            selected = str((payload or {}).get("client_path") or "").strip()
+            if selected:
+                path = Path(selected).expanduser()
+                paths["client_path"] = str(path) if path.name.casefold() == "ziniao.exe" and path.is_file() else ""
             return {"ok": True, **defaults, "output_dir": self.config_store.load().output_dir,
-                    "client_path": paths.get("client_path", ""), "webdriver_path": paths.get("webdriver_path", "")}
+                    "client_path": paths.get("client_path", ""), "webdriver_path": paths.get("webdriver_path", ""),
+                    "client_installed": bool(paths.get("client_path"))}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def open_ziniao_download(self) -> dict[str, Any]:
+        """Open the fixed vendor download page; never execute an installer."""
+        import webbrowser
+        try:
+            if not webbrowser.open("https://www.ziniao.com/download/?tab=win", new=2):
+                raise RuntimeError()
+            return {"ok": True}
+        except Exception:
+            return {"ok": False, "error": "无法打开下载页，请在浏览器访问 https://www.ziniao.com/download/ 下载紫鸟 V6"}
 
     def _start_balance_statistics(self, payload: dict[str, Any], *, retry: bool) -> dict[str, Any]:
         with self._balance_statistics_lock:
@@ -1412,7 +1471,7 @@ class AppBridge:
 
         try:
             title = "TEMU" if platform == "temu" else "Lazada"
-            task = self.tasks.start(f"{title} 余额统计", runner, tool=f"{platform}_balance_statistics", context=context)
+            task = self.tasks.start(f"{title} 余额统计", runner, tool=f"{platform}_balance_statistics", context=context, exclusive=True)
             if not task.get("ok"):
                 release()
             return task
@@ -1425,6 +1484,311 @@ class AppBridge:
 
     def retry_balance_statistics(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._start_balance_statistics(payload, retry=True)
+
+    def get_temu_fee_refund_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            try:
+                paths = ziniao_runtime_paths()
+            except Exception:
+                paths = {}
+            return {"ok": True, **paths,
+                    **resolve_output_directories(self.config_store.load(), "temu_fee_refund_export")}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def get_temu_fee_refund_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            request = self._payload_with_account(payload, "ziniao")
+            path = Path(str(payload.get("manifest_path") or "")).resolve()
+            record = temu_fee_refund.load_batch(path, ziniao_account_profile(request))
+            return {"ok": True, "result": temu_fee_refund.public_result(path, record)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def start_temu_fee_refund_export(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._temu_export_lock:
+            try:
+                if self._temu_export_active:
+                    raise ValueError("已有 TEMU 导出任务正在运行")
+                names, start, end = temu_fee_refund.validate_request(payload)
+                directories = resolve_output_directories(self.config_store.load(), "temu_fee_refund_export")
+                directory = temu_export.writable_directory(payload.get("output_dir") or directories["output_dir"])
+                request = self._payload_with_account(payload, "ziniao")
+                profile = ziniao_account_profile(request)
+                with ZiniaoBrowser(request) as browser:
+                    browser.ready()
+                    matched = temu_fee_refund.match_stores(names, browser.list_stores())
+                if not matched["can_start"]:
+                    raise ValueError("\n".join(f"{x['name']}：{x['error']}" for x in matched["issues"]))
+                path = temu_fee_refund.create_batch(directory, profile, matched["stores"],
+                                                    [s["operator_name"] for s in matched["stores"]], start, end)
+                self._temu_export_active = True
+            except AccountRequiredError as exc:
+                return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        def release():
+            with self._temu_export_lock:
+                self._temu_export_active = False
+
+        def runner(progress):
+            try:
+                with ZiniaoBrowser(request) as browser:
+                    return temu_fee_refund.run_batch(path, TemuFeeRefundGateway(profile, browser=browser), progress)
+            except Exception as exc:
+                return temu_fee_refund.fail_batch(path, profile, f"批次中断：{exc}")
+            finally:
+                release()
+
+        try:
+            task = self.tasks.start("TEMU 面单费及退货退款导出", runner, tool="temu_fee_refund_export",
+                                    context={"manifest_path": str(path), "profile": profile, "account_id": request["account_id"]})
+            if not task.get("ok"):
+                try:
+                    temu_fee_refund.fail_batch(path, profile, task.get("error") or "任务未能启动")
+                finally:
+                    release()
+            return task
+        except Exception as exc:
+            try:
+                temu_fee_refund.fail_batch(path, profile, f"任务未能启动：{exc}")
+            finally:
+                release()
+            return {"ok": False, "error": str(exc)}
+
+    def get_temu_financial_export_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            return {"ok": True, **resolve_output_directories(self.config_store.load(), "temu_financial_export")}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def get_temu_financial_export_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            request = self._payload_with_account(payload, "ziniao")
+            path = Path(str(payload.get("manifest_path") or "")).resolve()
+            record = financial_export.load_batch(path, ziniao_account_profile(request))
+            return {"ok": True, "result": financial_export.public_result(path, record)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def start_temu_financial_export(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._temu_export_lock:
+            try:
+                if self._temu_export_active:
+                    raise ValueError("已有 TEMU 导出任务正在运行，请等待完成")
+                names, start, end = financial_export.validate_request(payload)
+                directories = resolve_output_directories(self.config_store.load(), "temu_financial_export")
+                directory = temu_export.writable_directory(payload.get("output_dir") or directories["output_dir"])
+                request = self._payload_with_account(payload, "ziniao")
+                profile = ziniao_account_profile(request)
+                with ZiniaoBrowser(request) as browser:
+                    browser.ready()
+                    matched = financial_export.match_stores(names, browser.list_stores())
+                if not matched["can_start"]:
+                    raise ValueError("\n".join(f"{item['name']}：{item['error']}" for item in matched["issues"]))
+                path = financial_export.create_batch(directory, profile, matched["stores"], start, end)
+                self._temu_export_active = True
+            except AccountRequiredError as exc:
+                return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        def release():
+            with self._temu_export_lock:
+                self._temu_export_active = False
+
+        def runner(progress):
+            try:
+                with ZiniaoBrowser(request) as browser:
+                    return financial_export.run_batch(
+                        path, TemuFinancialGateway(profile, browser=browser), progress,
+                    )
+            except Exception as exc:
+                return financial_export.fail_batch(path, profile, f"批次中断：{exc}")
+            finally:
+                release()
+
+        try:
+            task = self.tasks.start(
+                "TEMU 财务报表导出", runner, tool="temu_financial_export",
+                context={"manifest_path": str(path), "profile": profile, "account_id": request["account_id"]},
+            )
+            if not task.get("ok"):
+                try:
+                    financial_export.fail_batch(path, profile, task.get("error") or "任务未能启动")
+                finally:
+                    release()
+            return task
+        except Exception as exc:
+            try:
+                financial_export.fail_batch(path, profile, f"任务未能启动：{exc}")
+            finally:
+                release()
+            return {"ok": False, "error": str(exc)}
+
+    def _temu_activity_latest_path(self) -> Path:
+        return self.config_store.local_data_dir / "temu_activity_export" / "latest.json"
+
+    def get_temu_activity_export_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            directories = resolve_output_directories(self.config_store.load(), "temu_activity_export")
+            latest = None
+            pointer = self._temu_activity_latest_path()
+            if pointer.is_file():
+                try:
+                    manifest_path = str(json.loads(pointer.read_text(encoding="utf-8")).get("manifest_path") or "")
+                    if manifest_path and Path(manifest_path).is_file():
+                        record = activity_export.load_batch(manifest_path)
+                        latest = activity_export.public_result(Path(manifest_path), record)
+                except Exception:
+                    latest = None
+            return {"ok": True, **directories, "latest": latest,
+                    "sites": [{"code": code, "name": name} for code, name in activity_export.SITES.items()],
+                    "activity_types": list(activity_page.ACTIVITY_TYPES),
+                    "business_date": activity_export.beijing_today()}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def _temu_activity_catalog(self, request: dict[str, Any]) -> dict[str, Any]:
+        with ZiniaoBrowser(request) as browser:
+            browser.ready()
+            return {store["store_id"]: store for store in browser.list_stores()}
+
+    def start_temu_activity_export(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._temu_export_lock:
+            try:
+                if self._temu_export_active:
+                    raise ValueError("已有 TEMU 导出任务正在运行，请等待完成")
+                options = activity_export.validate_request(payload)
+                directories = resolve_output_directories(self.config_store.load(), "temu_activity_export")
+                directory = temu_export.writable_directory(payload.get("output_dir") or directories["output_dir"])
+                request = self._payload_with_account(payload, "ziniao")
+                profile = ziniao_account_profile(request)
+                catalog = self._temu_activity_catalog(request)
+                matched = activity_export.resolve_stores(options["store_names"], list(catalog.values()))
+                if not matched["can_start"]:
+                    raise ValueError("\n".join(f"{item['name']}：{item['error']}" for item in matched["issues"]))
+                path = activity_export.create_batch(directory, profile, matched["stores"],
+                                                    options["sites"], options["business_date"])
+                self._temu_export_active = True
+            except AccountRequiredError as exc:
+                return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        def release():
+            with self._temu_export_lock:
+                self._temu_export_active = False
+
+        def runner(progress):
+            try:
+                with ZiniaoBrowser(request) as browser:
+                    return activity_export.run_batch(path, activity_page.TemuActivityGateway(profile, browser=browser), progress)
+            except Exception as exc:
+                return activity_export.fail_batch(path, profile, f"批次中断：{exc}")
+            finally:
+                release()
+
+        try:
+            task = self.tasks.start("TEMU 活动报名导出", runner, tool="temu_activity_export",
+                                    context={"manifest_path": str(path), "profile": profile, "account_id": request["account_id"]})
+            if not task.get("ok"):
+                try:
+                    activity_export.fail_batch(path, profile, task.get("error") or "任务未能启动")
+                finally:
+                    release()
+            else:
+                try:
+                    temu_export.write_json(self._temu_activity_latest_path(), {"manifest_path": str(path)})
+                except Exception:
+                    pass
+            return task
+        except Exception as exc:
+            try:
+                activity_export.fail_batch(path, profile, f"任务未能启动：{exc}")
+            finally:
+                release()
+            return {"ok": False, "error": str(exc)}
+
+    def retry_temu_activity_export(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._temu_export_lock:
+            try:
+                if self._temu_export_active:
+                    raise ValueError("已有 TEMU 导出任务正在运行，请等待完成")
+                request = self._payload_with_account(payload, "ziniao")
+                profile = ziniao_account_profile(request)
+                path = Path(str(payload.get("manifest_path") or "")).resolve()
+                record = activity_export.load_batch(path, profile)
+                if record["status"] == "complete":
+                    raise ValueError("该批次已全部导出，无需重试")
+                if not any(store["status"] != "success" for store in record["stores"]):
+                    raise ValueError("该批次没有失败的店铺")
+                self._temu_export_active = True
+            except AccountRequiredError as exc:
+                return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        def release():
+            with self._temu_export_lock:
+                self._temu_export_active = False
+
+        def runner(progress):
+            try:
+                with ZiniaoBrowser(request) as browser:
+                    return activity_export.run_batch(path, activity_page.TemuActivityGateway(profile, browser=browser), progress)
+            except Exception as exc:
+                return activity_export.fail_batch(path, profile, f"批次中断：{exc}")
+            finally:
+                release()
+
+        try:
+            task = self.tasks.start("TEMU 活动报名导出重试", runner, tool="temu_activity_export",
+                                    context={"manifest_path": str(path), "profile": profile, "account_id": request["account_id"]})
+            if not task.get("ok"):
+                release()
+            return task
+        except Exception as exc:
+            release()
+            return {"ok": False, "error": str(exc)}
+
+    def get_temu_activity_export_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            request = self._payload_with_account(payload, "ziniao")
+            path = Path(str(payload.get("manifest_path") or "")).resolve()
+            record = activity_export.load_batch(path, ziniao_account_profile(request))
+            return {"ok": True, "result": activity_export.public_result(path, record)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def inspect_temu_activity_page(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Read-only probe: open one store and report which calibrated labels exist."""
+        with self._temu_export_lock:
+            if self._temu_export_active:
+                return {"ok": False, "error": "已有 TEMU 导出任务正在运行，请等待完成"}
+            self._temu_export_active = True
+        try:
+            options = activity_export.validate_request({**payload, "business_date": payload.get("business_date") or activity_export.beijing_today()})
+            request = self._payload_with_account(payload, "ziniao")
+            profile = ziniao_account_profile(request)
+            with ZiniaoBrowser(request) as browser:
+                browser.ready()
+                catalog = {store["store_id"]: store for store in browser.list_stores()}
+                matched = activity_export.resolve_stores([options["store_names"][0]], list(catalog.values()))
+                if not matched["can_start"]:
+                    raise ValueError("\n".join(f"{item['name']}：{item['error']}" for item in matched["issues"]))
+                gateway = activity_page.TemuActivityGateway(profile, browser=browser)
+                gateway.preflight([{**matched["stores"][0], "status": "pending"}])
+                result = gateway.inspect(matched["stores"][0], options["sites"])
+            return {"ok": True, "profile": profile, "store_name": matched["stores"][0]["store_name"], **result}
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        finally:
+            with self._temu_export_lock:
+                self._temu_export_active = False
 
     def get_temu_on_sale_export_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
@@ -2229,6 +2593,21 @@ class AppBridge:
         try:
             settings = self.config_store.load()
             request_payload = self._payload_with_account(payload, "ziniao")
+            operator_name = str(request_payload.get("dingtalk_operator_name") or "").strip()
+            if not operator_name and len(settings.dingtalk.users) == 1:
+                operator_name = settings.dingtalk.users[0].name
+            if not str(settings.dingtalk.app_key or "").strip() or not str(settings.dingtalk.app_secret or "").strip():
+                raise ValueError("请先在设置中配置钉钉 AppKey 和 AppSecret，再开始提现统计")
+            if not operator_name:
+                raise ValueError("请选择钉钉操作人；可在设置中配置钉钉用户")
+            user_id = _resolve_dingtalk_user_id(settings, operator_name)
+            if not user_id:
+                raise ValueError(f"操作人「{operator_name}」不在钉钉用户配置表中，请先在设置中配置")
+            request_payload.update({
+                "dingtalk_app_key": settings.dingtalk.app_key,
+                "dingtalk_app_secret": settings.dingtalk.app_secret,
+                "dingtalk_user_id": user_id,
+            })
             job = validate_lazada_withdrawal_payload(
                 request_payload,
                 default_output_root=settings.output_dir,

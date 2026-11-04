@@ -51,6 +51,9 @@ const HQYL = (() => {
     ] },
     { id: "ziniao", name: "紫鸟流程", icon: "Z", keywords: "紫鸟 ZIniao Superbrowser", items: [
       { id: "temu_on_sale_export", href: "temu-on-sale-export.html", name: "在售商品导出", icon: "导", tag: "TEMU", category: "TEMU 东南亚", description: "选店导出、原文件归档与 Excel 汇总", keywords: "商品管理 SKU 在售中 失败重试" },
+      { id: "temu_fee_refund_export", href: "temu-fee-refund-export.html", name: "面单费与退货退款导出", icon: "费", tag: "TEMU", category: "TEMU 财务", description: "按店铺和日期导出面单费及已退款售后单", keywords: "发货面单 退货面单 退货退款 已出账" },
+      { id: "temu_financial_export", href: "temu-financial-export.html", name: "财务报表导出", icon: "报", tag: "TEMU", category: "TEMU 财务", description: "按店铺和日期导出全球财务明细并合并工作表", keywords: "财务报表 全球财务明细 对账中心 资金流向 资金" },
+      { id: "temu_activity_export", href: "temu-activity-export.html", name: "活动报名导出", icon: "活", tag: "TEMU", category: "TEMU 活动", description: "按店铺批量导出活动申报模板并核对范围", keywords: "营销活动 批量报名 限时秒杀 官方大促 专题 清仓 模板 报价 库存" },
       { id: "temu_balance_statistics", href: "temu-balance-statistics.html", name: "余额统计", icon: "余", tag: "TEMU", category: "TEMU 财务", description: "当前账户总金额与指定月份待处理款项", keywords: "资金 月份 余额 财务 截图" },
       { id: "shopee_ads", href: "shopee-ads.html", name: "广告充值", icon: "充", tag: "Shopee", category: "Shopee 广告", description: "多站点店铺充值", keywords: "印尼 泰国 菲律宾 越南 马来西亚 马来 按表充值 营销" },
       { id: "lazada_withdrawal_statistics", href: "lazada-withdrawal-statistics.html", name: "提现统计", icon: "提", tag: "Lazada", category: "Lazada 财务", description: "Excel 与账单归档", keywords: "菲律宾 马来西亚 泰国 收入" },
@@ -802,15 +805,16 @@ const HQYL = (() => {
       const code = country || (tool === "lazada_ads_data" || tool === "lazada_bill_detail" ? "TH" : "");
       const name = { TH: "泰国", PH: "菲律宾", MY: "马来西亚", ID: "印尼", VN: "越南" }[code] || "泰国";
       const root = "C:\\Users\\Demo\\Desktop\\log";
+      const folder = { lazada_ads_data: "lz泰国广告数据", temu_activity_export: "TEMU活动报名导出", temu_financial_export: "TEMU财务报表导出", lz_warehouse_inventory: "lz各仓库存" }[tool] || "lz各仓库存";
       const defaults = tool === "lazada_bill_detail"
         ? { output_dir: `${root}\\Lazada${name}账单明细`, screenshot_root: `${root}\\Lazada${name}账单明细截图` }
-        : { output_dir: `${root}\\${tool === "lazada_ads_data" ? "lz泰国广告数据" : "lz各仓库存"}` };
+        : { output_dir: `${root}\\${folder}` };
       let saved = {};
       try { saved = JSON.parse(window.localStorage.getItem("hqyl.preview.scopedOutputDirs") || "{}")[`${tool}:${code}`] || {}; } catch (_error) { /* Keep independent defaults. */ }
       return { ...defaults, ...saved };
     };
     return {
-      async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "0.2.72" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
+      async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "0.2.89" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
       async get_latest_task_status(tool) { return tasks[tool] || { ok: false, empty: true }; },
       async get_task_status(id) { return Object.values(tasks).find((task) => task.id === id) || { ok: false, error: "任务不存在" }; },
       async get_lazada_campaign_workbook_info() { return { ok: true, preview: true, workflow: "local_excel", supports_sku_price_filter: true, supports_removed_sku_export: true, default_threshold: "0.95", output_dir: "C:\\Preview\\Excel折扣筛选", max_files: 100 }; },
@@ -830,8 +834,57 @@ const HQYL = (() => {
         task.created_at = new Date().toISOString();
         return task;
       },
-      async get_group_sales_options() { return { ok: true, groups: [{ id: "preview-group", name: "菲S-示例小组" }, { id: "preview-tk", name: "tk菲律宾" }, { id: "preview-lazada", name: "lazada马来" }] }; },
-      async start_group_sales_report(payload) { return startPreviewTask("group_sales", { group_count: (payload.group_ids || []).length, record_count: 16, output_file: "C:\\Preview\\销量.xlsx", output_dir: "C:\\Preview" }); },
+      async get_temu_activity_export_info() {
+        return { ok: true, output_dir: previewScopedDirs("temu_activity_export").output_dir, business_date: "2026-11-03",
+          sites: [{ code: "PH", name: "菲律宾" }, { code: "MY", name: "马来西亚" }, { code: "TH", name: "泰国" }],
+          activity_types: ["限时秒杀", "官方大促", "专题活动"], latest: null };
+      },
+      async get_temu_financial_export_info() {
+        return { ok: true, output_dir: previewScopedDirs("temu_financial_export").output_dir };
+      },
+      async start_temu_financial_export(payload = {}) {
+        const stores = String(payload.store_names || "").split(/\r?\n/).map(name => name.trim()).filter(Boolean);
+        const result = {
+          preview: true, run_id: "TEMU财务报表_20261104_101500_preview", status: "complete",
+          output_dir: previewScopedDirs("temu_financial_export").output_dir,
+          store_count: stores.length, success_count: stores.length, failed_count: 0, pending_count: 0,
+          row_count: stores.length * 120, is_complete: true, completion_message: `${stores.length} 个店铺已完成导出并生成合并财务报表`,
+          merged: { status: "success", file: "", row_counts: { "财务明细": stores.length * 120 }, row_count: stores.length * 120, sheet_count: 1, store_count: stores.length },
+          stores: stores.map((name, index) => ({ store_id: `preview-${index}`, store_name: name, status: "success", row_count: 120, sheet_count: 1, result_file: "", raw_file: "", error: "" })),
+        };
+        const task = startPreviewTask("temu_financial_export", result);
+        task.context = { account_id: payload.account_id || activeAccountIds.ziniao || "", manifest_path: "C:\\Preview\\TEMU财务报表导出\\manifest.json" };
+        task.logs = ["[界面演示] 展示全球财务明细导出与合并流程，不打开紫鸟、不访问 TEMU。"];
+        task.created_at = new Date().toISOString();
+        return task;
+      },
+      async get_temu_financial_export_progress() { return { ok: true, result: null }; },
+      async start_temu_activity_export(payload = {}) {
+        const stores = String(payload.store_names || "").split(/\r?\n/).map(name => name.trim()).filter(Boolean);
+        const result = {
+          preview: true, run_id: "TEMU活动报名导出_20261103_101500_preview", status: "complete", business_date: payload.business_date || "2026-11-03",
+          sites: payload.sites || ["PH"], output_dir: previewScopedDirs("temu_activity_export").output_dir,
+          store_count: stores.length, success_count: stores.length, failed_count: 0, pending_count: 0,
+          quote_rows: stores.length * 2898, stock_rows: stores.length * 3350, site_rows: { "菲律宾站": stores.length * 2898 },
+          is_complete: true, can_retry: false, completion_message: `${stores.length} 个店铺已导出，共 ${stores.length * 2898} 条报价行`,
+          stores: stores.map((name, index) => ({ store_id: `preview-${index}`, store_name: name, status: "success", quote_rows: 2898, stock_rows: 3350,
+            topic_count: 49, exported_sites: { "菲律宾站": 2898 }, result_file: "", error: "" })),
+        };
+        const task = startPreviewTask("temu_activity_export", result);
+        task.context = { account_id: payload.account_id || activeAccountIds.ziniao || "", manifest_path: "C:\\Preview\\TEMU活动报名导出\\manifest.json" };
+        task.logs = ["[界面演示] 展示逐店导出与范围核对，不打开紫鸟、不访问 TEMU。"];
+        task.created_at = new Date().toISOString();
+        return task;
+      },
+      async retry_temu_activity_export() { return startPreviewTask("temu_activity_export", { preview: true, status: "complete", completion_message: "失败店铺已重新导出" }); },
+      async get_temu_activity_export_progress() { return { ok: true, result: null }; },
+      async inspect_temu_activity_page(payload = {}) {
+        return { ok: true, store_name: String(payload.store_names || "示例店铺").split(/\r?\n/)[0], title: "批量报名活动",
+          url: "https://agentseller.temu.com/activity/enroll", labels: { "限时秒杀": 1, "官方大促": 1, "专题活动": 1, "选择商品": 1, "全选": 2, "下一页": 1, "导出": 1 },
+          activity_types_found: ["限时秒杀", "官方大促", "专题活动"], counters: { total: 734, selected: 0 }, checkable_count: 43,
+          body_sample: "[界面演示] 未访问真实页面，仅展示检查结果的呈现方式。" };
+      },
+      async get_group_sales_options() { return { ok: true, groups: [{ id: "preview-group", name: "菲S-示例小组" }, { id: "preview-tk", name: "tk菲律宾" }, { id: "preview-lazada", name: "lazada马来" }] }; },      async start_group_sales_report(payload) { return startPreviewTask("group_sales", { group_count: (payload.group_ids || []).length, record_count: 16, output_file: "C:\\Preview\\销量.xlsx", output_dir: "C:\\Preview" }); },
       async start_developer_sales_income_summary() { return startPreviewTask("developer_sales_income_summary", { developer_count: 2, salesperson_count: 4, source_row_count: 86, missing_developer_names: [], output_file: "C:\\Preview\\开发与销售收入汇总.xlsx", output_dir: "C:\\Preview" }); },
       async start_mabang_income_expense_report() { return startPreviewTask("mabang_income_expense_report", { target_count: 3, category_count: 0, warehouse_count: 3, csv_file_count: 3, record_count: 1286, output_files: ["C:\\Preview\\印尼雅仓海外仓_收支报表.csv", "C:\\Preview\\菲律宾雅仓海外仓_收支报表.csv", "C:\\Preview\\马来雅仓海外仓_收支报表.csv"], output_dir: "C:\\Preview\\马帮收支报表" }); },
       async start_purchase_log_query() { return startPreviewTask("purchase_log", { sku_count: 2, record_count: 8, output_file: "C:\\Preview\\采购.xlsx", output_dir: "C:\\Preview" }); },

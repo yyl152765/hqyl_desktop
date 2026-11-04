@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TEMU 财务报表导出</title>
+  <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  <link rel="stylesheet" href="../assets/pages/temu-on-sale-export.css" />
+  <link rel="stylesheet" href="../assets/pages/temu-financial-export.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside id="appSidebar" class="sidebar"></aside>
+    <main class="main">
+      <header class="page-header"><div><div class="page-kicker">紫鸟流程 / TEMU 财务</div><h1>财务报表导出</h1></div><div id="taskBadge" class="status-pill idle">待运行</div></header>
+      <p class="temu-export-note">从 TEMU 对账中心导出“列表数据 + 账务详情”的全球财务明细。每个店铺保留平台原始文件和逐店工作簿，最终按原工作表名称合并为一个 Excel；每个工作表第一列为完整紫鸟店铺名。</p>
+      <section class="layout-grid">
+        <form id="exportForm" class="surface form-surface">
+          <div class="section-head"><div><h2>导出条件</h2><p>填写店铺名和完整日期范围；店铺名只需填写能够唯一匹配的名称。</p></div><span class="section-badge">手动运行</span></div>
+          <div class="flow-account-bar"><span class="flow-account-icon ziniao-icon">Z</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span><a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a></div>
+          <div class="form-grid">
+            <label><span>开始日期</span><input id="startDate" type="date" required /></label>
+            <label><span>结束日期</span><input id="endDate" type="date" required /></label>
+            <label class="store-field"><span>紫鸟店铺名 <small>每行一个，可输入能够唯一匹配的名称</small></span><textarea id="storeNames" required spellcheck="false" placeholder="每行输入一个店铺名"></textarea></label>
+            <label class="store-field"><span>输出目录</span><div class="input-action"><input id="outputDir" required placeholder="输入或选择本地输出目录" /><button id="chooseOutputBtn" class="secondary" type="button">选择目录</button></div></label>
+          </div>
+          <div id="startIssues" class="temu-export-warning" hidden role="alert"></div>
+          <div class="actions"><button id="startBtn" class="primary" type="submit" disabled>开始导出</button></div>
+          <p class="temu-export-note">日期范围包含开始和结束日期，查询时间为开始日 00:00:00 至结束日 23:59:59。导出前会重置其他筛选，并核对账务类型为“全部”、资金流向为全部、无金额限制。</p>
+          <p class="temu-export-note">导出历史中只下载“下载财务明细(全球)”，不会使用卖家中心、欧区或美国版本。每次运行新建独立批次目录，已完成批次不会重试或覆盖。</p>
+        </form>
+        <div class="right-stack"><section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>查看逐店下载、校验与合并进度。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section></div>
+      </section>
+      <section class="surface"><div class="section-head"><div><h2>导出结果</h2><p id="resultMessage" aria-live="polite">尚未运行。</p></div><span id="batchLabel" class="section-badge">尚无批次</span></div>
+        <div class="actions"><button id="openMergedBtn" type="button" class="primary" disabled>打开合并总表</button><button id="openDirectoryBtn" type="button" class="secondary" disabled>打开结果目录</button></div>
+        <p id="mergedMessage" class="temu-export-note" aria-live="polite" hidden></p>
+        <div class="collection-table-wrap"><table><thead><tr><th>店铺名</th><th>状态</th><th>数据行数</th><th>工作表数</th><th>逐店工作簿</th><th>原始文件</th><th>说明</th></tr></thead><tbody id="storeResults"><tr><td colspan="7">尚未运行</td></tr></tbody></table></div>
+      </section>
+      <span id="statusText" hidden></span>
+    </main>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="../assets/common.js?v=20260623-log-panel"></script>
+  <script src="../assets/pages/temu-financial-export.js"></script>
+</body>
+</html>

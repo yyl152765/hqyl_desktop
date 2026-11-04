@@ -126,6 +126,82 @@ class LazadaBalanceLoginTests(unittest.TestCase):
             self.ensure(driver)
         self.assertFalse(driver.clicks)
 
+    def test_target_document_survives_secondary_resource_timeout_without_renavigation(self):
+        from selenium.common.exceptions import TimeoutException
+        for target in (
+            self.target,
+            'https://sellercenter.lazada.vn/apps/balance',
+            'https://sellercenter.lazada.vn/sponsor/solutions/ads/productads/#!/overview',
+        ):
+            with self.subTest(target=target):
+                driver = _Driver('https://sellercenter.lazada.vn/')
+                def timeout(_):
+                    raise TimeoutException('private secondary-resource URL')
+                driver.on_get = timeout
+                state = {}
+                self.assertEqual(self.ensure(driver, state, target), 'original')
+                self.assertEqual(state['business_handle'], 'original')
+                self.assertEqual(driver.gets, [('original', target)])
+                self.assertFalse(driver.clicks)
+
+    def test_target_timeout_after_saved_login_does_not_repeat_submission(self):
+        from selenium.common.exceptions import TimeoutException
+        driver = _Driver('https://sellercenter.lazada.vn/apps/seller/login')
+        def timeout(_):
+            raise TimeoutException('private resource failure')
+        driver.on_get = timeout
+        state = {}
+        self.assertEqual(self.ensure(driver, state), 'original')
+        self.assertEqual(driver.gets, [('original', self.target)])
+        self.assertEqual(driver.clicks, [('original', 'login')])
+        self.assertTrue(state['attempted'])
+
+    def test_navigation_timeout_off_expected_finance_route_fails_without_retry(self):
+        from selenium.common.exceptions import TimeoutException
+        target = 'https://sellercenter.lazada.vn/sponsor/solutions/ads/productads/#!/overview'
+        for landed in (
+            'https://sellercenter.lazada.vn/',
+            'https://sellercenter.lazada.vn/apps/seller/login',
+            'https://sellercenter.lazada.sg/sponsor/solutions/ads/productads/#!/overview',
+            target.replace('overview', 'campaigns'),
+            target.replace('https:', 'http:'),
+            target.replace('.vn/', '.vn.evil.invalid/'),
+            target.replace('.vn/', '.vn:8443/'),
+        ):
+            with self.subTest(landed=landed):
+                driver = _Driver('https://sellercenter.lazada.vn/')
+                def timeout(_):
+                    driver.urls['original'] = landed
+                    raise TimeoutException('private-resource-token')
+                driver.on_get = timeout
+                with self.assertRaisesRegex(login.LazadaLoginError, '加载超时') as caught:
+                    self.ensure(driver, target=target)
+                self.assertNotIn('private-resource-token', str(caught.exception))
+                self.assertEqual(driver.gets, [('original', target)])
+                self.assertFalse(driver.clicks)
+
+    def test_navigation_timeout_on_balance_denial_is_not_recovered(self):
+        from selenium.common.exceptions import TimeoutException
+        target = 'https://sellercenter.lazada.vn/apps/balance'
+        driver = _Driver('https://sellercenter.lazada.vn/')
+        def timeout(_):
+            driver.urls['original'] = target + '/unavailable'
+            raise TimeoutException('private failure')
+        driver.on_get = timeout
+        with self.assertRaisesRegex(login.LazadaLoginError, '加载超时'):
+            self.ensure(driver, target=target)
+        self.assertFalse(driver.clicks)
+
+    def test_non_timeout_navigation_error_is_not_recovered_at_target(self):
+        driver = _Driver('https://sellercenter.lazada.vn/')
+        def failed(_):
+            raise RuntimeError('driver disconnected')
+        driver.on_get = failed
+        with self.assertRaisesRegex(RuntimeError, 'disconnected'):
+            self.ensure(driver)
+        self.assertEqual(driver.current_url, self.target)
+        self.assertFalse(driver.clicks)
+
     def test_register_login_opens_new_tab_then_explicitly_returns_to_finance(self):
         driver = _Driver("https://sellercenter.lazada.vn/apps/register/index")
         driver.on_link = lambda: driver.urls.update({"login": driver.href})

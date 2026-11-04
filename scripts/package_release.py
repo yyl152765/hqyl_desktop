@@ -1,6 +1,5 @@
 import hashlib
 import json
-import os
 import re
 import shutil
 import sys
@@ -16,7 +15,7 @@ def _release_output_path(release_dir: Path, name: str) -> Path:
     return output_path
 
 
-def package_release(version: str = "0.2.72"):
+def package_release(version: str = "0.2.89"):
     if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("Release version must use the numeric major.minor.patch format")
 
@@ -50,7 +49,7 @@ def package_release(version: str = "0.2.72"):
     latest_json_data = {
         "version": version,
         "mandatory": False,
-        "notes": "修复 BigSeller 批量 SKU 查询触发频率限制后连续失败的问题：识别 HTTP 200 下的 -1 频繁请求提示，商品 ID 查询增加请求间隔，限流时等待并重试当前 SKU，重试耗尽停止后续请求并标记结果不完整。滞销 SKU 爆款对标同步改进限流识别和冷却等待，保留已有 Lazada 等功能。",
+        "notes": "新增 TEMU 全球财务明细导出：按自定义日期下载列表与账务详情，每个 sheet 添加完整店铺名并合并同名 sheet，兼容两行合并表头。合入 SKU 参考价筛选与删除 SKU 明细导出，保留 Lazada 受限账单、钉钉配置与操作人选择等已有功能。更新完全自愿，不更新也可继续使用；仅在设置中点击“检查更新”，再点击“下载并安装”才更新。",
         "frontend_url": "",
         "package_url": f"http://rpa.whhqyl.com.cn/hqyl/{installer_name}",
         "sha256": sha256_hash,
@@ -165,5 +164,5 @@ pause
     print(f"Release packaging complete for version {version}.")
 
 if __name__ == "__main__":
-    ver = sys.argv[1] if len(sys.argv) > 1 else "0.2.72"
+    ver = sys.argv[1] if len(sys.argv) > 1 else "0.2.89"
     package_release(ver)

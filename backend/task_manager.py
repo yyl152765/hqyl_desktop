@@ -21,6 +21,7 @@ class TaskRecord:
     started_at: str = ""
     finished_at: str = ""
     context: dict[str, Any] = field(default_factory=dict)
+    exclusive: bool = False
 
 
 class TaskManager:
@@ -34,13 +35,21 @@ class TaskManager:
         runner: Callable[[Callable[[str], None]], dict[str, Any]],
         tool: str = "",
         context: dict[str, Any] | None = None,
+        exclusive: bool = False,
     ) -> dict[str, Any]:
-        task = TaskRecord(id=uuid.uuid4().hex, name=name, tool=str(tool or ""), context=context or {})
+        task = TaskRecord(id=uuid.uuid4().hex, name=name, tool=str(tool or ""), context=context or {}, exclusive=exclusive)
         with self._lock:
+            active = [item for item in self._tasks.values() if item.status in {"pending", "running"}]
+            if active and (exclusive or any(item.exclusive for item in active)):
+                return {"ok": False, "error": "已有任务正在运行，请等待完成后再启动余额统计或其他流程"}
             self._tasks[task.id] = task
 
-        thread = threading.Thread(target=self._run, args=(task.id, runner), daemon=True)
-        thread.start()
+        try:
+            thread = threading.Thread(target=self._run, args=(task.id, runner), daemon=True)
+            thread.start()
+        except Exception:
+            self._set_status(task.id, 'failed', finished_at=_now_text())
+            raise
         return self.snapshot(task.id)
 
     def snapshot(self, task_id: str) -> dict[str, Any]:

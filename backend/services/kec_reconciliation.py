@@ -3,14 +3,13 @@
 Ported from ``finance_process/app/modules/kec_reconciliation/service.py`` and
 adapted to the desktop platform (payload validation, task progress callback).
 
-The only business rule that changed during the migration is the storage-fee
-basis.  It used to be the bill's ``Total CBM within period`` column; it is now
-the captured actual volume of the row's goods::
+The legacy order lookups and report sections are retained. The confirmed
+Vietnam contract amends storage, outbound continuation tiers, returns and
+warehouse handling. Storage uses the actual volume of the row's goods::
 
     actual_cbm = 长(CM) × 宽(CM) × 高(CM) × 数量 × 0.000001
 
-Everything else (unloading, outbound + packaging, return shelving, sundry fees,
-the quote workbook layout and the Mabang lookups) keeps the original behaviour.
+An uploaded legacy quote cannot override the explicitly amended contract rates.
 """
 
 from __future__ import annotations
@@ -24,8 +23,10 @@ from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
+from urllib.parse import urlsplit
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 
 from backend.core.mabang_reconciliation_client import (
     DEFAULT_ORDER_BATCH_SIZE,
@@ -48,20 +49,21 @@ CUBIC_METER_SCALE = Decimal('0.000001')
 #: 单元格里的长宽高可能带单位或千分位，取数时按第一个数字解析。
 NUMERIC_PREFIX_PATTERN = re.compile(r'-?\d+(?:\.\d+)?')
 ACTUAL_VOLUME_BASIS_LABEL = '实际体积'
+CONTRACT_RULE_VERSION = '越南KEC-2026-10-21'
 #: 长宽高与数量列既用于核对，也决定实际体积能否算出来。
 STORAGE_DIMENSION_COLUMNS: tuple[tuple[str, tuple[str, ...], int], ...] = (
-    ('长(CM)', ('Unit Length',), 7),
-    ('宽(CM)', ('Unit Width',), 8),
-    ('高(CM)', ('Unit Height',), 9),
-    ('数量(PCS)', ('PCS',), 16),
+    ('长(CM)', ('Unit Length', '长(CM)', '长（CM）', '长度', 'Length', '长'), 7),
+    ('宽(CM)', ('Unit Width', '宽(CM)', '宽（CM）', '宽度', 'Width', '宽'), 8),
+    ('高(CM)', ('Unit Height', '高(CM)', '高（CM）', '高度', 'Height', '高'), 9),
+    ('数量(PCS)', ('PCS', '数量', 'Actual QTY', 'Quantity', 'QTY'), 16),
 )
 WORKBOOK_SHEET_ALIASES: dict[str, tuple[str, ...]] = {
-    'invoice': ('Invoice',),
-    'storage': ('Inventory CBM-仓储费', '仓储费'),
-    'unloading': ('Unloading 卸货费', '卸货费'),
-    'outbound': ('出库+耗材',),
-    'return': ('退件上架费',),
-    'misc': ('增值服务费', '杂费'),
+    'invoice': ('Invoice', 'Invoice 发票', '发票', '账单汇总'),
+    'storage': ('Inventory CBM-仓储费', '仓储费', '仓租费', 'Inventory CBM', 'Storage'),
+    'unloading': ('Unloading 卸货费', '卸货费', '装卸费', 'Unloading'),
+    'outbound': ('出库+耗材', '出库耗材', '出库操作费', 'Outbound'),
+    'return': ('退件上架费', '退件处理费', '退件处理', 'Returns'),
+    'misc': ('增值服务费', '杂费', '增值服务', 'Misc'),
 }
 WORKBOOK_SHEET_FALLBACK_INDEXES: dict[str, tuple[int, ...]] = {
     'invoice': (0,),
@@ -143,27 +145,25 @@ def inspect_kec_source_workbook(source_file: str | Path) -> KecWorkbookPreview:
         raise ValueError('KEC 供应商账单无法打开，请确认文件未加密且格式正确') from exc
 
     try:
-        service = KecReconciliationService()
         warnings: list[str] = []
-        sheet_titles: dict[str, str] = {}
-        for role in WORKBOOK_SHEET_ALIASES:
-            sheet = service._resolve_source_sheet(workbook, role)
-            sheet_titles[role] = sheet.title
+        service = KecReconciliationService(progress=warnings.append)
+        sheets = service._resolve_source_sheets(workbook)
+        sheet_titles = {role: sheet.title for role, sheet in sheets.items()}
         columns: dict[str, str] = {}
-        storage_headers = list(
-            next(workbook[sheet_titles['storage']].iter_rows(min_row=1, max_row=1, values_only=True))
-        )
+        header_row, storage_headers = _storage_header(sheets['storage'])
+        if header_row != 1:
+            warnings.append(f'仓储费第 {header_row} 行识别为表头，已跳过前置标题')
         for label, keywords, _default in STORAGE_DIMENSION_COLUMNS:
             # Require a real header match here: falling back to a column position
             # would silently reconcile money against the wrong column.
-            index = _find_header_index(storage_headers, include_keywords=keywords)
+            index = _find_alias_header_index(storage_headers, keywords)
             header_text = _text(_row_value(tuple(storage_headers), index))
             if index is None or not header_text:
                 raise ValueError(
                     f'KEC 账单仓储费表缺少「{label}」列（期望表头含 {" 或 ".join(keywords)}），无法按实际体积核对'
                 )
             columns[label] = header_text
-        if not _find_header_index(storage_headers, include_keywords=('Total CBM',)):
+        if _find_header_index(storage_headers, include_keywords=('Total CBM',)) is None:
             warnings.append('仓储费表未找到 Total CBM within period 列，账单体积差异将留空')
         return KecWorkbookPreview(
             input_file=path,
@@ -202,8 +202,23 @@ def validate_kec_reconciliation_payload(payload: dict[str, Any] | None) -> KecRe
     quote_file = Path(quote_text).expanduser() if quote_text else None
     if quote_file is not None and not quote_file.is_file():
         raise ValueError(f'KEC 报价表不存在: {quote_file}')
+    if quote_file is not None:
+        # Reject a broken explicit quote before opening any ERP session.
+        KecQuoteRules.from_workbook(quote_file)
 
     base_url = (_text(data.get('base_url')) or DEFAULT_MABANG_BASE_URL).rstrip('/')
+    try:
+        parsed_url = urlsplit(base_url)
+        valid_url = (
+            parsed_url.scheme in {'http', 'https'} and parsed_url.hostname
+            and not parsed_url.username and not parsed_url.password
+            and not parsed_url.path and not parsed_url.query and not parsed_url.fragment
+        )
+        parsed_url.port  # Validate a supplied port without resolving the host.
+    except ValueError:
+        valid_url = False
+    if not valid_url:
+        raise ValueError('马帮地址必须是 http(s) 站点地址，不得包含账号、密码、路径或查询参数')
     return KecReconciliationJob(
         username=username,
         password=password,
@@ -239,7 +254,7 @@ class KecScanResult:
     outbound_month: date | None = None
     outbound_order_count: int = 0
     return_tracking_numbers: list[str] = field(default_factory=list)
-    return_quantity_by_order: dict[str, Decimal] = field(default_factory=dict)
+    return_quantity_by_order: dict[str, Decimal | None] = field(default_factory=dict)
 
     @property
     def avg_daily_orders(self) -> Decimal:
@@ -258,9 +273,18 @@ class KecQuoteRules:
     outbound_fee_0_500: Decimal = Decimal('1.8')
     outbound_fee_501_1000: Decimal = Decimal('1.7')
     outbound_fee_1001_plus: Decimal = Decimal('1.5')
+    outbound_fee_2001_3000: Decimal = Decimal('1.4')
+    outbound_fee_3001_5000: Decimal = Decimal('1.3')
+    outbound_fee_5001_plus: Decimal = Decimal('1.2')
     outbound_extra_piece_fee: Decimal = Decimal('0.6')
+    outbound_high_volume_extra_piece_fee: Decimal = Decimal('0.5')
+    outbound_twentieth_piece_fee: Decimal = Decimal('0.3')
+    outbound_included_pieces: int = 3
+    storage_contract_free_days: int = 60
+    storage_contract_unit_price: Decimal = Decimal('1.5')
     return_first_piece_fee: Decimal = Decimal('2')
     return_additional_piece_fee: Decimal = Decimal('1')
+    return_included_pieces: int = 3
     unloading_lcl_unit_price: Decimal = Decimal('27')
     bubble_wrap_rates: dict[str, Decimal] = field(
         default_factory=lambda: {
@@ -291,6 +315,9 @@ class KecQuoteRules:
             '销毁费': Decimal('0.6'),
         }
     )
+    # Coordinates and contract conflicts only; never retain the quote's unrelated
+    # customer/contact cells. Confirmed contract terms always take precedence.
+    quote_metadata: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_workbook(cls, quote_file: str | Path | None) -> 'KecQuoteRules':
@@ -306,45 +333,19 @@ class KecQuoteRules:
             raise ValueError(f'KEC 报价表无法打开，请确认文件未加密且格式正确: {path}') from exc
         try:
             sheet = workbook.worksheets[0]
-            required_rates = (
-                ('storage_price_day_0_30', 5, 9, '0-30天仓租'),
-                ('storage_price_day_31_120', 6, 9, '31-120天仓租'),
-                ('storage_price_day_121_180', 7, 9, '121-180天仓租'),
-                ('storage_price_day_181_plus', 8, 9, '181天以上仓租'),
-                ('outbound_fee_0_500', 9, 9, '0-500单出库费'),
-                ('outbound_fee_501_1000', 10, 9, '501-1000单出库费'),
-                ('outbound_fee_1001_plus', 11, 9, '1001单以上出库费'),
-                ('outbound_extra_piece_fee', 9, 10, '出库续件费'),
-                ('return_first_piece_fee', 12, 9, '退件首件费'),
-                ('return_additional_piece_fee', 12, 10, '退件续件费'),
-                ('unloading_lcl_unit_price', 24, 9, '散货卸货费'),
-            )
-            for attribute, row, column, label in required_rates:
-                rate = _to_decimal(sheet.cell(row, column).value)
-                if rate is None:
-                    coordinate = f'R{row}C{column}'
-                    raise ValueError(f'KEC 报价表缺少数字型「{label}」: {coordinate}')
-                setattr(rules, attribute, rate)
-            bubble_wrap_rates: dict[str, Decimal] = {}
-            for row_index in range(43, 55):
-                code = _text(sheet.cell(row_index, 11).value)
-                rate = _to_decimal(sheet.cell(row_index, 9).value)
-                if bool(code) != (rate is not None):
-                    raise ValueError(
-                        f'KEC 报价表气泡膜行不完整（代码与费率必须成对）: 第 {row_index} 行'
-                    )
-                if code and rate is not None:
-                    bubble_wrap_rates[code.upper()] = rate
-            if not bubble_wrap_rates:
-                raise ValueError('KEC 报价表第 43-54 行没有读到任何气泡膜费率')
-            rules.bubble_wrap_rates = bubble_wrap_rates
+            _read_kec_quote_sheet(sheet, rules)
         finally:
             workbook.close()
         return rules
 
-    def storage_price_for_age(self, age_days: int | None) -> Decimal | None:
-        if age_days is None:
+    def storage_price_for_age(
+        self, age_days: int | None, *, bill_date: date | datetime | None = None,
+        avg_daily_orders: Decimal = Decimal('0'),
+    ) -> Decimal | None:
+        if age_days is None or age_days < 0:
             return None
+        if (bill_date is not None and bill_date.month in (9, 10, 11, 12)) or avg_daily_orders >= Decimal('3000'):
+            return Decimal('0') if age_days <= self.storage_contract_free_days else self.storage_contract_unit_price
         if age_days <= 30:
             return self.storage_price_day_0_30
         if age_days <= 120:
@@ -354,19 +355,41 @@ class KecQuoteRules:
         return self.storage_price_day_181_plus
 
     def outbound_base_fee_for_avg_daily_orders(self, avg_daily_orders: Decimal) -> Decimal:
+        if avg_daily_orders > Decimal('5000'):
+            return self.outbound_fee_5001_plus
+        if avg_daily_orders > Decimal('3000'):
+            return self.outbound_fee_3001_5000
+        if avg_daily_orders > Decimal('2000'):
+            return self.outbound_fee_2001_3000
         if avg_daily_orders <= Decimal('500'):
             return self.outbound_fee_0_500
         if avg_daily_orders <= Decimal('1000'):
             return self.outbound_fee_501_1000
         return self.outbound_fee_1001_plus
 
+    def outbound_extra_piece_fee_for_avg_daily_orders(self, avg_daily_orders: Decimal) -> Decimal:
+        if avg_daily_orders > Decimal('2000'):
+            return self.outbound_high_volume_extra_piece_fee
+        return self.outbound_extra_piece_fee
+
+    def outbound_additional_fee_for_quantity(
+        self, quantity: Decimal | int | None, *, avg_daily_orders: Decimal = Decimal('0'),
+    ) -> Decimal:
+        qty = _to_decimal(quantity, default=Decimal('0')) or Decimal('0')
+        ordinary_pieces = max(Decimal('0'), min(qty, Decimal('19')) - self.outbound_included_pieces)
+        twentieth_and_later = max(Decimal('0'), qty - Decimal('19'))
+        return (
+            ordinary_pieces * self.outbound_extra_piece_fee_for_avg_daily_orders(avg_daily_orders)
+            + twentieth_and_later * self.outbound_twentieth_piece_fee
+        )
+
     def return_fee_for_quantity(self, quantity: Decimal | int | None) -> Decimal:
         qty = _to_decimal(quantity, default=Decimal('0')) or Decimal('0')
         if qty <= 0:
             return Decimal('0')
-        if qty <= 1:
+        if qty <= self.return_included_pieces:
             return self.return_first_piece_fee
-        return self.return_first_piece_fee + (qty - Decimal('1')) * self.return_additional_piece_fee
+        return self.return_first_piece_fee + (qty - self.return_included_pieces) * self.return_additional_piece_fee
 
     def bubble_wrap_fee_for_code(self, bubble_wrap_code: str) -> Decimal:
         return self.bubble_wrap_rates.get(_text(bubble_wrap_code).upper(), Decimal('0'))
@@ -391,6 +414,7 @@ class KecReconciliationService:
         self._emit(f'读取账单: {input_path.name}（{input_path.stat().st_size / 1048576:.1f} MB）')
         scan_result = self._scan_workbook(input_path)
         quote_rules = KecQuoteRules.from_workbook(job.quote_file)
+        self._emit(f'计费准则：{CONTRACT_RULE_VERSION}；本次修订条款优先于旧报价表')
         if job.quote_file is None:
             self._emit('未提供报价表，本次使用内置默认费率核对，请确认费率是否仍然有效')
         else:
@@ -446,16 +470,36 @@ class KecReconciliationService:
         )
 
     def _resolve_source_sheets(self, workbook) -> dict[str, Any]:
-        return {role: self._resolve_source_sheet(workbook, role) for role in WORKBOOK_SHEET_ALIASES}
+        # Reserve named sections first: an unnamed storage table must not steal
+        # the unloading table just because that table happens to be index 1.
+        result: dict[str, Any] = {}
+        used: set[str] = set()
+        for role, aliases in WORKBOOK_SHEET_ALIASES.items():
+            matches = [sheet for sheet in workbook.worksheets
+                       if any(_normalize_header_text(sheet.title) == _normalize_header_text(alias) for alias in aliases)]
+            if len(matches) > 1:
+                raise ValueError(f'KEC 账单「{ROLE_LABELS[role]}」存在多个候选子表，请确认模板')
+            if matches:
+                result[role] = matches[0]
+                used.add(matches[0].title)
+        for role in WORKBOOK_SHEET_ALIASES:
+            if role not in result:
+                sheet = self._resolve_source_sheet(workbook, role, excluded_titles=used)
+                result[role] = sheet
+                used.add(sheet.title)
+        return result
 
-    def _resolve_source_sheet(self, workbook, role: str):
+    def _resolve_source_sheet(self, workbook, role: str, *, excluded_titles: set[str] | None = None):
+        excluded_titles = excluded_titles or set()
         aliases = WORKBOOK_SHEET_ALIASES[role]
         for sheet_name in aliases:
-            if sheet_name in workbook.sheetnames:
+            if sheet_name in workbook.sheetnames and sheet_name not in excluded_titles:
                 return workbook[sheet_name]
         for fallback_index in WORKBOOK_SHEET_FALLBACK_INDEXES.get(role, ()):
             if 0 <= fallback_index < len(workbook.worksheets):
                 fallback_sheet = workbook.worksheets[fallback_index]
+                if fallback_sheet.title in excluded_titles:
+                    continue
                 self._emit(
                     f'账单缺少子表 {"/".join(aliases)}，已按位置回退到第 {fallback_index + 1} 个子表'
                     f'（{fallback_sheet.title}），请人工确认'
@@ -516,24 +560,28 @@ class KecReconciliationService:
             tracking_number = _text(row[6] if len(row) > 6 else None)
             if not order_number:
                 continue
+            handover_dt = _parse_datetime(row[4] if len(row) > 4 else None)
+            if handover_dt is None:
+                raise ValueError('出库订单缺少有效交接日期，无法确定账期和日均单量，请修正账单后重试')
             if order_number not in seen_orders:
                 seen_orders.add(order_number)
                 order_numbers.append(order_number)
             if tracking_number and order_number not in tracking_numbers_by_order:
                 tracking_numbers_by_order[order_number] = tracking_number
             if outbound_month is None:
-                handover_dt = _parse_datetime(row[4] if len(row) > 4 else None)
-                if handover_dt is not None:
-                    outbound_month = handover_dt.date().replace(day=1)
+                outbound_month = handover_dt.date().replace(day=1)
+            else:
+                if handover_dt.date().replace(day=1) != outbound_month:
+                    raise ValueError('出库明细包含多个自然月，请按月拆分账单后核对，不能混算日均单量')
         return order_numbers, tracking_numbers_by_order, outbound_month
 
-    def _read_return_identifiers(self, worksheet) -> tuple[list[str], dict[str, Decimal]]:
+    def _read_return_identifiers(self, worksheet) -> tuple[list[str], dict[str, Decimal | None]]:
         raw_headers = list(next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True)))
         tracking_index = _find_header_index(raw_headers, include_keywords=('ASN #',), default=5)
         order_index = _find_header_index(raw_headers, include_keywords=('PO Number',), default=6)
         quantity_index = _find_header_index(raw_headers, include_keywords=('Actual QTY',), default=10)
         tracking_numbers: list[str] = []
-        quantity_by_order: dict[str, Decimal] = defaultdict(lambda: Decimal('0'))
+        quantity_by_order: dict[str, Decimal | None] = defaultdict(lambda: Decimal('0'))
         seen_tracking_numbers: set[str] = set()
         for row in _iter_non_empty_rows(worksheet, key_indexes=[5, 7, 8]):
             tracking_number = _text(_row_value(row, tracking_index))
@@ -545,7 +593,11 @@ class KecReconciliationService:
                 seen_tracking_numbers.add(lookup_identifier)
                 tracking_numbers.append(lookup_identifier)
             if order_number:
-                quantity_by_order[order_number] += _to_decimal(_row_value(row, quantity_index), default=Decimal('0')) or Decimal('0')
+                quantity = _to_decimal(_row_value(row, quantity_index))
+                if quantity is None or not quantity.is_finite() or quantity < 0:
+                    quantity_by_order[order_number] = None
+                elif quantity_by_order[order_number] is not None:
+                    quantity_by_order[order_number] += quantity
         return tracking_numbers, dict(quantity_by_order)
 
     def _fetch_outbound_orders(self, *, job: KecReconciliationJob, order_numbers: Iterable[str], tracking_numbers_by_order: dict[str, str]) -> tuple[dict[str, MabangOrderInfo], dict[str, MabangOrderInfo]]:
@@ -592,9 +644,9 @@ class KecReconciliationService:
             self._emit('核对卸货费...')
             summary_stats.update(self._write_unloading_sheet(output_workbook.create_sheet('卸货费核对'), sheets['unloading'], quote_rules))
             self._emit(f'核对仓储费（核算基数：{ACTUAL_VOLUME_BASIS_LABEL}）...')
-            summary_stats.update(self._write_storage_sheet(output_workbook.create_sheet('仓储费核对'), sheets['storage'], quote_rules))
+            summary_stats.update(self._write_storage_sheet(output_workbook.create_sheet('仓储费核对'), sheets['storage'], quote_rules, avg_daily_orders=scan_result.avg_daily_orders))
             self._emit('核对出库+耗材...')
-            summary_stats.update(self._write_outbound_sheet(output_workbook.create_sheet('出库耗材核对'), sheets['outbound'], quote_rules, outbound_base_fee, outbound_orders_by_order, outbound_orders_by_tracking, included_outbound_orders))
+            summary_stats.update(self._write_outbound_sheet(output_workbook.create_sheet('出库耗材核对'), sheets['outbound'], quote_rules, outbound_base_fee, outbound_orders_by_order, outbound_orders_by_tracking, included_outbound_orders, avg_daily_orders=scan_result.avg_daily_orders))
             self._emit('核对退件上架费...')
             summary_stats.update(self._write_return_sheet(output_workbook.create_sheet('退件上架费核对'), sheets['return'], quote_rules, scan_result.return_quantity_by_order, return_lookup_results, included_return_trackings))
             self._emit('核对杂费...')
@@ -621,15 +673,16 @@ class KecReconciliationService:
             rounded_cbm = _round_up_cubic_meter(cbm)
             expected_fee = None if rounded_cbm is None else rounded_cbm * quote_rules.unloading_lcl_unit_price
             diff_amount = _decimal_diff(billed_fee, expected_fee)
-            status = '正常' if _is_zero(diff_amount) else '异常'
-            notes = '' if status == '正常' else '卸货费与方数向上取整规则不一致'
+            status = '正常' if expected_fee is not None and _is_zero(diff_amount) else '异常'
+            notes = ('缺少有效方数，无法核算装卸费' if expected_fee is None else
+                     '' if status == '正常' else '卸货费与方数向上取整规则不一致')
             if status == '异常':
                 abnormal_count += 1
             billed_total += billed_fee
             expected_total += expected_fee or Decimal('0')
             worksheet.append([row_number, *list(row[: len(raw_headers)]), _excel_decimal(rounded_cbm), _excel_decimal(quote_rules.unloading_lcl_unit_price), _excel_decimal(expected_fee), _excel_decimal(diff_amount), status, notes])
         return {'卸货费_账单金额': billed_total, '卸货费_核对金额': expected_total, '卸货费_异常数': abnormal_count}
-    def _write_storage_sheet(self, worksheet, source_sheet, quote_rules: KecQuoteRules) -> dict[str, Any]:
+    def _write_storage_sheet(self, worksheet, source_sheet, quote_rules: KecQuoteRules, *, avg_daily_orders: Decimal = Decimal('0')) -> dict[str, Any]:
         """Reconcile storage fees on the captured actual volume of each row.
 
         The basis used to be the bill's ``Total CBM within period`` column, which
@@ -639,15 +692,15 @@ class KecReconciliationService:
         adds on top of the goods' real volume.
         """
 
-        raw_headers = list(next(source_sheet.iter_rows(min_row=1, max_row=1, values_only=True)))
-        length_index = _find_header_index(raw_headers, include_keywords=('Unit Length',), default=7)
-        width_index = _find_header_index(raw_headers, include_keywords=('Unit Width',), default=8)
-        height_index = _find_header_index(raw_headers, include_keywords=('Unit Height',), default=9)
+        header_row, raw_headers = _storage_header(source_sheet)
+        dimension_indexes = [_find_alias_header_index(raw_headers, aliases) for _label, aliases, _default in STORAGE_DIMENSION_COLUMNS]
+        length_index, width_index, height_index, quantity_index = dimension_indexes
+        if any(index is None for index in dimension_indexes):
+            raise ValueError('仓储费缺少完整长宽高或数量表头，无法按实际体积核算')
         unit_cbm_index = _find_header_index(raw_headers, include_keywords=('Unit Billing CBM',), default=10)
-        inbound_time_index = _find_header_index(raw_headers, include_keywords=('入库时间',), default=14)
-        bill_time_index = _find_header_index(raw_headers, include_keywords=('计费时间',), default=15)
-        quantity_index = _find_header_index(raw_headers, include_keywords=('PCS',), default=16)
-        total_cbm_index = _find_header_index(raw_headers, include_keywords=('Total CBM',), default=17)
+        inbound_time_index = _find_alias_header_index(raw_headers, ('入库时间', '入库日期', 'Inbound Date', 'Inbound Time'), default=14)
+        bill_time_index = _find_alias_header_index(raw_headers, ('计费时间', '计费日期', 'Billing Date', 'Bill Date'), default=15)
+        total_cbm_index = _find_header_index(raw_headers, include_keywords=('Total CBM',))
         age_index = _find_header_index(raw_headers, include_keywords=('库龄',), default=18)
         unit_price_index = _find_header_index(raw_headers, include_keywords=('单价',), default=19)
         amount_index = _find_header_index(raw_headers, include_keywords=('金额',), default=20)
@@ -662,7 +715,7 @@ class KecReconciliationService:
         volume_diff_total = Decimal('0')
         abnormal_count = 0
         missing_dimension_count = 0
-        for row_number, row in enumerate(_iter_non_empty_rows(source_sheet, key_indexes=[4, 12]), start=2):
+        for row_number, row in enumerate(_iter_non_empty_rows(source_sheet, key_indexes=dimension_indexes, min_row=header_row + 1), start=header_row + 1):
             length = _to_decimal(_row_value(row, length_index))
             width = _to_decimal(_row_value(row, width_index))
             height = _to_decimal(_row_value(row, height_index))
@@ -677,7 +730,7 @@ class KecReconciliationService:
             actual_cbm = _calculate_actual_cbm(length, width, height, billed_quantity)
             expected_quantity = _calculate_storage_quantity(unit_billing_cbm, billed_total_cbm)
             expected_age = _calculate_storage_age_days(inbound_dt, bill_dt)
-            expected_unit_price = quote_rules.storage_price_for_age(expected_age)
+            expected_unit_price = quote_rules.storage_price_for_age(expected_age, bill_date=bill_dt, avg_daily_orders=avg_daily_orders)
             expected_amount = None if expected_unit_price is None or actual_cbm is None else actual_cbm * expected_unit_price
             quantity_diff = _decimal_diff(billed_quantity, expected_quantity)
             volume_diff = _decimal_diff(billed_total_cbm, actual_cbm)
@@ -718,7 +771,7 @@ class KecReconciliationService:
             '仓储费_缺失尺寸行数': missing_dimension_count,
         }
 
-    def _write_outbound_sheet(self, worksheet, source_sheet, quote_rules: KecQuoteRules, outbound_base_fee: Decimal, outbound_orders_by_order: dict[str, MabangOrderInfo], outbound_orders_by_tracking: dict[str, MabangOrderInfo], included_outbound_orders: set[str] | None = None) -> dict[str, Any]:
+    def _write_outbound_sheet(self, worksheet, source_sheet, quote_rules: KecQuoteRules, outbound_base_fee: Decimal, outbound_orders_by_order: dict[str, MabangOrderInfo], outbound_orders_by_tracking: dict[str, MabangOrderInfo], included_outbound_orders: set[str] | None = None, *, avg_daily_orders: Decimal = Decimal('0')) -> dict[str, Any]:
         raw_headers = list(next(source_sheet.iter_rows(min_row=1, max_row=1, values_only=True)))
         worksheet.append(['账单行号', *raw_headers, '马帮命中方式', '马帮订单号', '马帮货运单号', '马帮订单状态', '马帮发货时间', '马帮商品种类', '马帮商品总数量', '订单号匹配', '货运单号匹配', '发货日期匹配', '数量匹配', '核对包材费', '包材费差额', '核对出库操作费', '出库操作费差额', '核对续件费', '续件费差额', '核对总金额', '总金额差额', '核对结果', '核对说明'])
         billed_total = Decimal('0')
@@ -753,7 +806,7 @@ class KecReconciliationService:
             quantity_match = mabang_total_quantity is not None and raw_qty == Decimal(str(mabang_total_quantity))
             expected_packaging_fee = quote_rules.bubble_wrap_fee_for_code(bubble_wrap_code)
             qty_for_fee = Decimal(str(mabang_total_quantity)) if mabang_total_quantity is not None else raw_qty
-            expected_extra_fee = Decimal('0') if qty_for_fee <= Decimal('3') else (qty_for_fee - Decimal('3')) * quote_rules.outbound_extra_piece_fee
+            expected_extra_fee = quote_rules.outbound_additional_fee_for_quantity(qty_for_fee, avg_daily_orders=avg_daily_orders)
             expected_total_amount = expected_packaging_fee + outbound_base_fee + expected_extra_fee
             packaging_diff = _decimal_diff(raw_packaging_fee, expected_packaging_fee)
             outbound_diff = _decimal_diff(raw_outbound_fee, outbound_base_fee)
@@ -794,7 +847,7 @@ class KecReconciliationService:
             worksheet.append([row_number, *list(row[: len(raw_headers)]), '' if matched_order is None else hit_type, matched_order.platform_order_id if matched_order else '', matched_order.tracking_number if matched_order else '', mabang_status, mabang_shipping_time, mabang_item_kind_count, mabang_total_quantity, _yes_no(order_match), _yes_no(tracking_match), _yes_no(shipping_match), _yes_no(quantity_match) if mabang_total_quantity is not None else '', _excel_decimal(expected_packaging_fee), _excel_decimal(packaging_diff), _excel_decimal(outbound_base_fee), _excel_decimal(outbound_diff), _excel_decimal(expected_extra_fee), _excel_decimal(extra_diff), _excel_decimal(expected_total_amount), _excel_decimal(total_diff), status, '; '.join(notes)])
         return {'出库+耗材_账单金额': billed_total, '出库+耗材_核对金额': expected_total, '出库+耗材_异常数': abnormal_count, '出库+耗材_未命中订单数': missing_count, '出库+耗材_数量不一致数': quantity_mismatch_count}
 
-    def _write_return_sheet(self, worksheet, source_sheet, quote_rules: KecQuoteRules, return_quantity_by_order: dict[str, Decimal], return_lookup_results: dict[str, MabangLookupResult], included_return_trackings: set[str] | None = None) -> dict[str, Any]:
+    def _write_return_sheet(self, worksheet, source_sheet, quote_rules: KecQuoteRules, return_quantity_by_order: dict[str, Decimal | None], return_lookup_results: dict[str, MabangLookupResult], included_return_trackings: set[str] | None = None) -> dict[str, Any]:
         raw_headers = list(next(source_sheet.iter_rows(min_row=1, max_row=1, values_only=True)))
         tracking_index = _find_header_index(raw_headers, include_keywords=('ASN #',), default=5)
         order_index = _find_header_index(raw_headers, include_keywords=('PO Number',), default=6)
@@ -816,8 +869,9 @@ class KecReconciliationService:
             sku_code = _text(_row_value(row, sku_index))
             order_sku_key = f'{order_number}+{sku_code}' if order_number or sku_code else ''
             raw_amount = _to_decimal(_row_value(row, amount_index), default=Decimal('0')) or Decimal('0')
-            group_quantity = return_quantity_by_order.get(order_number, Decimal('0'))
-            expected_amount = quote_rules.return_fee_for_quantity(group_quantity) if order_number not in seen_order_numbers else Decimal('0')
+            group_quantity = return_quantity_by_order.get(order_number)
+            expected_amount = (None if group_quantity is None else
+                               quote_rules.return_fee_for_quantity(group_quantity) if order_number not in seen_order_numbers else Decimal('0'))
             seen_order_numbers.add(order_number)
             amount_diff = _decimal_diff(raw_amount, expected_amount)
             lookup = return_lookup_results.get(lookup_identifier) or return_lookup_results.get(order_number)
@@ -837,26 +891,30 @@ class KecReconciliationService:
                 else:
                     after_sale_judgement = '需后台确认'
             notes: list[str] = []
-            if _text(_row_value(row, is_return_index)).upper() != 'Y':
+            is_return = _text(_row_value(row, is_return_index)).upper() == 'Y'
+            if not is_return:
                 notes.append('账单未标记 Is Return=Y')
+            if group_quantity is None:
+                notes.append('订单退件数量缺失或无效，无法核算处理费')
             if lookup is None:
                 notes.append('未发起马帮查询')
             elif lookup.error_message:
                 notes.append(lookup.error_message)
             elif after_sale_judgement in {'需后台确认', '马帮未找到订单'}:
-                manual_review_count += 1
                 notes.append('退货列表和退款列表均未命中，需要后台确认')
             if not _is_zero(amount_diff):
-                notes.append('上架费与首件2元续件1元规则不一致')
+                notes.append('退件处理费与每单2元含3件、超出每件1元规则不一致')
             status = '正常'
-            if lookup is None or lookup.error_message or not _is_zero(amount_diff):
+            if lookup is None or lookup.error_message or not is_return or not _is_zero(amount_diff):
                 status = '异常'
-            elif after_sale_judgement in {'需后台确认', '马帮未找到订单'}:
+            elif group_quantity is None or after_sale_judgement in {'需后台确认', '马帮未找到订单'}:
                 status = '待确认'
+            if status == '待确认':
+                manual_review_count += 1
             if status == '异常':
                 abnormal_count += 1
             billed_total += raw_amount
-            expected_total += expected_amount
+            expected_total += expected_amount or Decimal('0')
             worksheet.append([row_number, *list(row[: len(raw_headers)]), order_sku_key, order.platform_order_id if order else '', order.tracking_number if order else '', (order.show_order_status_text or order.platform_order_status or order.order_status) if order else '', order.refund_flag if order else '', order.shipping_time_text if order else '', _yes_no(lookup.has_return_hit) if lookup else '', _yes_no(lookup.has_refund_hit) if lookup else '', _excel_decimal(group_quantity), _excel_decimal(expected_amount), _excel_decimal(amount_diff), after_sale_judgement, status, '; '.join(notes)])
         return {'退件上架费_账单金额': billed_total, '退件上架费_核对金额': expected_total, '退件上架费_异常数': abnormal_count, '退件上架费_待确认数': manual_review_count}
     def _write_misc_sheet(self, worksheet, source_sheet, quote_rules: KecQuoteRules) -> dict[str, Any]:
@@ -875,12 +933,19 @@ class KecReconciliationService:
         unknown_rule_count = 0
         for row_number, row in enumerate(_iter_non_empty_rows(source_sheet, key_indexes=[1, 3]), start=2):
             description = _text(row[description_index] if len(row) > description_index else None)
-            quantity = _to_decimal(row[quantity_index] if quantity_index is not None and len(row) > quantity_index else None, default=Decimal('1')) or Decimal('1')
+            quantity = _to_decimal(_row_value(row, quantity_index))
             billed_amount = _to_decimal(row[amount_index] if len(row) > amount_index else None, default=Decimal('0')) or Decimal('0')
             rule_key, unit_rate = _match_misc_rate(description, quote_rules.misc_unit_rates)
-            expected_amount = None if unit_rate is None else quantity * unit_rate
+            quantity_required = rule_key == '退仓费'
+            missing_quantity = (quantity is None and quantity_required) or (quantity is not None and quantity < 0)
+            effective_quantity = Decimal('1') if quantity is None else quantity
+            expected_amount = None if unit_rate is None or missing_quantity else effective_quantity * unit_rate
             diff_amount = _decimal_diff(billed_amount, expected_amount)
-            if unit_rate is None:
+            if missing_quantity:
+                unknown_rule_count += 1
+                status = '待确认'
+                note = '退仓件数缺失或数量无效，无法核算' if quantity_required else '数量无效，无法核算'
+            elif unit_rate is None:
                 unknown_rule_count += 1
                 status = '待确认'
                 note = '报价规则未覆盖该费用说明'
@@ -899,10 +964,10 @@ class KecReconciliationService:
     def _write_summary_sheet(self, worksheet, scan_result: KecScanResult, summary_stats: dict[str, Any], *, sample_outbound_order_count: int = 0, sample_return_tracking_count: int = 0) -> None:
         worksheet.append(['项目', '账单金额', '核对金额', '差额', '异常/待确认', '备注'])
         rows = [
-            ('仓储费', '仓储费_账单金额', '仓储费_核对金额', '仓储费_异常数', f'核算基数改为{ACTUAL_VOLUME_BASIS_LABEL}：长 × 宽 × 高 × 数量 × 0.000001；按 入库日期 -> 计费日期 自然日 + 1 核对库龄；数量仍按 Total CBM / Unit Billing CBM 反算核对'),
+            ('仓储费', '仓储费_账单金额', '仓储费_核对金额', '仓储费_异常数', f'{ACTUAL_VOLUME_BASIS_LABEL}：长 × 宽 × 高 × 数量 × 0.000001；库龄为自然日+1；9–12月一律及其他月份日均≥3000单：60天内免租，超60天1.5元/CBM/天；其余按旧库龄档'),
             ('卸货费', '卸货费_账单金额', '卸货费_核对金额', '卸货费_异常数', '按方数向上取整 * 27 计算'),
-            ('出库+耗材', '出库+耗材_账单金额', '出库+耗材_核对金额', '出库+耗材_异常数', f'按月均日单量 {scan_result.avg_daily_orders} 采用按票费率' + (f'；本次仅核对前 {sample_outbound_order_count} 个订单样本' if sample_outbound_order_count else '')),
-            ('退件上架费', '退件上架费_账单金额', '退件上架费_核对金额', '退件上架费_待确认数', '明细按订单+SKU匹配，费用按订单退货总数量计算；首件 2 元，续件 1 元；未命中退货/退款的单子需要后台确认' + (f'；本次仅核对前 {sample_return_tracking_count} 个退件货运单样本' if sample_return_tracking_count else '')),
+            ('出库+耗材', '出库+耗材_账单金额', '出库+耗材_核对金额', '出库+耗材_异常数', f'月均日单量 {scan_result.avg_daily_orders}；首票含3件，2001–3000单1.4/续0.5，3001–5000单1.3/续0.5，5000以上1.2/续0.5；前19件按该档，第20件起每件0.3，包材另计' + (f'；本次仅核对前 {sample_outbound_order_count} 个订单样本' if sample_outbound_order_count else '')),
+            ('退件上架费', '退件上架费_账单金额', '退件上架费_核对金额', '退件上架费_待确认数', '按订单汇总退件数量，每单2元含3件，超3件每件加1元，同订单只计一次；数量缺失行金额留空，小计只含可核算金额；未命中退货/退款需后台确认' + (f'；本次仅核对前 {sample_return_tracking_count} 个退件货运单样本' if sample_return_tracking_count else '')),
             ('杂费', '杂费_账单金额', '杂费_核对金额', '杂费_待确认数', '仅按已覆盖报价规则核对，未覆盖费用保留待确认'),
         ]
         for label, billed_key, expected_key, count_key, note in rows:
@@ -915,6 +980,9 @@ class KecReconciliationService:
             worksheet.append([label, _excel_decimal(scan_result.invoice_amounts.get(label))])
         worksheet.append([])
         worksheet.append(['辅助统计', '值'])
+        worksheet.append(['计费规则版本', CONTRACT_RULE_VERSION])
+        worksheet.append(['报价优先级', '本次修订条款优先；旧报价仅用于未修订费率和包材'])
+        worksheet.append(['退仓计费', '1.1元/件；按账单实际件数核对'])
         worksheet.append(['仓储费核算基数', ACTUAL_VOLUME_BASIS_LABEL + '（长 × 宽 × 高 × 数量 × 0.000001）'])
         worksheet.append(['仓储费体积差额合计(CBM)', _excel_decimal(summary_stats.get('仓储费_体积差额合计'))])
         worksheet.append(['仓储费缺失尺寸行数', summary_stats.get('仓储费_缺失尺寸行数', 0)])
@@ -966,9 +1034,273 @@ def _normalize_header_text(value: Any) -> str:
     return _text(value).replace('\n', '').replace('\r', '').replace(' ', '').lower()
 
 
-def _round_up_cubic_meter(value: Decimal | None) -> Decimal | None:
-    if value is None:
+def _find_alias_header_index(headers: list[Any], aliases: tuple[str, ...], *, default: int | None = None) -> int | None:
+    for alias in aliases:
+        if len(alias) == 1:
+            found = next((index for index, header in enumerate(headers)
+                          if _normalize_header_text(header) == alias), None)
+        else:
+            found = _find_header_index(headers, include_keywords=(alias,))
+        if found is not None:
+            return found
+    return default
+
+
+def _read_kec_quote_sheet(sheet, rules: KecQuoteRules) -> None:
+    """Read labelled quotes, with a narrow fallback for the original bare grid.
+
+    The September quote inserts two storage rows and moves ABF codes from K to
+    L. Prices must follow their labels/codes rather than those old coordinates.
+    """
+    columns = None
+    header_row = 0
+    partial_header = False
+    for row_number, row in enumerate(sheet.iter_rows(min_row=1, max_row=20, values_only=True), start=1):
+        headers = [_normalize_header_text(value) for value in row]
+
+        def find(*aliases):
+            matches = [index + 1 for index, header in enumerate(headers)
+                       if any(alias in header for alias in aliases)]
+            if len(matches) > 1:
+                raise ValueError('KEC 报价表存在重复报价表头，请确认模板')
+            return matches[0] if matches else None
+
+        rate = find('报价金额', 'quotationrate')
+        if rate is None:
+            rate = next((index + 1 for index, header in enumerate(headers) if header == 'rate'), None)
+        classification = find('报价分类', 'classification')
+        fee_name = find('费用项名称', 'feename')
+        partial_header = partial_header or any((rate, classification, fee_name))
+        if rate and classification and fee_name:
+            columns = {
+                'rate': rate, 'classification': classification, 'fee_name': fee_name,
+                'daily': find('日均单量', 'averagedailyorders'),
+                'unit': find('报价单位', 'quotationunit'),
+                'extra': next((index + 1 for index, header in enumerate(headers)
+                               if ('续件费用' in header or 'from/pcs' in header)
+                               and 'b2b' not in header), None),
+                'b2b': find('b2b续件', '订单超过20件'),
+                'code': find('计费节点', 'billingtriggeringtimestamp', '气泡膜编码', 'abf编码'),
+            }
+            header_row = row_number
+            break
+    sources: dict[str, Any] = {}
+    observations: list[dict[str, Any]] = []
+    included_conflicts: list[dict[str, Any]] = []
+
+    def read_rate(row_number: int, column: int | None, label: str) -> Decimal:
+        cell = sheet.cell(row_number, column) if column is not None else None
+        rate = _quote_rate(cell.value) if cell is not None else None
+        if rate is None:
+            source = coordinate(row_number, column) if column is not None else '缺少续件费表头'
+            raise ValueError(f'KEC 报价表缺少有效费率「{label}」（数字或免费）: {source}')
+        return rate
+
+    def coordinate(row_number: int, column: int) -> str:
+        return f'{get_column_letter(column)}{row_number}'
+
+    if columns is None:
+        if partial_header:
+            raise ValueError('KEC 报价表表头不完整，无法定位报价分类、费用名称与报价金额')
+        # Existing legacy integrations can supply only the original rate grid.
+        # This branch is never used once a quote declares its own headers.
+        legacy_rates = (
+            ('storage_price_day_0_30', 5, 9), ('storage_price_day_31_120', 6, 9),
+            ('storage_price_day_121_180', 7, 9), ('storage_price_day_181_plus', 8, 9),
+            ('outbound_fee_0_500', 9, 9), ('outbound_fee_501_1000', 10, 9),
+            ('outbound_fee_1001_plus', 11, 9), ('outbound_extra_piece_fee', 9, 10),
+        )
+        for attribute, row_number, column in legacy_rates:
+            setattr(rules, attribute, read_rate(row_number, column, attribute))
+            sources[attribute] = coordinate(row_number, column)
+        rate_column = 9
+        code_column = 11
+        layout = 'legacy_rate_grid'
+    else:
+        rate_column = columns['rate']
+        code_column = columns['code']
+        if code_column is None:
+            raise ValueError('KEC 报价表缺少计费节点或气泡膜编码表头')
+        found: set[str] = set()
+        low_extra_rates: list[Decimal] = []
+        extra_sources: list[str] = []
+        active_fee = ''
+        for row_number in range(header_row + 1, sheet.max_row + 1):
+            fee = _normalize_header_text(sheet.cell(row_number, columns['fee_name']).value)
+            if fee:
+                active_fee = fee
+            classification = _normalize_quote_label(sheet.cell(row_number, columns['classification']).value)
+            daily = _normalize_quote_label(sheet.cell(row_number, columns['daily']).value) if columns['daily'] else classification
+            attribute = None
+            is_storage = '仓储费' in active_fee or 'storagefee' in active_fee
+            is_outbound = ('b2c' in active_fee and ('操作' in active_fee or 'operation' in active_fee)) or '出库操作费' in active_fee
+            if is_storage:
+                attribute = _quote_storage_tier(classification)
+            elif is_outbound:
+                attribute = _quote_outbound_tier(daily)
+                if attribute is None and columns['daily']:
+                    attribute = _quote_outbound_tier(classification)
+            if attribute is None:
+                continue
+            if attribute in found:
+                raise ValueError(f'KEC 报价表存在重复费率分档「{attribute}」，请确认模板')
+            found.add(attribute)
+            rate = read_rate(row_number, rate_column, attribute)
+            rate_coordinate = coordinate(row_number, rate_column)
+            if attribute.startswith('storage_price_') or attribute in {
+                'outbound_fee_0_500', 'outbound_fee_501_1000', 'outbound_fee_1001_plus',
+            }:
+                setattr(rules, attribute, rate)
+                sources[attribute] = rate_coordinate
+            else:
+                # Revised terms are observed, never replaced by a quote.
+                applied_rate = Decimal('0') if attribute == 'storage_contract_free_price' else getattr(rules, attribute)
+                observations.append({'field': attribute, 'coordinate': rate_coordinate,
+                                     'quoted_value': str(rate), 'applied_value': str(applied_rate)})
+            if is_outbound:
+                extra = read_rate(row_number, columns['extra'], '出库续件费')
+                extra_coordinate = coordinate(row_number, columns['extra'])
+                if attribute in {'outbound_fee_0_500', 'outbound_fee_501_1000', 'outbound_fee_1001_plus'}:
+                    low_extra_rates.append(extra)
+                    extra_sources.append(extra_coordinate)
+                else:
+                    observations.append({'field': 'outbound_high_volume_extra_piece_fee',
+                                         'coordinate': extra_coordinate, 'quoted_value': str(extra),
+                                         'applied_value': str(rules.outbound_high_volume_extra_piece_fee)})
+                if columns['b2b']:
+                    b2b_rate = read_rate(row_number, columns['b2b'], '第20件起续件费')
+                    observations.append({'field': 'outbound_twentieth_piece_fee',
+                                         'coordinate': coordinate(row_number, columns['b2b']),
+                                         'quoted_value': str(b2b_rate),
+                                         'applied_value': str(rules.outbound_twentieth_piece_fee)})
+                if columns['unit']:
+                    unit_cell = sheet.cell(row_number, columns['unit'])
+                    included = re.search(r'含\s*(\d+)\s*(?:PCS|件)', _text(unit_cell.value), re.IGNORECASE)
+                    if included and int(included.group(1)) != rules.outbound_included_pieces:
+                        included_conflicts.append({'tier': attribute, 'coordinate': unit_cell.coordinate,
+                                                   'quoted_pieces': int(included.group(1)),
+                                                   'applied_pieces': rules.outbound_included_pieces})
+        required = {
+            'storage_price_day_0_30', 'storage_price_day_31_120', 'storage_price_day_121_180',
+            'storage_price_day_181_plus', 'outbound_fee_0_500', 'outbound_fee_501_1000',
+            'outbound_fee_1001_plus',
+        }
+        missing = sorted(required - found)
+        if missing:
+            raise ValueError(f'KEC 报价表缺少有效费率分档: {", ".join(missing)}')
+        revised_required = {'storage_contract_free_price', 'storage_contract_unit_price',
+                            'outbound_fee_2001_3000', 'outbound_fee_3001_5000', 'outbound_fee_5001_plus'}
+        if found & revised_required:
+            if revised_required - found:
+                raise ValueError('KEC 新版报价表缺少完整的60天仓租或高单量出库分档')
+        if not low_extra_rates or len(set(low_extra_rates)) != 1:
+            raise ValueError('KEC 报价表低单量续件费缺失或各档不一致，需人工确认')
+        rules.outbound_extra_piece_fee = low_extra_rates[0]
+        sources['outbound_extra_piece_fee'] = extra_sources
+        layout = 'labelled_quote'
+
+    bubble_wrap_rates: dict[str, Decimal] = {}
+    code_rows = range(header_row + 1, sheet.max_row + 1) if columns is not None else range(43, 55)
+    for row_number in code_rows:
+        code_cell = sheet.cell(row_number, code_column)
+        code = _text(code_cell.value).upper()
+        if columns is not None and not code.startswith('ABF'):
+            continue
+        if columns is None:
+            raw_rate = sheet.cell(row_number, rate_column).value
+            if not code and raw_rate in (None, ''):
+                continue
+            if not code:
+                raise ValueError(f'KEC 报价表气泡膜编码与费率必须成对: 第 {row_number} 行')
+        if re.fullmatch(r'ABF(?:\d+|[-_][A-Z0-9_-]+)', code) is None:
+            raise ValueError(f'KEC 报价表气泡膜编码无效: {coordinate(row_number, code_column)}')
+        if code in bubble_wrap_rates:
+            raise ValueError(f'KEC 报价表气泡膜编码重复: {coordinate(row_number, code_column)}')
+        bubble_wrap_rates[code] = read_rate(row_number, rate_column, '气泡膜')
+        sources[f'bubble_wrap_rates.{code}'] = {
+            'code': coordinate(row_number, code_column), 'rate': coordinate(row_number, rate_column),
+        }
+    if not bubble_wrap_rates:
+        raise ValueError('KEC 报价表没有读到有效 ABF 气泡膜编码与费率')
+    if columns is not None and set(bubble_wrap_rates) != {f'ABF{index}' for index in range(1, 13)}:
+        raise ValueError('KEC 报价表气泡膜 ABF1-ABF12 分档不完整或编码不受支持')
+    rules.bubble_wrap_rates = bubble_wrap_rates
+    rules.quote_metadata = {'layout': layout, 'header_row': header_row or None,
+                            'sources': sources, 'contract_observations': observations,
+                            'included_piece_conflicts': included_conflicts}
+
+
+def _normalize_quote_label(value: Any) -> str:
+    return (_normalize_header_text(value).replace('＞', '>').replace('＜', '<')
+            .replace('≤', '<=').replace('≥', '>=').replace('～', '-').replace('–', '-')
+            .replace('—', '-').replace('~', '-').replace('，', ',').replace('至', '-'))
+
+
+def _quote_storage_tier(label: str) -> str | None:
+    if re.match(r'(?:<=30|0-30)天', label):
+        return 'storage_price_day_0_30'
+    if re.match(r'>30天,?<=120天', label):
+        return 'storage_price_day_31_120'
+    if re.match(r'>120天,?<=180天', label):
+        return 'storage_price_day_121_180'
+    if re.match(r'>180天', label):
+        return 'storage_price_day_181_plus'
+    # The revised storage rows are retained as provenance, with contract values.
+    if re.match(r'<=60天', label):
+        return 'storage_contract_free_price'
+    if re.match(r'>60天', label):
+        return 'storage_contract_unit_price'
+    return None
+
+
+def _quote_outbound_tier(label: str) -> str | None:
+    tiers = (
+        ('0-500', 'outbound_fee_0_500'), ('501-1000', 'outbound_fee_501_1000'),
+        ('1001-2000', 'outbound_fee_1001_plus'), ('2001-3000', 'outbound_fee_2001_3000'),
+        ('3001-5000', 'outbound_fee_3001_5000'),
+    )
+    for prefix, attribute in tiers:
+        if re.match(re.escape(prefix) + r'单(?:/天|每天)', label):
+            return attribute
+    if re.match(r'(?:1001单以上|>1000单)(?:/天)?', label):
+        return 'outbound_fee_1001_plus'
+    if re.match(r'(?:5000单以上|>5000单)(?:/天)?', label):
+        return 'outbound_fee_5001_plus'
+    return None
+
+
+def _quote_rate(value: Any) -> Decimal | None:
+    # The original KEC quote represents its zero storage rate as "免费\nfree".
+    # Only explicit free tokens mean zero; do not extract numbers from prose.
+    text = _text(value)
+    free_text = re.sub(r'[\s/()（）]+', '', text).casefold()
+    if free_text in {'免费', 'free', '免费free', 'free免费', '免租'}:
+        return Decimal('0')
+    try:
+        rate = Decimal(text)
+    except InvalidOperation:
         return None
+    return rate if rate.is_finite() and rate >= 0 else None
+
+
+def _storage_header(worksheet) -> tuple[int, list[Any]]:
+    """Recognize English/Chinese legacy headers, including a short title block."""
+    best_row, best_headers, best_score = 1, [], -1
+    for row_number, row in enumerate(worksheet.iter_rows(min_row=1, max_row=20, values_only=True), start=1):
+        headers = list(row)
+        score = sum(_find_alias_header_index(headers, aliases) is not None for _label, aliases, _default in STORAGE_DIMENSION_COLUMNS)
+        if score > best_score:
+            best_row, best_headers, best_score = row_number, headers, score
+        if score == len(STORAGE_DIMENSION_COLUMNS):
+            return row_number, headers
+    return best_row, best_headers
+
+
+def _round_up_cubic_meter(value: Decimal | None) -> Decimal | None:
+    if value is None or value < 0:
+        return None
+    if value == 0:
+        return Decimal('0')
     rounded = Decimal(str(int(value)))
     if value != rounded:
         rounded = Decimal(str(int(value) + 1))
@@ -978,8 +1310,8 @@ def _round_up_cubic_meter(value: Decimal | None) -> Decimal | None:
 def _calculate_storage_age_days(inbound_dt: datetime | None, bill_dt: datetime | None) -> int | None:
     if inbound_dt is None or bill_dt is None:
         return None
-    delta_days = (bill_dt.date() - inbound_dt.date()).days + 1
-    return delta_days if delta_days >= 0 else None
+    delta_days = (bill_dt.date() - inbound_dt.date()).days
+    return delta_days + 1 if delta_days >= 0 else None
 
 
 def _calculate_storage_quantity(unit_billing_cbm: Decimal | None, total_cbm: Decimal | None) -> Decimal | None:

@@ -238,12 +238,20 @@ class TemuFrontendTests(unittest.TestCase):
     def test_ziniao_autofill_readiness_returns_only_booleans(self):
         self.page.set_content('<input placeholder="手机号码" value="fixture-account"><input type="password" value="fixture-secret">')
         result=self.page.evaluate('() => {'+LOGIN_READY+'}')
-        self.assertEqual(result,{'filled':True,'challenge':False})
+        self.assertEqual(result,{'filled':True,'confirmation':False,'challenge':False,'key_error':False})
+        self.assertTrue(all(type(value) is bool for value in result.values()))
         self.assertNotIn('fixture-secret',json.dumps(result))
         self.page.locator('input[type=password]').fill('')
         self.assertFalse(self.page.evaluate('() => {'+LOGIN_READY+'}')['filled'])
         self.page.evaluate("document.body.insertAdjacentHTML('beforeend','<div role=dialog>安全验证</div>')")
         self.assertTrue(self.page.evaluate('() => {'+LOGIN_READY+'}')['challenge'])
+        self.page.set_content('<label><input type="checkbox">同意</label><button>确认授权并前往</button>')
+        self.assertEqual(self.page.evaluate('() => {'+LOGIN_READY+'}'),
+                         {'filled':False,'confirmation':True,'challenge':False,'key_error':False})
+        self.page.set_content('<div role="alert">获取公钥失败，请刷新页面</div>')
+        result = self.page.evaluate('() => {'+LOGIN_READY+'}')
+        self.assertEqual(result,{'filled':False,'confirmation':False,'challenge':False,'key_error':True})
+        self.assertTrue(all(type(value) is bool for value in result.values()))
 
     def test_observed_custom_todo_modal_locates_only_its_close_control(self):
         self.page.set_content('''<div data-testid="beast-core-modal-container">

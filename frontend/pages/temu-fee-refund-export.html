@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TEMU 面单费与退货退款导出</title>
+  <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  <link rel="stylesheet" href="../assets/pages/temu-on-sale-export.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside id="appSidebar" class="sidebar"></aside>
+    <main class="main">
+      <header class="page-header"><div><div class="page-kicker">紫鸟流程 / TEMU 财务</div><h1>面单费与退货退款导出</h1></div><div id="taskBadge" class="status-pill idle">待运行</div></header>
+      <p class="temu-export-note">将所有店铺的结果合并为一个 Excel 文件，分为“发货面单费”“退货面单费”“退货退款”三个工作表。每条记录带运营名和完整紫鸟店铺名，原始文件与逐店明细也会保留。</p>
+      <section class="layout-grid">
+        <form id="exportForm" class="surface form-surface">
+          <div class="section-head"><div><h2>导出条件</h2><p>填写店铺名和日期范围；运营名自动从紫鸟完整店铺名中提取。</p></div><span class="section-badge">手动运行</span></div>
+          <div class="flow-account-bar"><span class="flow-account-icon ziniao-icon">Z</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span><a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a></div>
+          <div class="form-grid">
+            <label><span>开始日期</span><input id="startDate" type="date" required /></label>
+            <label><span>结束日期</span><input id="endDate" type="date" required /></label>
+            <label class="store-field"><span>紫鸟店铺名 <small>每行一个，可输入能够唯一匹配的名称</small></span><textarea id="storeNames" required spellcheck="false" placeholder="每行输入一个店铺名"></textarea></label>
+            <label class="store-field"><span>输出目录</span><div class="input-action"><input id="outputDir" required placeholder="输入或选择本地输出目录" /><button id="chooseOutputBtn" class="secondary" type="button">选择目录</button></div></label>
+          </div>
+          <div id="startIssues" class="temu-export-warning" hidden role="alert"></div>
+          <div class="actions"><button id="startBtn" class="primary" type="submit" disabled>开始导出</button></div>
+          <p class="temu-export-note">面单费按账单支出/退款时间筛选；售后单按创建日期筛选。日期范围包含开始和结束日期。运营名取完整紫鸟店铺名的首段，名称匹配到多家店时需补充完整名称。</p>
+          <p class="temu-export-note">输出目录单独保存，仅用于本功能。每次运行新建批次目录，完成后可在下方打开合并总表。退款工作表包含“月份”列；跨月运行时填写所选起止日期。</p>
+        </form>
+        <div class="right-stack"><section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>查看逐店导出进度与错误。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section></div>
+      </section>
+      <section class="surface"><div class="section-head"><div><h2>导出结果</h2><p id="resultMessage" aria-live="polite">尚未运行。</p></div><span id="batchLabel" class="section-badge">尚无批次</span></div>
+        <div class="actions"><button id="openConsolidatedBtn" type="button" class="primary" disabled>打开合并总表</button><button id="openDirectoryBtn" type="button" class="secondary" disabled>打开结果目录</button></div>
+        <p id="consolidatedMessage" class="temu-export-note" aria-live="polite" hidden></p>
+        <div class="collection-table-wrap"><table><thead><tr><th>店铺名</th><th>运营名</th><th>状态</th><th>发货面单费</th><th>退货面单费</th><th>退货退款</th><th>说明</th></tr></thead><tbody id="storeResults"><tr><td colspan="7">尚未运行</td></tr></tbody></table></div>
+      </section>
+      <span id="statusText" hidden></span>
+    </main>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="../assets/common.js?v=20260623-log-panel"></script>
+  <script src="../assets/pages/temu-fee-refund-export.js"></script>
+</body>
+</html>

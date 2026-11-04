@@ -1,12 +1,53 @@
 from __future__ import annotations
 
 import time
+import threading
+from unittest.mock import patch
 import unittest
 
 from backend.task_manager import TaskManager
 
 
 class TaskManagerTests(unittest.TestCase):
+    def test_exclusive_task_cannot_interrupt_existing_task_and_blocks_new_tasks(self):
+        manager = TaskManager()
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        first = manager.start('existing', lambda progress: (gate.wait(3), {})[1])
+        self.assertFalse(manager.start('restart', lambda progress: {}, exclusive=True)['ok'])
+        gate.set()
+        self.wait_finished(manager, first['id'])
+        gate.clear()
+        exclusive = manager.start('restart', lambda progress: (gate.wait(3), {})[1], exclusive=True)
+        self.assertTrue(exclusive['ok'])
+        self.assertFalse(manager.start('other', lambda progress: {})['ok'])
+        self.assertFalse(manager.start('second restart', lambda progress: {}, exclusive=True)['ok'])
+        gate.set()
+        self.wait_finished(manager, exclusive['id'])
+        self.assertTrue(manager.start('after', lambda progress: {})['ok'])
+
+    def test_exclusive_runner_failure_releases_gate(self):
+        manager = TaskManager()
+        def failure(progress):
+            raise RuntimeError('fixture failure')
+        first = manager.start('restart', failure, exclusive=True)
+        self.assertEqual(self.wait_finished(manager, first['id'])['status'], 'failed')
+        self.assertTrue(manager.start('after', lambda progress: {}, exclusive=True)['ok'])
+
+    def test_thread_start_failure_does_not_hold_exclusive_gate(self):
+        manager = TaskManager()
+        with patch('backend.task_manager.threading.Thread.start', side_effect=RuntimeError('thread unavailable')):
+            with self.assertRaises(RuntimeError):
+                manager.start('failed launch', lambda progress: {}, exclusive=True)
+        self.assertTrue(manager.start('after', lambda progress: {}, exclusive=True)['ok'])
+
+    def test_thread_construction_failure_does_not_hold_exclusive_gate(self):
+        manager = TaskManager()
+        with patch('backend.task_manager.threading.Thread', side_effect=RuntimeError('thread unavailable')):
+            with self.assertRaises(RuntimeError):
+                manager.start('failed construction', lambda progress: {}, exclusive=True)
+        self.assertTrue(manager.start('after', lambda progress: {}, exclusive=True)['ok'])
+
     def wait_finished(self, manager: TaskManager, task_id: str) -> dict:
         for _ in range(200):
             snapshot = manager.snapshot(task_id)

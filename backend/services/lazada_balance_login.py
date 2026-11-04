@@ -10,6 +10,8 @@ import re
 import time
 from urllib.parse import urljoin, urlsplit
 
+from selenium.common.exceptions import TimeoutException
+
 from backend.services.lazada_balance_language import LazadaLanguageError, ensure_lazada_login_chinese
 
 
@@ -103,6 +105,22 @@ def _matches(value: str, target: str) -> bool:
     }
 
 
+def _navigate_target(driver, target_url: str) -> None:
+    try:
+        driver.get(target_url)
+    except TimeoutException:
+        # A slow subresource can outlive the page-load timeout even after the
+        # requested finance document arrived. Do not navigate or submit again:
+        # allow the caller's language and amount checks to verify that document.
+        # Denial pages remain readable after a normal navigation, but are not
+        # sufficient evidence to recover an uncertain navigation timeout.
+        current = str(driver.current_url or "")
+        actual, expected = _parts(current), _parts(target_url)
+        if (not _matches(current, target_url) or not actual or not expected
+                or actual.path.rstrip("/") != expected.path.rstrip("/")):
+            raise LazadaLoginError("Lazada 资金页面加载超时，尚未进入指定资金页面") from None
+
+
 def _tabs(driver) -> dict[str, str]:
     """Inspect URLs, restoring the original selected tab when it still exists."""
     try:
@@ -174,7 +192,7 @@ def ensure_lazada_page(driver, target_url: str, login_state: dict, timeout: floa
     selected = _select(driver, eligible, current)
     current_url = tabs[selected]
     if not is_lazada_login_url(current_url):
-        driver.get(target_url)
+        _navigate_target(driver, target_url)
 
     deadline = time.monotonic() + float(timeout)
     baseline = _tabs(driver)
@@ -207,7 +225,7 @@ def ensure_lazada_page(driver, target_url: str, login_state: dict, timeout: floa
         if not auth:
             # A home page (including GSP) is not the requested finance page.
             if observed_login and not returned_to_target:
-                driver.get(target_url)
+                _navigate_target(driver, target_url)
                 returned_to_target = True
                 baseline = _tabs(driver)
                 last_was_login = False
@@ -216,7 +234,7 @@ def ensure_lazada_page(driver, target_url: str, login_state: dict, timeout: floa
                 login_state["business_handle"] = handle
                 return handle
             if last_was_login:
-                driver.get(target_url)
+                _navigate_target(driver, target_url)
                 baseline = _tabs(driver)
                 returned_to_target = True
             last_was_login = False

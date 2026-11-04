@@ -19,7 +19,8 @@ LOGIN_READY = """return (() => {
     [...document.querySelectorAll('input')].filter(visible).every(e=>e.type==='checkbox');
   const challenge=[...document.querySelectorAll('[role=dialog],.ant-modal,.el-dialog,iframe[src*="captcha"]')]
     .filter(visible).some(e=>e.tagName==='IFRAME' || /验证码|安全验证|滑块|验证身份/.test(e.innerText));
-  return {filled:passwords.length===1 && accounts.length===1 && !!passwords[0].value && !!accounts[0].value,confirmation,challenge};
+  return {filled:passwords.length===1 && accounts.length===1 && !!passwords[0].value && !!accounts[0].value,
+    confirmation,challenge,key_error:document.body.innerText.includes('获取公钥失败')};
 })();"""
 
 
@@ -28,14 +29,53 @@ def _visible(driver, by, selector):
             if element.is_displayed() and element.is_enabled()]
 
 
+def _inspection_handles(driver, known_urls):
+    """Choose the relevant tab without activating every window on each poll."""
+    handles = list(driver.window_handles)
+    if not handles:
+        return []
+    try:
+        targets = driver.execute_cdp_cmd('Target.getTargets', {}).get('targetInfos', [])
+    except Exception:
+        targets = []
+    for target in targets:
+        if target.get('type') != 'page':
+            continue
+        for handle in handles:
+            if handle.removeprefix('CDwindow-') == target.get('targetId'):
+                known_urls[handle] = str(target.get('url') or '')
+    business, login, region, unknown = [], [], [], []
+    for handle in handles:
+        if handle not in known_urls:
+            unknown.append(handle)
+            continue
+        url = urlsplit(known_urls[handle])
+        if url.hostname == 'agentseller.temu.com':
+            (region if url.path.startswith('/auth') else business).append(handle)
+        elif url.hostname == 'seller.kuajingmaihuo.com' and url.path == '/settle/seller-login':
+            login.append(handle)
+    # New popups must be discovered once when target metadata is unavailable.
+    # Thereafter polling stays on the active login page until it closes or the
+    # business tab's observed URL leaves /auth.
+    return unknown or (business or login or region or handles)[:1]
+
+
 def ensure_temu_session(driver, *, timeout: float = 60) -> str:
     """Return the authenticated business tab; never extract or persist credentials."""
     deadline = time.monotonic() + timeout
     region_clicked = submitted = confirmed = False
+    key_refreshed = False
+    known_urls = {}
     while time.monotonic() < deadline:
-        for handle in list(driver.window_handles):
+        for handle in _inspection_handles(driver, known_urls):
             try:
-                driver.switch_to.window(handle)
+                try:
+                    current = driver.current_window_handle
+                except (AttributeError, NoSuchWindowException):
+                    current = None
+                if current != handle:
+                    driver.switch_to.window(handle)
+                known_urls[handle] = driver.current_url
                 url = urlsplit(driver.current_url)
                 if url.hostname == 'agentseller.temu.com':
                     if _visible(driver, 'css selector', '[class*="account-info_mallInfo__"]'):
@@ -52,6 +92,16 @@ def ensure_temu_session(driver, *, timeout: float = 60) -> str:
                     state = driver.execute_script(LOGIN_READY)
                     if state.get('challenge'):
                         raise ValueError('TEMU 登录需要人工验证，请在紫鸟中处理后重试')
+                    if state.get('key_error'):
+                        if key_refreshed:
+                            raise ValueError('TEMU 登录页获取公钥失败，刷新一次后仍未恢复，请检查该店铺网络或稍后重试')
+                        # This message precedes password encryption and login
+                        # submission. Refresh this login tab once, keeping the
+                        # existing ZiNiao autofill and all other tabs intact.
+                        key_refreshed = True
+                        driver.refresh()
+                        submitted = confirmed = False
+                        continue
                     if state.get('confirmation'):
                         if confirmed:
                             continue

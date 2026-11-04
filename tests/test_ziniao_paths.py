@@ -79,6 +79,15 @@ class ZiniaoPathTests(unittest.TestCase):
         with patch.object(paths, "_registry_client_paths", return_value=[str(v5), str(v6) + ",0"]):
             self.assertEqual(paths.resolve_ziniao_client_path(), str(v6))
 
+    def test_v6_required_skips_explicit_v5_and_finds_installed_v6(self):
+        v5 = self.executable('old/SuperBrowser.exe')
+        v6 = self.executable('new/ziniao.exe')
+        with patch.dict(paths.os.environ, {'ZINIAO_CLIENT_PATH': str(v5)}), \
+                patch.object(paths, '_registry_client_paths', return_value=[str(v5), str(v6)]):
+            self.assertEqual(paths.resolve_ziniao_client_path(require_v6=True), str(v6))
+        with patch.object(paths, '_registry_client_paths', return_value=[str(v5)]):
+            self.assertEqual(paths.resolve_ziniao_client_path(require_v6=True), '')
+
     def test_quoted_display_icon_directory_and_starter_are_normalized(self):
         executable = self.executable("install, stable/ziniao.exe")
         self.executable("install, stable/starter.exe")

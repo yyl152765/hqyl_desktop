@@ -12,6 +12,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
 PAGE_SCRIPTS = {
+    FRONTEND / "pages" / "temu-financial-export.html": FRONTEND / "assets" / "pages" / "temu-financial-export.js",
+    FRONTEND / "pages" / "temu-fee-refund-export.html": FRONTEND / "assets" / "pages" / "temu-fee-refund-export.js",
+    FRONTEND / "pages" / "temu-financial-export.html": FRONTEND / "assets" / "pages" / "temu-financial-export.js",
+    FRONTEND / "pages" / "temu-activity-export.html": FRONTEND / "assets" / "pages" / "temu-activity-export.js",
     FRONTEND / "pages" / "temu-on-sale-export.html": FRONTEND / "assets" / "pages" / "temu-on-sale-export.js",
     FRONTEND / "pages" / "bigseller-sku-benchmark.html": FRONTEND / "assets" / "pages" / "bigseller-sku-benchmark.js",
     FRONTEND / "pages" / "bigseller-claim-query.html": FRONTEND / "assets" / "pages" / "bigseller-claim-query.js",
@@ -476,7 +480,7 @@ const HQYL = {
   async startTask(factory) { page.resetResult(); page.setRunning(true); try { return await factory(); } finally { page.setRunning(false); } },
 };
 vm.runInNewContext(fs.readFileSync(path.join(root, 'assets/pages/kec-reconciliation.js'), 'utf8'), {
-  HQYL,
+  HQYL, URL,
   document: { createElement(tag) { return { tagName: tag, textContent: '', style: {}, children: [], appendChild(child) { this.children.push(child); } }; } },
 });
 (async () => {
@@ -503,7 +507,7 @@ vm.runInNewContext(fs.readFileSync(path.join(root, 'assets/pages/kec-reconciliat
   account = { id: 'test-mabang' };
 
   await submit();
-  assert.deepEqual(calls[0], { account_id: 'test-mabang', input_file: 'C:/账单.xlsx', quote_file: 'C:/报价表.xlsx', output_dir: 'C:/Exports' });
+  assert.deepEqual(calls[0], { account_id: 'test-mabang', input_file: 'C:/账单.xlsx', quote_file: 'C:/报价表.xlsx', output_dir: 'C:/Exports', base_url: 'https://900853.private.mabangerp.com' });
   assert.match(logs[0], /实际体积/);
 
   page.setRunning(true);

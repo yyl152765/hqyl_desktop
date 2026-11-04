@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import re
 import time
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from backend.services.balance_evidence import capture_balance_evidence
+from backend.services.balance_evidence import BalanceEvidenceError, BalanceLayoutChangedError, capture_balance_evidence, capture_balance_page_evidence
 from backend.services.lazada_balance_login import LazadaLoginError, ensure_lazada_page, is_lazada_login_url
 from backend.services.lazada_balance_language import LazadaLanguageError, ensure_lazada_chinese
+from backend.services.lazada_balance_view import LazadaBalanceViewError, VIEW_CHECK, balance_page_view
+from backend.services.lazada_ads_view import ADS_COMMON, ADS_CHECK, LazadaAdsViewError, ads_evidence_view
 
 
 COUNTRY_DOMAINS = {
@@ -100,7 +103,7 @@ def _open_page(driver, country: str, field: str, login_state: dict) -> dict:
     return language
 
 
-_METRIC_SCRIPT = r"""
+_METRIC_SCRIPT = ADS_COMMON + r"""
 /* lazada_balance_metric */
 const field = arguments[0];
 const visible = el => {
@@ -123,10 +126,8 @@ if (field === 'balance') {
   return {label: txt(label), text: visible(value) ? txt(value) : '', located: !!card, loading: loading(card)};
 }
 if (field === 'ads') {
-  const labels = Array.from(document.querySelectorAll('[data-i18n-key*="Available_Balance"]')).filter(visible);
-  const label = labels.length === 1 ? labels[0] : null;
-  const value = label?.parentElement?.parentElement?.querySelector('[class*="accountBalanceValue"]');
-  return {label: txt(label), text: visible(value) ? txt(value) : '', located: !!label, loading: loading(label?.parentElement?.parentElement)};
+  return {label: adsText(ads.label), text: adsText(ads.value), located: !ads.error && !!ads.label && !!ads.value,
+          loading: loading(ads.label?.parentElement?.parentElement)};
 }
 return {label:'', text:'', located:false};
 """
@@ -364,7 +365,7 @@ def _latest_withdrawal(snapshot: dict, country: str) -> tuple[str | None, str]:
     return format(-abs(amount), "f"), "pending"
 
 
-_SCROLL_SCRIPT = r"""
+_SCROLL_SCRIPT = "if (arguments[0] === 'ads') {\n" + ADS_CHECK + "\n}\n" + r"""
 /* lazada_balance_evidence_scroll */
 const field = arguments[0];
 const text = el => String(el?.innerText || el?.textContent || '').trim();
@@ -411,7 +412,7 @@ def _dismiss_ads_guides(driver, timeout: float = 5) -> None:
         raise LazadaBalanceError(str(exc)) from None
 
 
-def _evidence(driver, evidence_dir: Path, store: dict, field: str, stamp: str) -> str:
+def _evidence(driver, evidence_dir: Path, store: dict, field: str, stamp: str, *, full_page=False) -> str:
     store_name = str(store.get("store_name") or store.get("name") or "").strip()
     if not store_name:
         raise LazadaBalanceError("缺少紫鸟店铺名称，无法验证截图")
@@ -423,13 +424,34 @@ def _evidence(driver, evidence_dir: Path, store: dict, field: str, stamp: str) -
             pass
     identifier = re.sub(r"[^A-Za-z0-9_-]+", "_", str(store.get("store_id") or "store"))
     path = evidence_dir / f"lazada_{identifier}_{stamp}_{field}.png"
+    full_page = full_page or field == "balance"
+    if field == 'ads':
+        _dismiss_ads_guides(driver)
+    for attempt in range(3 if full_page else 1):
+        try:
+            view = (balance_page_view(driver) if full_page else
+                    ads_evidence_view(driver) if field == 'ads' else nullcontext())
+            with view:
+                return _capture_visible_evidence(driver, path, store_name, field, full_page=full_page)
+        except BalanceLayoutChangedError:
+            if not full_page:
+                raise
+            if attempt == 2:
+                raise BalanceEvidenceError("余额页面尺寸持续变化，已尝试 3 次完整截图，请稍后重试") from None
+            # Exit the context first: restore the previous presentation, then
+            # recalculate scroll-container expansion against the new layout.
+            time.sleep(.35)
+
+
+def _capture_visible_evidence(driver, path: Path, store_name: str, field: str, *, full_page=False) -> str:
+    check_script = VIEW_CHECK if full_page else ADS_CHECK if field == 'ads' else _SCROLL_SCRIPT
     for attempt in range(2):
         if field == "ads":
             _dismiss_ads_guides(driver)
         stable = 0
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if driver.execute_script(_SCROLL_SCRIPT, field) is True:
+            if driver.execute_script(check_script, field) is True:
                 stable += 1
                 if stable >= 2:
                     break
@@ -440,8 +462,9 @@ def _evidence(driver, evidence_dir: Path, store: dict, field: str, stamp: str) -
             time.sleep(0.35)
         if stable < 2:
             raise LazadaBalanceError(f"{FIELD_LABELS[field]} 的标签、金额或状态未完整显示，不能截图")
-        captured = capture_balance_evidence(driver, path, store_name, FIELD_LABELS[field])
-        if driver.execute_script(_SCROLL_SCRIPT, field) is True:
+        capture = capture_balance_page_evidence if full_page else capture_balance_evidence
+        captured = capture(driver, path, store_name, FIELD_LABELS[field])
+        if driver.execute_script(check_script, field) is True:
             return captured
         if field != "ads" or attempt:
             break
@@ -452,7 +475,8 @@ def collect_lazada_balance(driver, store: dict, evidence_dir: Path, progress=Non
     """Return verified current values and source-window evidence for one store.
 
     Missing/uncertain fields remain ``None`` with a field error. A successful or
-    absent latest withdrawal is intentionally blank with a named exemption.
+    absent latest withdrawal is intentionally blank with a reason and a status
+    screenshot; only the amount is exempted, never its evidence.
     """
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     country = _country(store.get("country")) or _country_from_url(getattr(driver, "current_url", "")) or _country_hint(store)
@@ -500,39 +524,88 @@ def collect_lazada_balance(driver, store: dict, evidence_dir: Path, progress=Non
             result["values"][field] = format(value, "f")
             if field == "balance":
                 balance_available = True
+                # Balance evidence includes the verified withdrawal page below
+                # the total; it is captured when that filter has settled.
+                _collect_balance_withdrawals(driver, store, evidence_dir, progress, country, stamp, login_state, result)
+                if login_state.get("blocked") or is_lazada_login_url(getattr(driver, "current_url", "")):
+                    result["field_errors"]["ads"] = "店铺尚未登录"
+                    return result
+                continue
             evidence = _evidence(driver, evidence_dir, store, field, stamp)
             check_text = _metric(driver, field)
             if _currency_from_text(check_text, country) != CURRENCIES[country] or _decimal_amount(check_text, country) != value:
                 raise LazadaBalanceError(f"{FIELD_LABELS[field]} 在截图期间变化，请重试")
             result["evidence"][field] = evidence
         except Exception as exc:
-            result["field_errors"][field] = str(exc) if isinstance(exc, (LazadaBalanceError, LazadaLoginError)) else f"{FIELD_LABELS[field]} 读取或截图失败"
+            result["field_errors"][field] = str(exc) if isinstance(exc, (LazadaBalanceError, LazadaLoginError, LazadaAdsViewError, BalanceEvidenceError)) else f"{FIELD_LABELS[field]} 读取或截图失败"
             if login_state.get("blocked") or is_lazada_login_url(getattr(driver, "current_url", "")):
-                result["field_errors"].update({remaining: "店铺尚未登录" for remaining in ("balance", "ads", "processing") if remaining not in result["field_errors"]})
+                result["field_errors"].update({remaining: "店铺尚未登录" for remaining in ("balance", "ads", "processing")
+                                               if remaining not in result["field_errors"] and remaining not in result["evidence"]
+                                               and remaining not in result["evidence_exemptions"]})
                 return result
-    if balance_available:
-        try:
-            if progress:
-                progress("核对 Lazada 最新提现")
-            language = _open_page(driver, country, "balance", login_state)
-            if language.get('fallback'):
-                result['notes'].append(f'{FIELD_LABELS["processing"]}：{language["reason"]}')
-            result["source_urls"]["processing"] = _safe_url(driver.current_url)
-            snapshot = _select_withdrawal_filter(driver)
-            value, status = _latest_withdrawal(snapshot, country)
-            if status in {"withdrawal_success", "no_withdrawal"}:
-                result["evidence_exemptions"]["processing"] = status
-                result["notes"].append("最新提现成功，无需填 processing" if status == "withdrawal_success" else
-                                       f"余额流水 {snapshot.get('date_start')} 至 {snapshot.get('date_end')} 内无提现记录")
-            else:
-                result["values"]["processing"] = value
-                evidence = _evidence(driver, evidence_dir, store, "processing", stamp)
-                verify_snapshot = _transaction_snapshot(driver)
-                if not verify_snapshot.get("filter_active") or verify_snapshot.get("rows", [])[:1] != snapshot.get("rows", [])[:1]:
-                    raise LazadaBalanceError("最新提现在截图期间变化，请重试")
-                result["evidence"]["processing"] = evidence
-        except Exception as exc:
-            result["field_errors"]["processing"] = str(exc) if isinstance(exc, (LazadaBalanceError, LazadaLoginError)) else "最新提现读取或截图失败"
-    else:
+    if not balance_available:
         result["field_errors"]["processing"] = "我的余额未验证，无法读取最新提现"
     return result
+
+
+def _collect_balance_withdrawals(driver, store, evidence_dir, progress, country, stamp, login_state, result):
+    try:
+        if progress:
+            progress("核对 Lazada 最新提现")
+        language = _open_page(driver, country, "balance", login_state)
+        if language.get('fallback'):
+            result['notes'].append(f'{FIELD_LABELS["processing"]}：{language["reason"]}')
+        result["source_urls"]["processing"] = _safe_url(driver.current_url)
+        snapshot = _select_withdrawal_filter(driver)
+        try:
+            value_text = _metric(driver, "balance")
+            _currency_from_text(value_text, country)
+            balance_value = _decimal_amount(value_text, country)
+            result["values"]["balance"] = format(balance_value, "f")
+            evidence = _evidence(driver, evidence_dir, store, "balance", stamp)
+            check_text = _metric(driver, "balance")
+            verify_snapshot = _transaction_snapshot(driver)
+            if (_currency_from_text(check_text, country) != CURRENCIES[country]
+                    or _decimal_amount(check_text, country) != balance_value):
+                raise LazadaBalanceError("Balance 总计余额在截图期间变化，请重试")
+            if (verify_snapshot.get("loading") or not verify_snapshot.get("filter_active")
+                    or any(verify_snapshot.get(key) != snapshot.get(key) for key in (
+                        "rows", "empty", "date_start", "date_end", "page_number", "total_count"))):
+                raise LazadaBalanceError("余额提现列表在截图期间变化，请重试")
+            result["evidence"]["balance"] = evidence
+            result["notes"].append("Balance 为 100% 完整页面截图，含当前页全部提现记录和分页；同目录另存带紫鸟店铺标题的窗口原图")
+        except Exception as exc:
+            result["field_errors"]["balance"] = str(exc) if isinstance(exc, (LazadaBalanceError, LazadaBalanceViewError, BalanceEvidenceError, LazadaLoginError)) else "Balance 总计余额截图失败"
+            # A failed picture must not prevent reading processing, but a
+            # table that changed during it needs a fresh verified snapshot.
+            snapshot = _select_withdrawal_filter(driver)
+        value, status = _latest_withdrawal(snapshot, country)
+        if status in {"withdrawal_success", "no_withdrawal"}:
+            evidence = result["evidence"].get("balance")
+            reused = bool(evidence)
+            if not evidence:
+                # An empty table has no row cells to scroll to. A full-page
+                # image also preserves the withdrawal filter and date range.
+                evidence = _evidence(driver, evidence_dir, store, "processing", stamp, full_page=True)
+            verify_snapshot = _transaction_snapshot(driver)
+            if (verify_snapshot.get("loading") or not verify_snapshot.get("filter_active")
+                    or any(verify_snapshot.get(key) != snapshot.get(key) for key in (
+                        "rows", "empty", "date_start", "date_end", "page_number", "total_count"))):
+                raise LazadaBalanceError("提现状态在截图核对期间变化，请重试")
+            result["evidence"]["processing"] = evidence
+            result["evidence_exemptions"]["processing"] = status
+            result["notes"].append("最新提现成功，无需填 processing" if status == "withdrawal_success" else
+                                   f"余额流水 {snapshot.get('date_start')} 至 {snapshot.get('date_end')} 内无提现记录")
+            result["notes"].append("processing 状态截图复用已验证的 Balance 全页图，含提现筛选、日期及最新状态或无记录区域" if reused else
+                                   "processing 状态另存完整页面截图，含提现筛选、日期及最新状态或无记录区域")
+        else:
+            result["values"]["processing"] = value
+            evidence = _evidence(driver, evidence_dir, store, "processing", stamp)
+            verify_snapshot = _transaction_snapshot(driver)
+            if not verify_snapshot.get("filter_active") or verify_snapshot.get("rows", [])[:1] != snapshot.get("rows", [])[:1]:
+                raise LazadaBalanceError("最新提现在截图期间变化，请重试")
+            result["evidence"]["processing"] = evidence
+    except Exception as exc:
+        result["field_errors"]["processing"] = str(exc) if isinstance(exc, (LazadaBalanceError, LazadaBalanceViewError, BalanceEvidenceError, LazadaLoginError)) else "最新提现读取或截图失败"
+        if "balance" not in result["evidence"] and "balance" not in result["field_errors"]:
+            result["field_errors"]["balance"] = "提现列表未验证，无法保存完整 Balance 截图：" + result["field_errors"]["processing"]

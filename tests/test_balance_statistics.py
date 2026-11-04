@@ -70,10 +70,14 @@ class BalanceStatisticsTests(unittest.TestCase):
         is_temu = len(args) == 2
         fields = ("total", "pending") if is_temu else ("income", "balance", "ads")
         values = {field: "0.00" if field in {"total", "balance"} else "-2.34" for field in fields}
+        evidence = {field: str(image) for field in fields}
         if not is_temu:
             values["processing"] = None
+            processing_image = directory / "processing.png"
+            Image.new("RGB", (160, 90), "white").save(processing_image)
+            evidence["processing"] = str(processing_image)
         return {"country": "TH", "currency": "THB", "values": values,
-                "evidence": {field: str(image) for field in fields},
+                "evidence": evidence,
                 "evidence_exemptions": {} if is_temu else {"processing": "withdrawal_success"},
                 "captured_at": "2026-09-28T12:00:00+08:00", "notes": [], "field_errors": {},
                 "source_urls": {"total": "https://seller.example.invalid/page?token=secret#fragment"}}
@@ -82,6 +86,15 @@ class BalanceStatisticsTests(unittest.TestCase):
         request = request or self.request
         browser = browser or FakeBrowser(request, [store(1), store(2)])
         return service.run_balance_statistics(request, browser_factory=lambda request: browser, collectors={request["platform"]: collector or self.collector}), browser
+
+    def test_prepare_runs_once_before_catalog_and_not_between_stores(self):
+        browser = FakeBrowser(self.request, [store(1), store(2)])
+        browser.prepare_task = lambda **kw: browser.calls.append('prepare')
+        result, browser = self.run_batch(browser=browser)
+        self.assertTrue(result['is_complete'])
+        self.assertEqual(browser.calls[0:2], ['prepare', 'list'])
+        self.assertEqual(browser.calls.count('prepare'), 1)
+        self.assertNotIn('ready', browser.calls)
 
     def test_previous_month_year_boundary_and_leap_year(self):
         self.assertEqual(service.get_defaults("temu", date(2026, 1, 1))["month"], "2025-12")
@@ -189,9 +202,37 @@ class BalanceStatisticsTests(unittest.TestCase):
         result, _ = self.run_batch(request=request, browser=FakeBrowser(request, [store(1, platform="lazada"), store(2, platform="lazada")]), collector=lazada)
         self.assertTrue(result["is_complete"])
         self.assertIsNone(result["stores"][0]["values"]["processing"])
-        self.assertNotIn("processing", result["stores"][0]["evidence"])
+        self.assertIn("processing", result["stores"][0]["evidence"])
+        self.assertEqual(result["stores"][0]["evidence_exemptions"]["processing"], "withdrawal_success")
         self.assertEqual(result["stores"][0]["values"]["balance"], "0.00")
         self.assertEqual(result["stores"][1]["values"]["processing"], "-12.34")
+
+    def test_blank_processing_keeps_reason_and_requires_valid_evidence(self):
+        request = {**self.request, "platform": "lazada", "store_names": ["店铺1"]}
+        for reason in ("withdrawal_success", "no_withdrawal"):
+            for image_state in ("valid", "missing", "corrupt"):
+                with self.subTest(reason=reason, image_state=image_state):
+                    def lazada(*args, **kwargs):
+                        raw = self.collector(*args, **kwargs)
+                        raw["evidence_exemptions"]["processing"] = reason
+                        if image_state == "missing":
+                            raw["evidence"].pop("processing")
+                        elif image_state == "corrupt":
+                            Path(raw["evidence"]["processing"]).write_bytes(b"invalid screenshot")
+                        return raw
+                    result, _ = self.run_batch(request=request,
+                        browser=FakeBrowser(request, [store(1, platform="lazada")]), collector=lazada)
+                    row = result["stores"][0]
+                    self.assertIsNone(row["values"]["processing"])
+                    self.assertEqual(row["evidence_exemptions"]["processing"], reason)
+                    self.assertEqual(result["is_complete"], image_state == "valid")
+                    if image_state == "valid":
+                        self.assertIn("processing", row["evidence"])
+                        self.assertNotIn("processing", row["field_errors"])
+                    else:
+                        self.assertEqual(row["status"], "partial")
+                        self.assertNotIn("processing", row["evidence"])
+                        self.assertIn("截图", row["field_errors"]["processing"])
 
     def test_unknown_blank_processing_missing_screenshots_and_wrong_country_fail(self):
         request = {**self.request, "platform": "lazada", "country": "PH"}
@@ -268,13 +309,47 @@ class BalanceStatisticsTests(unittest.TestCase):
         self.assertEqual(retried["stores"][0]["evidence"], {})
         self.assertTrue(Path(retried["output_file"]).is_file())
 
-    def test_lazada_retry_keeps_confirmed_evidence_exemptions_without_browser(self):
+    def test_lazada_retry_keeps_confirmed_blank_with_picture_without_browser(self):
         request = {**self.request, "platform": "lazada"}
-        result, _ = self.run_batch(request=request, browser=FakeBrowser(request, [store(1, platform="lazada"), store(2, platform="lazada")]))
+        def lazada(*args, **kwargs):
+            raw = self.collector(*args, **kwargs)
+            raw["evidence"].pop("balance")
+            raw["evidence_exemptions"]["balance"] = "cross_border_unavailable"
+            return raw
+        result, _ = self.run_batch(request=request,
+            browser=FakeBrowser(request, [store(1, platform="lazada"), store(2, platform="lazada")]), collector=lazada)
         factory = Mock()
         retried = service.retry_balance_statistics({**request, "manifest_path": result["manifest_path"]}, browser_factory=factory)
         factory.assert_not_called()
         self.assertTrue(retried["is_complete"])
+
+    def test_lazada_retry_recollects_legacy_blank_without_processing_picture(self):
+        request = {**self.request, "platform": "lazada"}
+        for reason in ("withdrawal_success", "no_withdrawal"):
+            for damage in ("legacy_missing", "corrupt"):
+                with self.subTest(reason=reason, damage=damage):
+                    stores = [store(1, platform="lazada"), store(2, platform="lazada")]
+                    result, _ = self.run_batch(request=request, browser=FakeBrowser(request, stores))
+                    path = Path(result["manifest_path"])
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                    previous_success = copy.deepcopy(record["stores"][1])
+                    row = record["stores"][0]
+                    row["evidence_exemptions"]["processing"] = reason
+                    if damage == "legacy_missing":
+                        row["evidence"].pop("processing")
+                    else:
+                        Path(row["evidence"]["processing"]).write_bytes(b"damaged screenshot")
+                    path.write_text(json.dumps(record), encoding="utf-8")
+                    self.calls.clear()
+                    browser = FakeBrowser(request, stores)
+                    retried = service.retry_balance_statistics(
+                        {**request, "manifest_path": str(path)}, browser_factory=lambda request: browser,
+                        collectors={"lazada": self.collector})
+                    self.assertTrue(retried["is_complete"])
+                    self.assertEqual(self.calls, ["1"])
+                    self.assertEqual(retried["stores"][1], previous_success)
+                    self.assertEqual(retried["stores"][0]["attempts"], 2)
+                    self.assertIn("processing", retried["stores"][0]["evidence"])
 
 
 if __name__ == "__main__":

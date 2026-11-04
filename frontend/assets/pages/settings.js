@@ -219,7 +219,7 @@
       if (!result.ok) throw new Error(result.error || "检查更新失败");
       if (!result.update_available) { $("updateStatus").textContent = `当前已是最新版本 ${result.current_version}`; return; }
       latestUpdate = result;
-      $("updateStatus").textContent = `发现新版本 ${result.latest_version}。${result.notes || ""}`;
+      $("updateStatus").textContent = `发现新版本 ${result.latest_version}，可自行选择下载安装，不更新也可继续使用。${result.notes || ""}`;
       $("availableUpdateVersion").textContent = result.latest_version;
       $("updateActionPanel").hidden = false;
     } catch (error) {
@@ -340,6 +340,9 @@
       $("outputDir").value = settings.output_dir || "";
       $("rowsPerPage").value = settings.rows_per_page || 500;
       $("updateManifestUrl").value = settings.update_manifest_url || "";
+      $("updateStatus").textContent = settings.update_manifest_url
+        ? "尚未检查更新。点击“检查更新”查看新版本，不更新也可继续使用。"
+        : "未配置更新源，不影响当前版本使用。";
       $("captchaUsername").value = settings.captcha_username || "";
       updateCaptchaPasswordHint(Boolean(settings.captcha_password_configured));
       updateDingTalkCredentialHint(settings);

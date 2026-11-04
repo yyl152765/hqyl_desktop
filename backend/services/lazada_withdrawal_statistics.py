@@ -1,4 +1,4 @@
-"""Lazada 提现统计：PH/MY 流水转 Excel，TH 收入账单下载并上传钉盘。"""
+"""Lazada 三站提现统计：读取实际流水，受限收入账单仅作独立归档。"""
 
 from __future__ import annotations
 
@@ -14,11 +14,12 @@ import time
 import unicodedata
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 
 ProgressCallback = Callable[[str], None]
@@ -46,6 +47,7 @@ MAX_CONCURRENT_STORES = 4
 DEFAULT_CONCURRENT_STORES = 2
 
 _SUPERBROWSER_ROOT: str | None = None
+_STORE_LOG_CONTEXT = threading.local()
 _INVALID_FILE_CHARS = re.compile(r'[\\/:*?"<>|]+')
 _STORE_NAME_CHAR_FOLD = str.maketrans(
     {
@@ -67,7 +69,7 @@ _STORE_NAME_CHAR_FOLD = str.maketrans(
 class LazadaWithdrawalStatisticsQuery:
     company: str
     username: str
-    password: str
+    password: str = field(repr=False)
     country: str
     start_date: str
     end_date: str
@@ -77,9 +79,9 @@ class LazadaWithdrawalStatisticsQuery:
     client_path: str = ""
     webdriver_path: str = ""
     output_root: str = ""
-    dingtalk_app_key: str = ""
-    dingtalk_app_secret: str = ""
-    dingtalk_user_id: str = ""
+    dingtalk_app_key: str = field(default="", repr=False)
+    dingtalk_app_secret: str = field(default="", repr=False)
+    dingtalk_user_id: str = field(default="", repr=False)
 
 
 @dataclass
@@ -102,11 +104,28 @@ class StoreResult:
     failed_items: list[str] | None = None
     started_at: str = ""
     finished_at: str = ""
+    page_url: str = ""
+    diagnostic_screenshot: str = ""
+    collection_method: str = ""
+    statement_archive_status: str = ""
+    collection_outcome: str = ""
+    collection_complete: bool = False
+    empty_confirmed: bool = False
+    collection_file: str = ""
+    sheet_write_status: str = ""
+    sheet_write_reason: str = ""
+    online_sheet_url: str = ""
+    balance_page_unavailable: bool = False
+    income_page_url: str = ""
+    income_diagnostic_screenshot: str = ""
+    match_reason: str = ""
+    candidate_store_names: list[str] | None = None
 
     def __post_init__(self) -> None:
         self.local_files = list(self.local_files or [])
         self.drive_paths = list(self.drive_paths or [])
         self.failed_items = list(self.failed_items or [])
+        self.candidate_store_names = list(self.candidate_store_names or [])
         if not self.started_at:
             self.started_at = _now_text()
 
@@ -119,6 +138,13 @@ class _ProgressHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         if self.callback is not None:
             self.callback(self.format(record))
+
+
+class _StoreContextFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        store_name = getattr(_STORE_LOG_CONTEXT, "store_name", "")
+        record.store_context = f"[{store_name}] " if store_name else ""
+        return True
 
 
 def previous_month_date_range(today: date | None = None) -> dict[str, str]:
@@ -294,6 +320,18 @@ def _requested_store_for_browser(browser_name: str, requested_names: tuple[str, 
     return best[0] if len(best) == 1 else browser_name
 
 
+def _store_match_failure_message(diagnostic: dict[str, Any], country: str) -> str:
+    candidates = [str(name) for name in diagnostic.get("candidate_names", []) if name]
+    reason = diagnostic.get("reason")
+    if reason == "ambiguous":
+        return "匹配到多个 Lazada 店铺，请填写紫鸟完整名称：" + "；".join(candidates)
+    if reason == "duplicate":
+        return "与本次已匹配店铺重复，已避免重复执行：" + "；".join(candidates)
+    if reason == "country_mismatch":
+        return f"店铺国家与所选{COUNTRIES[country]['name']}不一致，请核对国家和店铺名称"
+    return "当前紫鸟账号下未找到对应 Lazada 店铺，请核对国家、店号、完整名称及店铺授权"
+
+
 def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -302,13 +340,14 @@ def _make_logger(run_dir: Path, progress: ProgressCallback | None) -> tuple[logg
     logger = logging.getLogger(f"lazada_withdrawal_statistics.{time.time_ns()}")
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
+    logger.addFilter(_StoreContextFilter())
     log_file = run_dir / "run.log"
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(store_context)s%(message)s")
     file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     callback_handler = _ProgressHandler(progress)
-    callback_handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
+    callback_handler.setFormatter(logging.Formatter("%(levelname)s - %(store_context)s%(message)s"))
     logger.addHandler(callback_handler)
     return logger, log_file
 
@@ -317,18 +356,38 @@ def _month_folder(start_date: str) -> str:
     return f"{date.fromisoformat(start_date).month}月"
 
 
+def _resolve_drive_credentials(job: LazadaWithdrawalStatisticsQuery) -> tuple[str, str, str]:
+    """Resolve local task credentials before opening any store browser."""
+    values = [
+        str(value or os.environ.get(environment) or "").strip()
+        for value, environment in (
+            (job.dingtalk_app_key, "LAZADA_WITHDRAWAL_DINGTALK_APP_KEY"),
+            (job.dingtalk_app_secret, "LAZADA_WITHDRAWAL_DINGTALK_APP_SECRET"),
+            (job.dingtalk_user_id, "LAZADA_WITHDRAWAL_DINGTALK_USER_ID"),
+        )
+    ]
+    if not all(values):
+        # Retain legacy source/CLI compatibility. Packaged constants are empty;
+        # the desktop bridge supplies the user's saved settings explicitly.
+        _ensure_superbrowser_path()
+        from util.dingtalk_doc_api import APP_KEY, APP_SECRET, USER_ID
+
+        values = [value or str(legacy or "").strip()
+                  for value, legacy in zip(values, (APP_KEY, APP_SECRET, USER_ID))]
+    missing = [name for name, value in zip(("AppKey", "AppSecret", "钉钉操作人"), values) if not value]
+    if missing:
+        raise ValueError(
+            f"钉盘归档配置不完整（缺少 {'、'.join(missing)}），"
+            "请先在设置中配置钉钉应用和操作人，再启动提现统计"
+        )
+    return values[0], values[1], values[2]
+
+
 def _create_drive_client(job: LazadaWithdrawalStatisticsQuery) -> Any:
+    app_key, app_secret, user_id = _resolve_drive_credentials(job)
     _ensure_superbrowser_path()
-    from util.dingtalk_doc_api import APP_KEY, APP_SECRET, USER_ID
     from util.dingtalk_drive_util import DingDriveClient
 
-    app_key = job.dingtalk_app_key or os.environ.get("LAZADA_WITHDRAWAL_DINGTALK_APP_KEY") or APP_KEY
-    app_secret = (
-        job.dingtalk_app_secret
-        or os.environ.get("LAZADA_WITHDRAWAL_DINGTALK_APP_SECRET")
-        or APP_SECRET
-    )
-    user_id = job.dingtalk_user_id or os.environ.get("LAZADA_WITHDRAWAL_DINGTALK_USER_ID") or USER_ID
     return DingDriveClient(app_key, app_secret, user_id, DRIVE_SPACE_ID)
 
 
@@ -362,7 +421,7 @@ const visible = (el) => {
   return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
 };
 const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-const dialog = Array.from(document.querySelectorAll('[role="dialog"],.next-dialog,.next-overlay-inner'))
+const dialog = Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"],.next-dialog,.next-overlay-inner'))
   .find((el) => visible(el) && /seller balance updated/i.test(el.innerText || el.textContent || ''));
 if (!dialog) return false;
 const action = Array.from(dialog.querySelectorAll('button,a,[role="button"]'))
@@ -451,9 +510,10 @@ const visible = (el) => {
   return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
 };
 const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-const button = Array.from(document.querySelectorAll('button,[role="button"]'))
-  .find((el) => visible(el) && /^(Withdrawal|提现)$/i.test(clean(el.innerText || el.textContent)));
-if (!button) return {found: false};
+const buttons = Array.from(document.querySelectorAll('.balance-transactions-wrap .cap-type button.button-groups'))
+  .filter((el) => visible(el) && /^(Withdrawal|提现)$/i.test(clean(el.innerText || el.textContent)));
+if (buttons.length !== 1) return {found: false};
+const button = buttons[0];
 const style = window.getComputedStyle(button);
 return {
   found: true,
@@ -471,6 +531,10 @@ return {
 def _select_withdrawal_filter(driver: Any) -> tuple[bool, dict[str, Any], dict[str, Any]]:
     _scroll_to_balance_transactions(driver)
     before = _withdrawal_button_state(driver)
+    if not before.get("found"):
+        return False, before, before
+    if _withdrawal_filter_selected(before):
+        return True, before, before
     clicked = bool(
         driver.execute_script(
             r"""
@@ -480,9 +544,12 @@ const visible = (el) => {
   return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
 };
 const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-const button = Array.from(document.querySelectorAll('button,[role="button"]'))
-  .find((el) => visible(el) && /^(Withdrawal|提现)$/i.test(clean(el.innerText || el.textContent)));
-if (!button) return false;
+const buttons = Array.from(document.querySelectorAll('.balance-transactions-wrap .cap-type button.button-groups'))
+  .filter((el) => visible(el) && /^(Withdrawal|提现)$/i.test(clean(el.innerText || el.textContent)));
+if (buttons.length !== 1) return false;
+const button = buttons[0];
+if (button.getAttribute('aria-pressed') === 'true' || button.getAttribute('aria-selected') === 'true'
+  || /(?:^|\s)next-btn-primary(?:\s|$)/.test(button.className)) return true;
 button.scrollIntoView({block: 'center', inline: 'nearest'});
 button.click();
 return true;
@@ -492,13 +559,16 @@ return true;
     if clicked:
         time.sleep(1.5)
     after = _withdrawal_button_state(driver)
-    selected = clicked and (
-        after.get("ariaPressed") == "true"
-        or after.get("ariaSelected") == "true"
-        or "primary" in str(after.get("className") or "").casefold()
-        or before.get("backgroundColor") != after.get("backgroundColor")
-    )
+    selected = clicked and _withdrawal_filter_selected(after)
     return selected, before, after
+
+
+def _withdrawal_filter_selected(state: dict[str, Any]) -> bool:
+    return bool(state.get("found") and (
+        state.get("ariaPressed") == "true"
+        or state.get("ariaSelected") == "true"
+        or "next-btn-primary" in str(state.get("className") or "").split()
+    ))
 
 
 def _transaction_table_state(driver: Any, timeout: int = 30) -> dict[str, Any]:
@@ -902,15 +972,48 @@ def validate_withdrawal_workbook(
         workbook.close()
 
 
+def _collect_verified_withdrawals(driver: Any, job: LazadaWithdrawalStatisticsQuery, withdrawal: Any):
+    collection = withdrawal.collect_withdrawal_transaction_details(driver, job.country)
+    outcome = collection.get("outcome")
+    if outcome not in {"complete", "confirmed_empty"} or not collection.get("collection_complete"):
+        raise RuntimeError(collection.get("message") or "提现流水未完整采集，停止导出")
+    if outcome == "confirmed_empty" and not collection.get("empty_confirmed"):
+        raise RuntimeError("未确认提现流水为空，停止导出")
+    expected_currency = {"PH": "PHP", "MY": "MYR", "TH": "THB"}[job.country]
+    if collection.get("currency") != expected_currency:
+        raise RuntimeError("提现流水币种与目标国家不一致")
+    consistent, message = withdrawal.validate_transaction_record_consistency({
+        **collection,
+        "collection_outcome": outcome,
+        "start_date": job.start_date,
+        "end_date": job.end_date,
+        "trade_time": f"{job.start_date}~{job.end_date}",
+    })
+    if not consistent:
+        raise RuntimeError(f"提现流水明细校验失败：{message}")
+    records = [{
+        "transaction_number": item["transaction_number"],
+        "transaction_time": _parse_transaction_time(item["time"]),
+        "type": "Withdrawal",
+        "amount": _parse_amount(item["raw_amount"]),
+        "remarks": item["raw_remark"],
+    } for item in collection["transaction_records"]]
+    return records, collection
+
+
 def _process_ph_my(
     driver: Any,
     job: LazadaWithdrawalStatisticsQuery,
     store_name: str,
     store_dir: Path,
     logger: logging.Logger,
+    *,
+    browser_download_dir: str = "",
 ) -> StoreResult:
+    """Collect actual withdrawal transactions for PH, MY and TH."""
     _, withdrawal, _, WebdriverUtil = _reference_modules()
     result = StoreResult(job.country, store_name, store_name, job.start_date, job.end_date)
+    result.collection_method = "withdrawal_transactions"
     try:
         driver._lazada_target_country = job.country
         util = WebdriverUtil(driver)
@@ -919,13 +1022,38 @@ def _process_ph_my(
         withdrawal._wait_page_ready(driver, timeout=30)
         time.sleep(3)
         if not withdrawal.open_lazada_finance_page(util):
-            if withdrawal._is_lazada_balance_unavailable(driver):
+            page = urlsplit(str(driver.current_url or ""))
+            if (
+                page.hostname == COUNTRIES[job.country]["domain"]
+                and withdrawal._is_lazada_balance_unavailable(driver)
+            ):
                 result.status = "page_unavailable"
-                result.message = "该店铺尚未开放 My Balance（平台试点限制）"
-                return result
+                result.balance_page_unavailable = True
+                result.message = "该店铺尚未开放 My Balance，收入账单仅作归档，未取得提现流水"
+                result.page_url = f"{page.scheme}://{page.hostname}{page.path}"
+                screenshot = store_dir / f"{_safe_name(store_name)}-page-unavailable.png"
+                try:
+                    saved = driver.save_screenshot(str(screenshot))
+                    if saved is not False and screenshot.is_file() and screenshot.stat().st_size > 0:
+                        result.diagnostic_screenshot = str(screenshot)
+                except Exception:
+                    logger.warning("%s：未能保存页面未开放的诊断截图", store_name)
+                logger.warning("%s：%s，页面=%s", store_name, result.message, result.page_url)
+                fallback = _process_income_statements(
+                    driver, job, store_name, browser_download_dir, store_dir, logger,
+                )
+                fallback.balance_page_unavailable = True
+                fallback.page_url = result.page_url
+                fallback.diagnostic_screenshot = result.diagnostic_screenshot
+                fallback.statement_archive_status = fallback.status
+                if fallback.status in {"success", "no_matching_statement"}:
+                    fallback.status = "page_unavailable"
+                fallback.message = f"未取得提现流水；收入账单归档：{fallback.message}"
+                fallback.no_data = False
+                return fallback
             raise RuntimeError("无法进入 My Balance 页面")
-        withdrawal.close_lazada_popups(driver)
-        withdrawal.open_lazada_withdrawal_page(util)
+        if urlsplit(str(driver.current_url or "")).hostname != COUNTRIES[job.country]["domain"]:
+            raise RuntimeError("提现流水页面国家与目标国家不一致")
         withdrawal.close_lazada_popups(driver)
         _dismiss_balance_update_modal(driver)
         _dismiss_guided_tours(driver)
@@ -948,9 +1076,17 @@ def _process_ph_my(
         table = _transaction_table_state(driver)
         if not table.get("ready"):
             raise RuntimeError(f"提现流水表未加载或表头不完整：{table}")
-        records, page_count = _collect_withdrawal_transactions(driver, logger)
+        records, collection = _collect_verified_withdrawals(driver, job, withdrawal)
+        for record in records:
+            if str(record.get("type") or "").strip().casefold() not in {"withdrawal", "提现"}:
+                raise RuntimeError("提现筛选结果包含其他交易类型，停止导出")
+            if not (job.start_date <= record["transaction_time"].date().isoformat() <= job.end_date):
+                raise RuntimeError("提现流水日期超出统计范围，停止导出")
         result.record_count = len(records)
-        result.no_data = not records
+        result.collection_outcome = collection["outcome"]
+        result.collection_complete = True
+        result.empty_confirmed = bool(collection.get("empty_confirmed"))
+        result.no_data = result.collection_outcome == "confirmed_empty"
         workbook_file = store_dir / f"{_safe_name(store_name)}-withdrawal.xlsx"
         _write_withdrawal_workbook(
             workbook_file,
@@ -965,12 +1101,20 @@ def _process_ph_my(
             store_name=store_name,
         )
         logger.info(
-            "提现流水 Excel 校验通过：%s 页、%s 行、表头=%s",
-            page_count,
+            "提现流水完整采集及 Excel 校验通过：%s 行、表头=%s",
             validation["record_count"],
             validation["headers"],
         )
         result.local_files.append(str(workbook_file))
+        collection_file = store_dir / f"{_safe_name(store_name)}-withdrawal-collection.json"
+        collection_file.write_text(json.dumps({
+            **collection,
+            "country": job.country,
+            "store_name": store_name,
+            "start_date": job.start_date,
+            "end_date": job.end_date,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        result.collection_file = str(collection_file)
         result.drive_paths.append(_upload_file(job, store_name, str(workbook_file), logger))
         result.uploaded_count = 1
         result.status = "no_data" if result.no_data else "success"
@@ -1085,7 +1229,7 @@ def validate_statement_workbook(
 
     path = Path(file_path)
     if not path.is_file() or path.stat().st_size <= 0 or path.suffix.lower() != ".xlsx":
-        raise RuntimeError(f"无效的泰国账单文件：{path}")
+        raise RuntimeError(f"无效的 Lazada 账单文件：{path}")
     # Lazada 的文件常带错误的 worksheet dimension（A1:A...）。read_only=True
     # 会因此只暴露 A 列；普通模式会按实际单元格恢复完整的 19 列。
     with warnings.catch_warnings():
@@ -1100,7 +1244,8 @@ def validate_statement_workbook(
             (
                 index
                 for index, value in enumerate(normalized)
-                if "对账单编号" in value or "statementnumber" in value or "statementno" in value
+                if "对账单编号" in value or "對帳單編號" in value
+                or value in {"statementnumber", "statementno", "statementid"}
             ),
             None,
         )
@@ -1108,7 +1253,8 @@ def validate_statement_workbook(
             (
                 index
                 for index, value in enumerate(normalized)
-                if "账单周期" in value or "billingperiod" in value or value == "period"
+                if "账单周期" in value or "賬單週期" in value
+                or value in {"billingperiod", "statementperiod", "period", "账期", "賬期"}
             ),
             None,
         )
@@ -1144,7 +1290,7 @@ def validate_statement_csv(
 ) -> dict[str, str]:
     path = Path(file_path)
     if not path.is_file() or path.stat().st_size <= 0 or path.suffix.lower() != ".csv":
-        raise RuntimeError(f"无效的泰国 CSV 账单文件：{path}")
+        raise RuntimeError(f"无效的 Lazada CSV 账单文件：{path}")
     last_error: Exception | None = None
     for encoding in ("utf-8-sig", "utf-16", "gb18030"):
         try:
@@ -1160,7 +1306,8 @@ def validate_statement_csv(
                 (
                     index
                     for index, value in enumerate(normalized)
-                    if "对账单编号" in value or "statementnumber" in value or "statementno" in value
+                    if "对账单编号" in value or "對帳單編號" in value
+                    or value in {"statementnumber", "statementno", "statementid"}
                 ),
                 None,
             )
@@ -1168,7 +1315,8 @@ def validate_statement_csv(
                 (
                     index
                     for index, value in enumerate(normalized)
-                    if "账单周期" in value or "billingperiod" in value or value == "period"
+                    if "账单周期" in value or "賬單週期" in value
+                    or value in {"billingperiod", "statementperiod", "period", "账期", "賬期"}
                 ),
                 None,
             )
@@ -1203,7 +1351,7 @@ def validate_statement_file(
         return validate_statement_workbook(file_path, expected_statement_number, expected_period)
     if suffix == ".csv":
         return validate_statement_csv(file_path, expected_statement_number, expected_period)
-    raise RuntimeError(f"不支持的泰国账单格式：{suffix or '无扩展名'}")
+    raise RuntimeError(f"不支持的 Lazada 账单格式：{suffix or '无扩展名'}")
 
 
 def _process_thailand(
@@ -1214,19 +1362,36 @@ def _process_thailand(
     store_dir: Path,
     logger: logging.Logger,
 ) -> StoreResult:
+    return _process_ph_my(
+        driver, job, store_name, store_dir, logger,
+        browser_download_dir=browser_download_dir,
+    )
+
+
+def _process_income_statements(
+    driver: Any,
+    job: LazadaWithdrawalStatisticsQuery,
+    store_name: str,
+    browser_download_dir: str,
+    store_dir: Path,
+    logger: logging.Logger,
+) -> StoreResult:
     _, withdrawal, _, WebdriverUtil = _reference_modules()
     result = StoreResult(job.country, store_name, store_name, job.start_date, job.end_date)
+    result.collection_method = "income_statement"
     try:
         if not browser_download_dir or not Path(browser_download_dir).is_dir():
             raise RuntimeError("紫鸟未返回有效下载目录")
-        driver._lazada_target_country = "TH"
+        driver._lazada_target_country = job.country
         util = WebdriverUtil(driver)
         withdrawal._ensure_lazada_login(util)
-        driver.get(f"https://{COUNTRIES['TH']['domain']}/")
+        driver.get(f"https://{COUNTRIES[job.country]['domain']}/")
         withdrawal._wait_page_ready(driver, timeout=30)
         time.sleep(3)
         if not withdrawal.open_lazada_income_statement_page(util):
             raise RuntimeError("无法进入 My Income 页面")
+        if urlsplit(str(driver.current_url or "")).hostname != COUNTRIES[job.country]["domain"]:
+            raise RuntimeError("收入账单页面国家与目标国家不一致")
         withdrawal.close_lazada_popups(driver)
         if not withdrawal.open_lazada_income_statement_tab(driver):
             raise RuntimeError("无法切换到 Income Statement")
@@ -1234,10 +1399,29 @@ def _process_thailand(
         target_start = withdrawal._parse_iso_date(job.start_date)
         target_end = withdrawal._parse_iso_date(job.end_date)
         matched_count = 0
+        checked_page_count = 0
+        checked_row_count = 0
+        seen_pages: set[tuple[tuple[str, str], ...]] = set()
+        seen_statements: set[tuple[str, str]] = set()
         for page_index in range(1, 25):
+            if urlsplit(str(driver.current_url or "")).hostname != COUNTRIES[job.country]["domain"]:
+                raise RuntimeError("收入账单页面国家与目标国家不一致")
             rows = withdrawal.wait_for_thailand_income_statement_rows(driver, timeout=35)
+            checked_page_count += 1
             if not rows:
+                logger.info(
+                    "%s：收入账单第 %s 页读取完成：本页 0 个账单，页面已明确显示无数据，目标日期匹配 0 个",
+                    store_name,
+                    page_index,
+                )
                 break
+            signature = tuple(
+                (str(row.get("statement_number") or ""), str(row.get("period") or ""))
+                for row in rows
+            )
+            if signature in seen_pages:
+                raise RuntimeError("收入账单翻页后内容未变化，无法确认完整结果")
+            seen_pages.add(signature)
             matched_rows = [
                 row
                 for row in rows
@@ -1246,10 +1430,33 @@ def _process_thailand(
                     row["period_range"][0], row["period_range"][1], target_start, target_end
                 )
             ]
+            checked_row_count += len(rows)
+            period_ranges = [row["period_range"] for row in rows if row.get("period_range")]
+            period_start = (
+                min(period[0] for period in period_ranges).strftime("%Y-%m-%d")
+                if period_ranges else "未识别"
+            )
+            period_end = (
+                max(period[1] for period in period_ranges).strftime("%Y-%m-%d")
+                if period_ranges else "未识别"
+            )
+            logger.info(
+                "%s：收入账单第 %s 页读取完成：本页 %s 个账单，目标日期匹配 %s 个，账期覆盖=%s~%s",
+                store_name,
+                page_index,
+                len(rows),
+                len(matched_rows),
+                period_start,
+                period_end,
+            )
             for original_row in matched_rows:
-                matched_count += 1
                 statement_number = str(original_row.get("statement_number") or "")
                 period = str(original_row.get("period") or "")
+                identity = (statement_number, period)
+                if identity in seen_statements:
+                    continue
+                seen_statements.add(identity)
+                matched_count += 1
                 last_error: Exception | None = None
                 for attempt in range(1, 3):
                     try:
@@ -1266,8 +1473,9 @@ def _process_thailand(
                             withdrawal,
                         )
                         validate_statement_file(local_file, statement_number, period)
-                        result.local_files.append(local_file)
-                        result.downloaded_count += 1
+                        if local_file not in result.local_files:
+                            result.local_files.append(local_file)
+                            result.downloaded_count = len(result.local_files)
                         result.drive_paths.append(_upload_file(job, store_name, local_file, logger))
                         result.uploaded_count += 1
                         logger.info(
@@ -1281,6 +1489,8 @@ def _process_thailand(
                     except Exception as exc:
                         last_error = exc
                         withdrawal._close_thailand_export_modal(driver)
+                        if withdrawal._is_login_url(str(driver.current_url or "")):
+                            raise RuntimeError("下载收入账单时 Lazada 登录态失效，请重新登录后重试") from exc
                         if attempt < 2:
                             logger.warning(
                                 "%s：账单 %s 第一次处理失败，刷新当前行后重试：%s",
@@ -1299,11 +1509,37 @@ def _process_thailand(
                 break
             if not withdrawal.click_thailand_income_statement_next_page(driver):
                 break
+            if page_index == 24:
+                raise RuntimeError("收入账单超过 24 页，未完成全部账期检查")
             logger.info("%s：进入收入账单第 %s 页", store_name, page_index + 1)
 
         if matched_count == 0:
             result.status = "no_matching_statement"
-            result.message = "统计日期范围内没有匹配账单"
+            result.message = (
+                "收入账单列表为空（页面已确认无数据），未下载文件"
+                if checked_row_count == 0 else
+                f"已检查 {checked_page_count} 页、{checked_row_count} 个账单，统计日期范围内没有匹配账单"
+            )
+            try:
+                page = urlsplit(str(driver.current_url or ""))
+                if page.scheme in {"http", "https"} and page.hostname:
+                    result.income_page_url = f"{page.scheme}://{page.hostname}{page.path}"
+            except ValueError:
+                pass
+            screenshot = store_dir / f"{_safe_name(store_name)}-income-no-match.png"
+            try:
+                saved = driver.save_screenshot(str(screenshot))
+                if saved is not False and screenshot.is_file() and screenshot.stat().st_size > 0:
+                    result.income_diagnostic_screenshot = str(screenshot)
+            except Exception:
+                logger.warning("%s：无匹配收入账单诊断截图保存失败", store_name)
+            logger.warning(
+                "%s：%s，收入账单页面=%s，诊断截图=%s",
+                store_name,
+                result.message,
+                result.income_page_url,
+                result.income_diagnostic_screenshot,
+            )
         elif result.uploaded_count == matched_count and not result.failed_items:
             result.status = "success"
             result.message = f"{result.uploaded_count} 个账单已下载、校验并上传"
@@ -1315,8 +1551,12 @@ def _process_thailand(
             result.message = f"{matched_count} 个匹配账单均处理失败"
         return result
     except Exception as exc:
-        result.status = "failed"
-        result.message = str(exc)
+        result.status = "partial_success" if result.uploaded_count else "failed"
+        result.message = (
+            f"已上传 {result.uploaded_count} 个账单，账单收集未完成：{exc}"
+            if result.uploaded_count else str(exc)
+        )
+        result.failed_items.append(str(exc))
         logger.exception("%s 处理失败", store_name)
         return result
     finally:
@@ -1331,8 +1571,12 @@ def _run_one_browser(
     logger: logging.Logger,
 ) -> StoreResult:
     actual_name = str(browser.get("browserName") or "").strip()
-    requested_name = _requested_store_for_browser(actual_name, job.store_names)
+    requested_name = str(browser.get("_withdrawal_requested_store_name") or "").strip()
+    if requested_name not in job.store_names:
+        requested_name = _requested_store_for_browser(actual_name, job.store_names)
     store_id = str(browser.get("browserOauth") or browser.get("browserId") or "")
+    previous_store_name = getattr(_STORE_LOG_CONTEXT, "store_name", "")
+    _STORE_LOG_CONTEXT.store_name = actual_name or requested_name
     driver = None
     running_store_id = store_id
     try:
@@ -1379,18 +1623,25 @@ def _run_one_browser(
         loader.open_launcher_page(driver, opened.get("launcherPage"))
         store_dir = run_dir / job.country / _safe_name(actual_name)
         store_dir.mkdir(parents=True, exist_ok=True)
+        browser_download_dir = str(
+            opened.get("downloadPath") or opened.get("downloadFolderPath") or ""
+        ).strip()
         if job.country in {"PH", "MY"}:
-            result = _process_ph_my(driver, job, actual_name, store_dir, logger)
+            result = _process_ph_my(
+                driver, job, actual_name, store_dir, logger,
+                browser_download_dir=browser_download_dir,
+            )
         else:
             result = _process_thailand(
                 driver,
                 job,
                 actual_name,
-                str(opened.get("downloadPath") or "").strip(),
+                browser_download_dir,
                 store_dir,
                 logger,
             )
         result.requested_store_name = requested_name
+        logger.info("店铺处理完成：状态=%s，%s", result.status, result.message)
         return result
     except Exception as exc:
         logger.exception("%s：店铺执行异常", actual_name or requested_name)
@@ -1415,13 +1666,79 @@ def _run_one_browser(
                 loader.close_store(running_store_id)
             except Exception:
                 logger.warning("%s：关闭紫鸟店铺失败", actual_name, exc_info=True)
+        _STORE_LOG_CONTEXT.store_name = previous_store_name
+
+
+def _prepare_thailand_online_sheet(job, operator_service, logger):
+    app_key, app_secret, user_id = _resolve_drive_credentials(job)
+    token = operator_service.get_access_token(app_key, app_secret)
+    union_id = operator_service.get_union_id(token, user_id)
+    context = operator_service.load_sheet_context(
+        logger, countries=("TH",), credentials=(token, union_id),
+    )
+    rows = operator_service.validate_sheet_period(
+        context, "TH", job.start_date, job.end_date, logger,
+    )
+    logger.info("泰国在线表表头、工作表和统计日期校验通过")
+    return context, rows
+
+
+def _register_thailand_withdrawal(result, job, context, rows, operator_service, logger):
+    """Reuse the operator's guarded write after validated local evidence exists."""
+    if result.status not in {"success", "no_data"} or result.collection_method != "withdrawal_transactions":
+        result.sheet_write_status = "blocked_collection_guard"
+        result.sheet_write_reason = "未取得完整提现流水，在线表未修改"
+        if result.status in {"success", "no_data"}:
+            result.status = "partial_success"
+            result.message += f"；{result.sheet_write_reason}"
+        return
+    try:
+        task = None
+        reason = "在线表没有唯一匹配的店铺行"
+        for name in dict.fromkeys((result.requested_store_name, result.store_name)):
+            task, reason = operator_service.build_store_task_for_collection(
+                name, "TH", context["sheets"]["TH"], rows,
+            )
+            if task is not None:
+                break
+        if task is None:
+            outcome = {"status": "blocked_unmatched", "reason": reason}
+        else:
+            task["expected_trade_time"] = f"{job.start_date}~{job.end_date}"
+            collection = json.loads(Path(result.collection_file).read_text(encoding="utf-8"))
+            if (collection.get("country"), collection.get("store_name"), collection.get("start_date"), collection.get("end_date")) != (
+                "TH", result.store_name, job.start_date, job.end_date,
+            ):
+                raise RuntimeError("本地提现明细的店铺、国家或统计期与本次任务不一致")
+            status = "no_withdrawal" if result.no_data else "success"
+            record = {
+                **collection,
+                "status": status,
+                "collection_outcome": collection.get("outcome"),
+                "trade_time": task["expected_trade_time"],
+            }
+            outcome = operator_service.apply_withdrawal_result_to_sheet(
+                context, task, {"status": status, "record": record}, logger,
+            )
+        result.sheet_write_status = outcome["status"]
+        result.sheet_write_reason = str(outcome.get("reason") or "")
+        if result.sheet_write_status == "written":
+            result.online_sheet_url = operator_service.DINGTALK_DOC_NODE
+            result.message += "；泰国在线表已登记"
+            logger.info("%s：泰国在线表登记完成", result.store_name)
+            return
+    except Exception as exc:
+        result.sheet_write_status = "write_failed"
+        result.sheet_write_reason = f"在线登记失败：{type(exc).__name__}"
+    result.status = "partial_success"
+    result.message += f"；在线表未完成：{result.sheet_write_reason}"
+    logger.warning("%s：%s", result.store_name, result.message)
 
 
 def run_lazada_withdrawal_statistics(
     job: LazadaWithdrawalStatisticsQuery,
     progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    operator_service, withdrawal, LoadSuperBrowser, _ = _reference_modules()
     root = Path(job.output_root or (Path.cwd() / "outputs"))
     run_dir = root / "lazada_withdrawal_statistics" / datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1429,6 +1746,12 @@ def run_lazada_withdrawal_statistics(
     results: list[StoreResult] = []
     loader = None
     try:
+        _resolve_drive_credentials(job)
+        logger.info("钉盘归档配置校验通过")
+        operator_service, withdrawal, LoadSuperBrowser, _ = _reference_modules()
+        online_context, online_rows = (None, [])
+        if job.country == "TH":
+            online_context, online_rows = _prepare_thailand_online_sheet(job, operator_service, logger)
         logger.info(
             "开始 Lazada %s提现统计：%s 至 %s，共 %s 个店铺",
             COUNTRIES[job.country]["name"],
@@ -1459,10 +1782,15 @@ def run_lazada_withdrawal_statistics(
         browser_list = loader.load_super_browser() or []
         if not browser_list:
             raise RuntimeError("未读取到紫鸟浏览器列表")
+        match_diagnostics: dict[str, dict[str, Any]] = {}
         matched, unmatched = operator_service._filter_lazada_stores(
-            browser_list, list(job.store_names), logger
+            browser_list, list(job.store_names), logger,
+            diagnostics=match_diagnostics, target_country=job.country,
         )
         for name in unmatched:
+            diagnostic = match_diagnostics.get(name, {})
+            message = _store_match_failure_message(diagnostic, job.country)
+            logger.warning("%s：%s", name, message)
             results.append(
                 StoreResult(
                     country=job.country,
@@ -1471,7 +1799,9 @@ def run_lazada_withdrawal_statistics(
                     start_date=job.start_date,
                     end_date=job.end_date,
                     status="unmatched_store",
-                    message="未唯一匹配到 Lazada 紫鸟浏览器",
+                    message=message,
+                    match_reason=str(diagnostic.get("reason") or "not_found"),
+                    candidate_store_names=diagnostic.get("candidate_names", []),
                     finished_at=_now_text(),
                 )
             )
@@ -1482,7 +1812,12 @@ def run_lazada_withdrawal_statistics(
                     for browser in matched
                 }
                 for future in as_completed(futures):
-                    results.append(future.result())
+                    result = future.result()
+                    if job.country == "TH":
+                        _register_thailand_withdrawal(
+                            result, job, online_context, online_rows, operator_service, logger,
+                        )
+                    results.append(result)
         if not matched and not results:
             raise RuntimeError("输入店铺均未匹配到 Lazada 紫鸟浏览器")
     except Exception as exc:
@@ -1511,11 +1846,17 @@ def run_lazada_withdrawal_statistics(
     successful = sum(item.status in success_statuses for item in results)
     partial = sum(item.status == "partial_success" for item in results)
     failed = len(results) - successful - partial
-    matched_count = sum(item.status != "unmatched_store" for item in results)
+    unavailable = sum(item.status == "page_unavailable" for item in results)
+    errors = failed - unavailable
+    fallback_count = sum(item.balance_page_unavailable for item in results)
+    matched_count = sum(bool(item.store_name) and item.status != "unmatched_store" for item in results)
     result_file = run_dir / "result.json"
     payload = {
         "success": failed == 0 and partial == 0,
-        "message": f"处理完成：成功 {successful}，部分成功 {partial}，失败/未匹配 {failed}",
+        "message": (
+            f"处理完成：成功 {successful}，部分成功 {partial}，"
+            f"平台未开放 {unavailable}，失败/未匹配 {errors}"
+        ),
         "country": job.country,
         "country_name": COUNTRIES[job.country]["name"],
         "start_date": job.start_date,
@@ -1526,6 +1867,9 @@ def run_lazada_withdrawal_statistics(
         "success_store_count": successful,
         "partial_store_count": partial,
         "failed_store_count": failed,
+        "unavailable_store_count": unavailable,
+        "error_store_count": errors,
+        "fallback_store_count": fallback_count,
         "output_dir": str(run_dir),
         "output_file": str(result_file),
         "log_file": str(log_file),

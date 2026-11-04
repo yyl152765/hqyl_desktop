@@ -46,7 +46,9 @@ def check_update_manifest(manifest_url: str, current_version: str) -> UpdateChec
             package_url=str(manifest.get("package_url") or "").strip(),
             sha256=str(manifest.get("sha256") or "").strip().upper(),
             frontend_url=str(manifest.get("frontend_url") or "").strip(),
-            mandatory=bool(manifest.get("mandatory")),
+            # Updates are always optional, including when an older release
+            # manifest requests a mandatory upgrade.
+            mandatory=False,
         )
     except Exception as exc:
         return UpdateCheckResult(configured=True, current_version=current_version, error=str(exc))

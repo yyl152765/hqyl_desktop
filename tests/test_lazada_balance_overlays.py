@@ -95,6 +95,20 @@ class LazadaBalanceOverlaysTests(unittest.TestCase):
     def add_modal(self, **options):
         self.page.evaluate('window.addModal', options)
 
+    def add_shop_coupon(self, *, component='styles_sMaxAAPopup__dHqcR', dialog=True, offscreen=False, **options):
+        self.add_modal(closeClass='styles_close__UyToY', heading='激活全站推广- 店铺 / 充值并获得 泰铢150优惠券', **options)
+        self.page.evaluate("""options=>{
+          const modal=document.querySelector('[data-fixture-modal]');
+          const content=document.createElement('div');
+          content.className='aplus-auto-exp '+options.component;
+          content.append(...modal.childNodes);modal.append(content);
+          if(!options.dialog)modal.removeAttribute('role');
+          if(options.offscreen){
+            document.body.style.cssText='min-width:1600px;min-height:2000px';
+            modal.style.cssText='position:absolute;left:261px;top:908px';
+          }
+        }""", {'component': component, 'dialog': dialog, 'offscreen': offscreen})
+
     def counts(self):
         return self.page.evaluate('window.counts')
 
@@ -233,10 +247,121 @@ class LazadaBalanceOverlaysTests(unittest.TestCase):
                 self.assertEqual(self.counts()['closed'], ['promo'] if dialog else [])
                 self.assert_business_untouched()
 
+    def test_shop_coupon_close_requires_observed_component_and_dialog(self):
+        for component, dialog, expected in (
+            ('styles_sMaxAAPopup__dHqcR', True, 1),
+            ('styles_unknownPopup__dHqcR', True, 0),
+            ('unknown_styles_sMaxAAPopup__dHqcR', True, 0),
+            ('styles_sMaxAAPopup__dHqcR', False, 0),
+        ):
+            with self.subTest(component=component, dialog=dialog):
+                self.page.set_content(FIXTURE)
+                self.add_shop_coupon(component=component, dialog=dialog)
+                self.assertEqual(helper.dismiss_lazada_ads_overlays(self.driver, timeout=.3), expected)
+                self.assertEqual(self.counts()['closed'], ['promo'] if expected else [])
+                self.assert_business_untouched()
+
+    def test_unique_offscreen_shop_close_is_scrolled_and_rechecked_after_reflow(self):
+        self.page.set_viewport_size({'width': 929, 'height': 883})
+        self.add_shop_coupon(offscreen=True)
+        initial = self.driver.execute_script(helper.ADS_OVERLAY_STATE)
+        self.assertIsNotNone(initial.get('scrollTarget'))
+        self.assertNotIn('close', initial)
+        self.assertEqual(self.page.locator('[data-close]').evaluate("element=>{const r=element.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]}"), [1137, 932])
+
+        def after_execute(script):
+            if script == helper.ADS_SCROLL_CLOSE:
+                self.driver.after_execute = None
+                self.page.evaluate("""()=>{
+                  const close=document.querySelector('[data-close]');
+                  close.style.right='80px';
+                  close.addEventListener('click',()=>window.closeScroll=[scrollX,scrollY]);
+                }""")
+
+        self.driver.after_execute = after_execute
+        self.assertEqual(helper.dismiss_lazada_ads_overlays(self.driver, timeout=1), 1)
+        scripts = self.driver.executed_scripts
+        scrolled_at = scripts.index(helper.ADS_SCROLL_CLOSE)
+        refreshed_at = scripts.index(helper.ADS_OVERLAY_STATE, scrolled_at + 1)
+        self.assertGreater(scripts.index(helper.ADS_CLOSE_HIT, refreshed_at + 1), refreshed_at)
+        self.assertTrue(all(value > 0 for value in self.page.evaluate('window.closeScroll')))
+        self.assertEqual(self.counts()['closed'], ['promo'])
+        self.assert_business_untouched()
+
+    def test_unknown_offscreen_style_close_is_neither_scrolled_nor_clicked(self):
+        self.page.set_viewport_size({'width': 929, 'height': 883})
+        self.add_shop_coupon(component='styles_unknownPopup__dHqcR', offscreen=True)
+        self.assertEqual(helper.dismiss_lazada_ads_overlays(self.driver, timeout=.3), 0)
+        self.assertNotIn(helper.ADS_SCROLL_CLOSE, self.driver.executed_scripts)
+        self.assertEqual(self.page.evaluate('[scrollX,scrollY]'), [0, 0])
+        self.assertEqual(self.counts()['closed'], [])
+        self.assert_business_untouched()
+
+    def test_offscreen_duplicate_close_controls_are_not_scrolled(self):
+        self.page.set_viewport_size({'width': 929, 'height': 883})
+        self.add_shop_coupon(offscreen=True, duplicate=True)
+        with self.assertRaisesRegex(helper.LazadaAdsOverlayError, '无法唯一确认'):
+            helper.dismiss_lazada_ads_overlays(self.driver, timeout=.3)
+        self.assertNotIn(helper.ADS_SCROLL_CLOSE, self.driver.executed_scripts)
+        self.assertEqual(self.counts()['closed'], [])
+        self.assert_business_untouched()
+
+    def test_multiple_offscreen_known_layers_are_not_scrolled(self):
+        self.page.set_viewport_size({'width': 929, 'height': 883})
+        self.add_shop_coupon(offscreen=True)
+        self.add_modal(name='second', closeClass='popupShell_close__G3xsj', heading='降低目标ROI')
+        self.page.evaluate("document.querySelector('[data-fixture-modal=second]').style.cssText='position:absolute;left:261px;top:1300px'")
+        self.assertEqual(helper.dismiss_lazada_ads_overlays(self.driver, timeout=.3), 0)
+        self.assertNotIn(helper.ADS_SCROLL_CLOSE, self.driver.executed_scripts)
+        self.assertEqual(self.counts()['closed'], [])
+        self.assert_business_untouched()
+
+    def test_unknown_cover_after_scroll_blocks_native_close(self):
+        self.page.set_viewport_size({'width': 929, 'height': 883})
+        self.add_shop_coupon(offscreen=True)
+
+        def after_execute(script):
+            if script == helper.ADS_SCROLL_CLOSE:
+                self.driver.after_execute = None
+                self.page.evaluate("document.body.insertAdjacentHTML('beforeend','<div id=unknown-cover><button>充值</button></div>')")
+
+        self.driver.after_execute = after_execute
+        self.assertEqual(helper.dismiss_lazada_ads_overlays(self.driver, timeout=.45), 0)
+        self.assertEqual(self.driver.executed_scripts.count(helper.ADS_SCROLL_CLOSE), 1)
+        self.assertEqual(self.counts()['closed'], [])
+        self.assert_business_untouched()
+
+    def test_close_component_is_reidentified_after_scroll(self):
+        self.page.set_viewport_size({'width': 929, 'height': 883})
+        self.add_shop_coupon(offscreen=True)
+
+        def after_execute(script):
+            if script == helper.ADS_SCROLL_CLOSE:
+                self.driver.after_execute = None
+                self.page.evaluate("document.querySelector('[data-close]').parentElement.className='styles_unknownPopup__fixture'")
+
+        self.driver.after_execute = after_execute
+        self.assertEqual(helper.dismiss_lazada_ads_overlays(self.driver, timeout=.45), 0)
+        self.assertEqual(self.driver.executed_scripts.count(helper.ADS_SCROLL_CLOSE), 1)
+        self.assertNotIn(helper.ADS_CLOSE_HIT, self.driver.executed_scripts)
+        self.assertEqual(self.counts()['closed'], [])
+        self.assert_business_untouched()
+
+    def test_unreachable_fixed_close_stops_after_bounded_scroll_attempts(self):
+        self.page.set_viewport_size({'width': 929, 'height': 883})
+        self.add_shop_coupon()
+        self.page.evaluate("document.querySelector('[role=dialog]').style.cssText='position:fixed;left:261px;top:908px'")
+        self.assertEqual(helper.dismiss_lazada_ads_overlays(self.driver, timeout=.6), 0)
+        self.assertEqual(self.driver.executed_scripts.count(helper.ADS_SCROLL_CLOSE), 3)
+        self.assertNotIn(helper.ADS_CLOSE_HIT, self.driver.executed_scripts)
+        self.assertEqual(self.counts()['closed'], [])
+        self.assert_business_untouched()
+
     def test_unknown_cover_prevents_all_close_clicks(self):
         self.add_modal()
         self.page.evaluate("document.body.insertAdjacentHTML('beforeend','<div id=unknown-cover><button>关闭</button></div>')")
         self.assertEqual(helper.dismiss_lazada_ads_overlays(self.driver, timeout=.3), 0)
+        self.assertNotIn(helper.ADS_SCROLL_CLOSE, self.driver.executed_scripts)
         self.assertEqual(self.counts()['closed'], [])
         self.assert_business_untouched()
 

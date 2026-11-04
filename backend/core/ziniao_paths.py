@@ -78,21 +78,21 @@ def _client_files(value: str | Path) -> list[Path]:
         return []
 
 
-def _preferred_client(values) -> str:
+def _preferred_client(values, *, require_v6: bool = False) -> str:
     files = [path for value in values for path in _client_files(value)]
-    for name in _CLIENT_NAMES:  # Prefer V6 even if the registry lists V5 first.
+    for name in (_CLIENT_NAMES[:1] if require_v6 else _CLIENT_NAMES):
         for path in files:
             if path.name.casefold() == name.casefold():
                 return str(path)
     return ""
 
 
-def resolve_ziniao_client_path() -> str:
+def resolve_ziniao_client_path(*, require_v6: bool = False) -> str:
     """Return a real client executable, or an empty string if none is found."""
-    explicit = _preferred_client([os.environ.get("ZINIAO_CLIENT_PATH", "")])
+    explicit = _preferred_client([os.environ.get("ZINIAO_CLIENT_PATH", "")], require_v6=require_v6)
     if explicit:
         return explicit
-    registered = _preferred_client(_registry_client_paths())
+    registered = _preferred_client(_registry_client_paths(), require_v6=require_v6)
     if registered:
         return registered
     app_root = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
@@ -102,4 +102,4 @@ def resolve_ziniao_client_path() -> str:
     for root in roots:
         folders.extend((root, root / "ziniao", root / "SuperBrowser",
                         root / "Programs" / "ziniao", root / "Programs" / "SuperBrowser"))
-    return _preferred_client(folders)
+    return _preferred_client(folders, require_v6=require_v6)

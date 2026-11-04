@@ -49,16 +49,18 @@ return (() => {
 
 REFRESH_INSTALL = r"""
 return (() => {
-  const [key,selector,expectedRange,loadingSelector]=arguments;
+  const [key,selector,expectedRange,loadingSelector,additionalSelector]=arguments;
   const visible=e=>Boolean(e && e.getClientRects().length && getComputedStyle(e).visibility!=='hidden');
   const roots=()=>[...document.querySelectorAll(selector)].filter(visible);
+  const additionalRoots=()=>additionalSelector ? [...document.querySelectorAll(additionalSelector)].filter(visible) : [];
   const inputs=()=>[...document.querySelectorAll('input[data-testid="beast-core-rangePicker-htmlInput"]')].filter(visible);
   const query=[...document.querySelectorAll('button')].filter(e=>visible(e) && e.textContent.replace(/\s/g,'')==='查询');
   if(roots().length!==1) return {error:'无法唯一确认待处理款项汇总面板'};
   if(query.length!==1 || query[0].disabled || query[0].getAttribute('aria-disabled')==='true') return {error:'查询按钮不可用或不唯一'};
   const button=query[0];
-  const state={root:roots()[0],button,armed:false,mutations:0,saw_loading:false,last_change:performance.now(),error:'',before_text:''};
-  const loading=root=>Boolean(button.disabled || button.getAttribute('aria-busy')==='true' || root?.matches(loadingSelector) || (root && [...root.querySelectorAll(loadingSelector)].some(visible)));
+  const state={root:roots()[0],additional:additionalRoots(),button,armed:false,mutations:0,saw_loading:false,last_change:performance.now(),error:'',before_text:''};
+  const loading=root=>Boolean(button.disabled || button.getAttribute('aria-busy')==='true' || [root,...additionalRoots()].filter(Boolean)
+    .some(e=>e.matches(loadingSelector)||[...e.querySelectorAll(loadingSelector)].some(visible)));
   if(loading(state.root)) return {error:'汇总面板仍在加载，请加载完成后查询'};
   state.sample=()=>{
     const current=roots();
@@ -79,21 +81,24 @@ return (() => {
   state.arm=()=>{
     const current=roots();
     if(current.length!==1 || loading(current[0])) {state.error='点击查询时面板尚未就绪';return;}
-    state.root=current[0];state.before_text=state.root.innerText;state.mutations=0;
+    state.root=current[0];state.additional=additionalRoots();state.before_text=state.root.innerText;state.mutations=0;
     state.saw_loading=false;state.loading=false;state.last_change=performance.now();state.armed=true;
   };
   state.observer=new MutationObserver(records=>{
     if(!state.armed) return;
     const current=roots();
     const next=current.length===1 ? current[0] : null;
+    const nextAdditional=additionalRoots();
+    const observedRoots=[state.root,next,...state.additional,...nextAdditional];
     const contains=(parent,child)=>Boolean(parent && child && (parent===child || parent.contains(child)));
     for(const record of records) {
       if(record.type==='attributes') continue;
-      const related=contains(state.root,record.target) || contains(next,record.target)
-        || [...record.addedNodes,...record.removedNodes].some(node=>contains(node,state.root)||contains(node,next));
+      const related=observedRoots.some(root=>contains(root,record.target))
+        || [...record.addedNodes,...record.removedNodes].some(node=>observedRoots.some(root=>contains(node,root)));
       if(related) {state.mutations++;state.last_change=performance.now();}
     }
     if(next) state.root=next;
+    state.additional=nextAdditional;
     state.sample();
   });
   state.observer.observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true});

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TEMU 活动报名导出</title>
+  <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  <link rel="stylesheet" href="../assets/pages/temu-on-sale-export.css" />
+  <style>
+    .site-choices { display: flex; flex-wrap: wrap; align-content: center; gap: 4px 20px; min-height: 40px; }
+    .site-choices small { width: 100%; font-size: 12px; color: var(--text-secondary, #64748b); }
+    #inspectResult { margin: 12px 18px 0; padding: 12px; border-radius: 8px; background: var(--surface-soft, #f6f8fb); font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #rangeSummary { margin: 0 0 12px; }
+    #exportForm > .range-line { margin: 8px 18px 0; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside id="appSidebar" class="sidebar"></aside>
+    <main class="main">
+      <header class="page-header"><div><div class="page-kicker">紫鸟流程 / TEMU 活动</div><h1>活动报名导出</h1></div><div id="taskBadge" class="status-pill idle">待运行</div></header>
+      <p class="temu-export-note">按店铺导出平台「店铺营销 → 营销活动 → 批量报名活动」的活动申报模板。只做导出，不提交报名，不改动平台数据；导出完成后逐个店铺核对站点、活动主题与报价行数。</p>
+      <section class="layout-grid">
+        <form id="exportForm" class="surface form-surface">
+          <div class="section-head"><div><h2>导出条件</h2><p>每个店铺导出一份原始模板，文件名带店铺名、站点和运行日期。</p></div><span class="section-badge">手动运行</span></div>
+          <div class="flow-account-bar"><span class="flow-account-icon ziniao-icon">Z</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span><a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a></div>
+          <div class="form-grid">
+            <label class="store-field"><span>紫鸟店铺名 <small>每行一个，可输入能够唯一匹配的名称</small></span><textarea id="storeNames" required spellcheck="false" placeholder="每行输入一个店铺名"></textarea></label>
+            <div><span>本次站点 <small>只导出勾选的站点，导出文件按站点复核</small></span>
+              <div class="site-choices">
+                <label class="checkbox-field"><input id="sitePH" type="checkbox" checked /><span>菲律宾</span></label>
+                <label class="checkbox-field"><input id="siteMY" type="checkbox" /><span>马来西亚</span></label>
+                <label class="checkbox-field"><input id="siteTH" type="checkbox" /><span>泰国</span></label>
+              </div>
+            </div>
+            <label><span>运行日期 <small>北京时间，用作文件名和后续审核基准</small></span><input id="businessDate" type="date" required /></label>
+            <label class="store-field"><span>输出目录</span><div class="input-action"><input id="outputDir" required placeholder="输入或选择本地输出目录" /><button id="chooseOutputBtn" class="secondary" type="button">选择目录</button></div></label>
+          </div>
+          <div id="startIssues" class="temu-export-warning" hidden role="alert"></div>
+          <div class="actions"><button id="startBtn" class="primary" type="submit" disabled>开始导出</button><button id="inspectBtn" class="secondary" type="button">检查页面结构</button></div>
+          <p class="temu-export-note range-line">导出范围：限时秒杀、官方大促、专题活动，专题主题自动排除名称含「清仓」等关键词的项；商品按每页 100 条遍历全部分页后全选。</p>
+          <p class="temu-export-note range-line">「检查页面结构」只打开第一个店铺并读取页面标签，不导出、不点击活动，用于首次实机核对页面元素。</p>
+        </form>
+        <div class="right-stack"><section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>查看逐店导出进度与错误。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section></div>
+      </section>
+      <section class="surface"><div class="section-head"><div><h2>导出结果</h2><p id="resultMessage" aria-live="polite">尚未运行。</p></div><span id="batchLabel" class="section-badge">尚无批次</span></div>
+        <div class="actions"><button id="openDirectoryBtn" type="button" class="primary" disabled>打开结果目录</button><button id="retryBtn" type="button" class="secondary" disabled>重试失败店铺</button></div>
+        <p id="rangeSummary" class="temu-export-note" aria-live="polite" hidden></p>
+        <div class="collection-table-wrap"><table><thead><tr><th>店铺名</th><th>状态</th><th>报价行</th><th>库存行</th><th>活动主题</th><th>站点</th><th>说明</th></tr></thead><tbody id="storeResults"><tr><td colspan="7">尚未运行</td></tr></tbody></table></div>
+        <pre id="inspectResult" hidden></pre>
+      </section>
+      <span id="statusText" hidden></span>
+    </main>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="../assets/common.js?v=20260623-log-panel"></script>
+  <script src="../assets/pages/temu-activity-export.js"></script>
+</body>
+</html>

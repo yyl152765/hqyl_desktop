@@ -186,6 +186,33 @@ class WithdrawalWorkbookTests(unittest.TestCase):
 
 
 class StatementWorkbookTests(unittest.TestCase):
+    def test_english_statement_period_header_supports_malaysia_export(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "my-statement.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["Statement Number", "Statement Period", "Amount"])
+            sheet.append(["MYTEST-2026-0930", "01 Sep 2026 - 30 Sep 2026", 10])
+            workbook.save(path)
+            workbook.close()
+            actual = service.validate_statement_file(
+                path, "MYTEST-2026-0930", "01 Sep 2026 - 30 Sep 2026",
+            )
+            self.assertEqual(actual["statement_number"], "MYTEST-2026-0930")
+
+    def test_english_statement_period_header_supports_philippines_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "ph-statement.csv"
+            path.write_text(
+                "Statement Number,Statement Period,Amount\n"
+                "PHTEST-2026-0930,01 Sep 2026 - 30 Sep 2026,10\n",
+                encoding="utf-8-sig",
+            )
+            actual = service.validate_statement_file(
+                path, "PHTEST-2026-0930", "01 Sep 2026 - 30 Sep 2026",
+            )
+            self.assertEqual(actual["statement_number"], "PHTEST-2026-0930")
+
     def _make_workbook(self, path: Path, statement: str, period: str) -> None:
         workbook = Workbook()
         sheet = workbook.active

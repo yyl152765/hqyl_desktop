@@ -26,6 +26,11 @@
           <form id="balanceForm" class="surface form-surface">
             <div class="section-head"><div><h2>统计条件</h2><p>采集运行时页面的 Income、Balance、Ads 和最新提现的处理中金额。</p></div><span class="section-badge">多站点</span></div>
             <div class="flow-account-bar"><span class="flow-account-icon ziniao-icon">Z</span><span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span><a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a></div>
+            <div id="clientSetup" class="balance-note">
+              <p id="clientStatus" aria-live="polite">正在检测紫鸟 V6…</p>
+              <div class="actions"><button id="downloadClientBtn" class="secondary" type="button">下载紫鸟 V6</button><button id="refreshClientBtn" class="secondary" type="button">重新检测</button><button id="chooseClientBtn" class="secondary" type="button">选择已安装客户端</button></div>
+              <p>开始统计或重试时会关闭本机当前用户已打开的该紫鸟客户端及其店铺窗口，再以自动化模式启动。请先保存紫鸟窗口中的操作。</p>
+            </div>
             <div class="form-grid">
               <label><span>站点</span><select id="balanceCountry" aria-describedby="countryHint"><option value="AUTO">自动识别每家店铺</option><option value="PH">菲律宾</option><option value="MY">马来西亚</option><option value="TH">泰国</option><option value="ID">印度尼西亚</option><option value="VN">越南</option><option value="SG">新加坡</option></select><small id="countryHint">自动识别可在一个批次内处理多个站点。</small></label>
               <label class="store-field"><span>紫鸟店铺完整名称 <small>每行一个</small></span><textarea id="storeNames" required spellcheck="false" placeholder="输入紫鸟中的完整店铺名称，每行一个"></textarea></label>
@@ -33,7 +38,7 @@
             </div>
             <div id="startIssues" class="balance-warning" role="alert" hidden></div>
             <div class="actions"><button id="startBtn" class="primary" type="submit" disabled>开始统计</button></div>
-            <p class="balance-note">每次处理一家店，保存四项金额与对应页面截图。按各店原币种记录，并保留负数；未能取得的金额会标明原因。</p>
+            <p class="balance-note">Excel 在同一张“余额统计”表中依次排列 Income、Income截图、Balance、Balance截图、Ads、Ads截图、processing、processing截图。截图列只显示图片，店铺名和采集时间使用独立列；Balance 截图包含当前页提现记录。最新提现成功或无记录时，processing 金额留空，仍保存状态截图。按各店原币种记录并保留负数，未能取得的金额会标明原因。</p>
           </form>
           <div class="right-stack"><section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>查看站点识别、页面校验、金额采集和截图进度。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section></div>
         </section>

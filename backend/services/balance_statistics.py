@@ -127,14 +127,14 @@ def _normalize_collection(raw: dict, platform: str, country: str, evidence_dir: 
     result["field_errors"] = {str(field): _safe_text(error, request) for field, error in errors.items() if error}
     for field in FIELDS[platform]:
         value = values.get(field)
-        exempt = (platform == "lazada" and (
-            (field == "processing" and value is None and exemptions.get(field) in {"withdrawal_success", "no_withdrawal"})
-            or (field == "balance" and str(value) in {"0", "0.00"} and exemptions.get(field) == "cross_border_unavailable")
-        ))
-        if exempt:
+        empty_processing = (platform == "lazada" and field == "processing" and value is None
+                            and exemptions.get(field) in {"withdrawal_success", "no_withdrawal"})
+        exempt_image = (platform == "lazada" and field == "balance" and str(value) in {"0", "0.00"}
+                        and exemptions.get(field) == "cross_border_unavailable")
+        if empty_processing or exempt_image:
             result["evidence_exemptions"][field] = exemptions[field]
         if value is None:
-            if field != "processing" or not exempt:
+            if not empty_processing:
                 result["field_errors"].setdefault(field, "页面未提供可核实的金额")
         else:
             try:
@@ -146,8 +146,9 @@ def _normalize_collection(raw: dict, platform: str, country: str, evidence_dir: 
                 result["values"][field] = format(amount, "f")
             except (InvalidOperation, ValueError):
                 result["field_errors"][field] = "页面金额不是有效数字"
-        if exempt:
-            # These documented branches deliberately have no screenshot.
+        if exempt_image:
+            # Only an explicitly unavailable cross-border balance is exempt.
+            # A blank processing amount still needs its withdrawal-page proof.
             continue
         image_path = evidence.get(field)
         if image_path:
@@ -162,7 +163,7 @@ def _normalize_collection(raw: dict, platform: str, country: str, evidence_dir: 
                     result["field_errors"].setdefault(field, "截图文件无效")
             else:
                 result["field_errors"].setdefault(field, "截图文件不存在或不属于本次店铺采集")
-        elif not exempt:
+        else:
             result["field_errors"].setdefault(field, "缺少页面截图")
     result["country"] = _safe_text(raw.get("country"), request).upper()
     result["currency"] = _safe_text(raw.get("currency"), request).upper()
@@ -254,10 +255,9 @@ def _invalidate_missing_saved_evidence(row: dict, platform: str) -> None:
     exemptions = row.get("evidence_exemptions") or {}
     values = row.get("values") or {}
     for field in FIELDS[platform]:
-        exempt = platform == "lazada" and (
-            (field == "processing" and values.get(field) is None and exemptions.get(field) in {"withdrawal_success", "no_withdrawal"})
-            or (field == "balance" and str(values.get(field)) in {"0", "0.00"} and exemptions.get(field) == "cross_border_unavailable")
-        )
+        exempt = (platform == "lazada" and field == "balance"
+                  and str(values.get(field)) in {"0", "0.00"}
+                  and exemptions.get(field) == "cross_border_unavailable")
         image_path = evidence.get(field)
         if not image_path and exempt:
             continue
@@ -302,7 +302,11 @@ def _run(request: dict, path: Path, record: dict, progress, browser_factory, col
                 browser = (browser_factory or ZiniaoBrowser)(request)
                 if getattr(browser, "profile", account_profile(request)) != account_profile(request):
                     raise ValueError("紫鸟会话账号与请求账号不一致")
-                browser.ready()
+                prepare = getattr(browser, "prepare_task", None)
+                if callable(prepare):
+                    prepare(progress=log)
+                else:
+                    browser.ready()
                 catalog = browser.list_stores()
                 collect = (collectors or {}).get(platform) or _collector(platform)
                 halted = ""

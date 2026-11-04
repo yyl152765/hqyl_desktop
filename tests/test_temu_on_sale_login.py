@@ -25,11 +25,18 @@ class Driver:
         self.confirm_buttons=[]
         self.execute_script=Mock(return_value={'filled':True,'confirmation':False,'challenge':False})
         self.labels=[self.agreement]
+        self.refresh=Mock()
 
     def show_confirmation(self):
         self.execute_script.return_value.update(filled=False,confirmation=True)
         self.login_buttons=[]
         self.confirm_buttons=[self.confirm_button]
+
+    @property
+    def current_window_handle(self):
+        if self.active not in self.window_handles:
+            raise NoSuchWindowException('closed')
+        return self.active
 
     @property
     def current_url(self):
@@ -140,4 +147,52 @@ class TemuLoginTests(unittest.TestCase):
         driver.execute_script.return_value['filled']=False
         with patch('backend.services.temu_on_sale_login.time.monotonic',side_effect=[0,1,61]):
             with self.assertRaisesRegex(ValueError,'未完成'): ensure_temu_session(driver)
+        driver.button.click.assert_not_called()
+
+    def test_waiting_for_autofill_does_not_cycle_through_tabs(self):
+        driver=Driver()
+        driver.window_handles=['main','login']
+        driver.execute_script.return_value['filled']=False
+        with patch('backend.services.temu_on_sale_login.time.monotonic',side_effect=[0,1,2,3,61]):
+            with self.assertRaisesRegex(ValueError,'未完成'):
+                ensure_temu_session(driver)
+        self.assertEqual(driver.switch_to.window.call_args_list, [unittest.mock.call('login')])
+        driver.button.click.assert_not_called()
+
+    def test_cdp_metadata_returns_to_authenticated_business_tab_without_scanning(self):
+        driver=Driver()
+        driver.window_handles=['main','login','unrelated']
+        driver.active='login'
+        driver.logged_in=True
+        driver.execute_cdp_cmd=Mock(return_value={'targetInfos':[
+            {'type':'page','targetId':'main','url':'https://agentseller.temu.com/main'},
+            {'type':'page','targetId':'login','url':'https://seller.kuajingmaihuo.com/settle/seller-login'},
+            {'type':'page','targetId':'unrelated','url':'about:blank'}]})
+        self.assertEqual(ensure_temu_session(driver),'main')
+        driver.switch_to.window.assert_called_once_with('main')
+
+    def test_existing_current_business_tab_is_not_reactivated(self):
+        driver=Driver()
+        driver.logged_in=True
+        self.assertEqual(ensure_temu_session(driver),'main')
+        driver.switch_to.window.assert_not_called()
+
+    def test_public_key_failure_refreshes_login_tab_once_then_can_complete(self):
+        driver=Driver()
+        driver.window_handles=['login']
+        driver.active='login'
+        driver.execute_script.side_effect=[{'key_error':True,'challenge':False},
+                                           {'filled':True,'confirmation':False,'challenge':False}]
+        self.assertEqual(ensure_temu_session(driver),'main')
+        driver.refresh.assert_called_once()
+        driver.button.click.assert_called_once()
+
+    def test_persistent_public_key_failure_stops_without_login_retries(self):
+        driver=Driver()
+        driver.window_handles=['login']
+        driver.active='login'
+        driver.execute_script.return_value={'key_error':True,'challenge':False,'filled':True}
+        with self.assertRaisesRegex(ValueError,'公钥.*刷新一次'):
+            ensure_temu_session(driver)
+        driver.refresh.assert_called_once()
         driver.button.click.assert_not_called()

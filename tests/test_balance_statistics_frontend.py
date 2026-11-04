@@ -28,7 +28,7 @@ const fs = require('fs'), path = require('path'), vm = require('vm'), assert = r
 const elements = new Map();
 function element() {
   return {value:'',textContent:'',hidden:false,disabled:false,children:[],listeners:{},
-    classList:{add(){},remove(){}}, addEventListener(name,fn){this.listeners[name]=fn;},
+    classList:{add(){},remove(){},toggle(){}}, addEventListener(name,fn){this.listeners[name]=fn;},
     appendChild(child){this.children.push(child);},replaceChildren(){this.children=[];},
     setAttribute(){},scrollHeight:0,scrollTop:0,clientHeight:0};
 }
@@ -103,7 +103,9 @@ MOCK_BRIDGE = r"""(() => {
     get_app_info: async () => ({ok:true,app:{name:'测试平台',version:'dev'},settings:{output_dir:'D:/output'},account_state:{accounts:window.testAccounts,active_account_ids:{ziniao:'ziniao-a'}}}),
     get_sidebar_preferences: async () => ({ok:true,preferences:null}),
     save_sidebar_preferences: async () => ({ok:true}),
-    get_balance_statistics_info: async payload => {window.testInfoPayload=payload;return {ok:true,month:'2026-08',output_dir:'D:/output',countries:[{code:'PH',name:'菲律宾'},{code:'MY',name:'马来西亚'},{code:'TH',name:'泰国'},{code:'ID',name:'印度尼西亚'},{code:'VN',name:'越南'},{code:'SG',name:'新加坡'}]};},
+    get_balance_statistics_info: async payload => {window.testInfoPayload=payload;return {ok:true,client_installed:window.clientInstalled!==false,month:'2026-08',output_dir:'D:/output',countries:[{code:'PH',name:'菲律宾'},{code:'MY',name:'马来西亚'},{code:'TH',name:'泰国'},{code:'ID',name:'印度尼西亚'},{code:'VN',name:'越南'},{code:'SG',name:'新加坡'}]};},
+    open_ziniao_download: async () => {window.downloadOpened=true;return {ok:true};},
+    choose_client_path: async () => {window.clientInstalled=true;return {ok:true,path:'D:/installed/ziniao.exe'};},
     get_latest_task_status: async tool => window.restoreFixture && tool === platform+'_balance_statistics' ? task('success') : ({ok:false,empty:true}),
     get_task_status: async () => task(window.testTerminal ? 'success' : 'running'),
     start_balance_statistics: async payload => {
@@ -188,6 +190,20 @@ class BalanceStatisticsFrontendTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate("window.testStarted"), [{
             "platform": "lazada", "account_id": "ziniao-a", "country": "VN", "store_names": "越南店铺", "output_dir": "D:/output",
         }])
+        self.assertEqual(self.errors, [])
+
+    def test_missing_v6_download_detection_and_manual_path_before_start(self):
+        self.open('lazada', setup='window.clientInstalled=false;')
+        self.page.locator('#storeNames').fill('测试店铺')
+        expect(self.page.locator('#startBtn')).to_be_disabled()
+        expect(self.page.locator('#clientStatus')).to_contain_text('未检测到紫鸟 V6')
+        self.page.locator('#downloadClientBtn').click()
+        self.assertTrue(self.page.evaluate('window.downloadOpened'))
+        self.page.locator('#chooseClientBtn').click()
+        expect(self.page.locator('#startBtn')).to_be_enabled()
+        self.page.locator('#startBtn').click()
+        self.assertEqual(self.page.evaluate('window.testStarted[0].client_path'), 'D:/installed/ziniao.exe')
+        expect(self.page.locator('#refreshClientBtn')).to_be_disabled()
         self.assertEqual(self.errors, [])
 
     def test_result_distinguishes_missing_from_zero_preserves_negative_and_escapes_content(self):

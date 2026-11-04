@@ -10,6 +10,12 @@ from launcher.main import resolve_entry_html, self_check
 
 
 class LauncherPageTests(unittest.TestCase):
+    def test_temu_activity_export_has_development_entry_and_menu(self) -> None:
+        page = resolve_entry_html(["--page=temu-activity-export"])
+        self.assertEqual(page.name, "temu-activity-export.html")
+        frontend = Path(__file__).resolve().parents[1] / "frontend" / "assets"
+        self.assertIn('id: "temu_activity_export", href: "temu-activity-export.html"', (frontend / "common.js").read_text(encoding="utf-8"))
+        self.assertIn('temu_activity_export: { href: "temu-activity-export.html"', (frontend / "pages" / "dashboard.js").read_text(encoding="utf-8"))
     def test_bigseller_claim_query_has_development_entry(self) -> None:
         self.assertEqual(resolve_entry_html(["--page=bigseller-claim-query"]).name, "bigseller-claim-query.html")
 

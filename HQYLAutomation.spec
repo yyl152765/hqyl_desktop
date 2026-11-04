@@ -53,6 +53,7 @@ balance_statistics_modules = [
     "backend.services.lazada_balance_login",
     "backend.services.lazada_balance_language",
     "backend.services.lazada_balance_overlays",
+    "backend.services.lazada_balance_view",
     "util.ziniao_window_position",
 ]
 
