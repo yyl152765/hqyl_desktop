@@ -38,6 +38,13 @@ from backend.services.mabang_arrival_query import (
     run_mabang_arrival_query,
     validate_arrival_query_payload,
 )
+from backend.services.mabang_order_sku_export import (
+    DEFAULT_FIELDS as ORDER_SKU_DEFAULT_FIELDS,
+    FIELD_DEFINITIONS as ORDER_SKU_FIELD_DEFINITIONS,
+    parse_order_number_file as parse_mabang_order_number_file,
+    run_mabang_order_sku_export,
+    validate_order_sku_export_payload,
+)
 from backend.services.lz_warehouse_inventory import (
     TARGET_WAREHOUSE_NAMES as LZ_INVENTORY_WAREHOUSES,
     fetch_lz_inventory_warehouses,
@@ -240,6 +247,13 @@ class AppBridge:
                     "key": "mabang_arrival_query",
                     "name": "到货查询与导出",
                     "description": "批量按备注查询调拨批次并导出到货明细 Excel。",
+                    "status": "ready",
+                    "vendor": "mabang",
+                },
+                {
+                    "key": "mabang_order_sku_export",
+                    "name": "订单批量查询与 SKU 汇总",
+                    "description": "导入订单编号，按编号批量查询订单并汇总唯一 SKU 清单。",
                     "status": "ready",
                     "vendor": "mabang",
                 },
@@ -649,6 +663,138 @@ class AppBridge:
                 "account_id": str(request_payload.get("account_id") or ""),
                 "remark_count": len(job.remarks),
                 "output_root": str(job.output_dir),
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # 马帮：订单批量查询与 SKU 汇总
+    # ------------------------------------------------------------------
+
+    def get_mabang_order_sku_export_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            settings = self.config_store.load()
+            account_id = str((payload or {}).get("account_id") or settings.active_account_ids.get("mabang") or "").strip()
+            account = next(
+                (item for item in settings.accounts if item.vendor == "mabang" and item.id == account_id),
+                None,
+            )
+            return {
+                "ok": True,
+                "account_id": account.id if account else "",
+                "account_name": account.name if account else "",
+                "fields": [
+                    {"key": key, "label": label, "default": default}
+                    for key, label, default in ORDER_SKU_FIELD_DEFINITIONS
+                ],
+                "default_fields": list(ORDER_SKU_DEFAULT_FIELDS),
+                "output_dir": resolve_output_directories(settings, "mabang_order_sku_export")["output_dir"],
+                "max_batch": 2000,
+                "max_total": 50000,
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def choose_mabang_order_file(self) -> dict[str, Any]:
+        try:
+            import webview
+
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=(
+                    "订单号文件 (*.xlsx;*.xlsm;*.xls)",
+                    "文本文件 (*.csv;*.txt)",
+                    "所有文件 (*.*)",
+                ),
+            )
+            if not result:
+                return {"ok": False, "cancelled": True}
+            selected = result[0] if isinstance(result, (list, tuple)) else result
+            return self.inspect_mabang_order_file(str(selected))
+        except Exception:
+            return {"ok": False, "error": "打开文件选择器失败，请直接粘贴订单编号"}
+
+    def inspect_mabang_order_file(self, path: str = "") -> dict[str, Any]:
+        try:
+            target = str(path or "").strip().strip('"')
+            if not target:
+                return {"ok": False, "error": "请先选择订单编号文件"}
+            preview = parse_mabang_order_number_file(target)
+            numbers = list(preview.numbers)
+            return {
+                "ok": True,
+                "path": preview.source_file,
+                "name": Path(preview.source_file).name,
+                "sheet_name": preview.sheet_name,
+                "column_name": preview.column_name,
+                "order_count": len(numbers),
+                "raw_row_count": preview.raw_row_count,
+                "duplicate_count": preview.duplicate_count,
+                "invalid_count": preview.invalid_count,
+                "header_detected": preview.header_detected,
+                "preview": numbers[:200],
+                "preview_truncated": len(numbers) > 200,
+            }
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            return {"ok": False, "error": "读取订单编号文件失败，请确认文件未加密且格式正确"}
+
+    def start_mabang_order_sku_export(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            request_payload = self._payload_with_account(payload, "mabang")
+            directories = resolve_output_directories(self.config_store.load(), "mabang_order_sku_export")
+            if not str(request_payload.get("output_dir") or "").strip():
+                request_payload["output_dir"] = directories["output_dir"]
+            job = validate_order_sku_export_payload(request_payload)
+            self.config_store.save(
+                {"tool_output_dirs": {directory_scope_key("mabang_order_sku_export"): str(job.output_dir)}}
+            )
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            return {"ok": False, "error": "读取参数或订单编号失败，请检查文件和账号配置"}
+
+        def runner(progress):
+            result = run_mabang_order_sku_export(job, progress)
+            unique_skus = list(result.unique_skus)
+            not_found = list(result.not_found_orders)
+            preview_skus = unique_skus[:200]
+            return {
+                "input_order_count": result.input_order_count,
+                "matched_order_count": result.matched_order_count,
+                "matched_order_numbers": list(result.matched_order_numbers[:200]),
+                "not_found_count": len(not_found),
+                "not_found_orders": not_found[:200],
+                "detail_row_count": result.detail_row_count,
+                "unique_sku_count": result.unique_sku_count,
+                "unique_skus": [
+                    {
+                        "sku": item.sku,
+                        "product_name": item.product_name,
+                        "order_count": item.order_count,
+                        "total_quantity": item.total_quantity,
+                        "order_numbers": " / ".join(item.order_numbers[:10]),
+                    }
+                    for item in preview_skus
+                ],
+                "unique_sku_truncated": len(unique_skus) > len(preview_skus),
+                "preview_rows": list(result.preview_rows),
+                "output_file": str(result.output_file),
+                "output_dir": str(result.output_dir),
+            }
+
+        return self.tasks.start(
+            "马帮订单SKU汇总",
+            runner,
+            tool="mabang_order_sku_export",
+            context={
+                "account_id": str(request_payload.get("account_id") or ""),
+                "order_count": len(job.order_numbers),
+                "source_file": str(request_payload.get("source_file") or ""),
+                "output_dir": str(job.output_dir),
             },
         )
 

@@ -41,6 +41,7 @@ const HQYL = (() => {
       { id: "sample_registration", href: "sample-registration.html", name: "网红寄样登记", icon: "样", tag: "TikTok", category: "TikTok", description: "样品订单查询与导出", keywords: "达人 钉钉 同步" },
       { id: "developer_sales_income_summary", href: "developer-sales-income-summary.html", name: "开发与销售收入汇总", icon: "汇", tag: "采购", category: "采购流程", description: "付款日期 · 美元收入", keywords: "开发员 订单金额 报表" },
       { id: "mabang_arrival_query", href: "mabang-arrival-query.html", name: "到货查询", icon: "到", tag: "调拨", category: "仓库调拨", description: "按备注查询调拨并导出", keywords: "仓储 仓库" },
+      { id: "mabang_order_sku_export", href: "mabang-order-sku-export.html", name: "订单SKU汇总", icon: "SKU", tag: "订单", category: "订单管理", description: "导入订单号批量查询并汇总唯一 SKU", keywords: "订单 批量查询 订单导出 SKU 去重 唯一 汇总 订单编号" },
       { id: "mabang_income_expense_report", href: "mabang-income-expense-report.html", name: "收支报表", icon: "收", tag: "财务", category: "通用工具", description: "按分类、海外仓和发货时间导出", keywords: "收入 支出 财务导出" },
       { id: "temu_shipping_channel", href: "temu-shipping-channel.html", name: "TEMU发货渠道更改", icon: "运", tag: "TEMU", category: "物流授权", description: "按 Excel 顺序设置已开启渠道的长宽高和重量", keywords: "物流 发货 渠道 申报 重量" },
       { id: "mabang_warehouse_permission", href: "mabang-warehouse-permission.html", name: "仓库权限开通", icon: "仓", tag: "权限", category: "通用工具", description: "批量添加员工仓库", keywords: "授权 仓储 员工权限" },
@@ -805,7 +806,7 @@ const HQYL = (() => {
       const code = country || (tool === "lazada_ads_data" || tool === "lazada_bill_detail" ? "TH" : "");
       const name = { TH: "泰国", PH: "菲律宾", MY: "马来西亚", ID: "印尼", VN: "越南" }[code] || "泰国";
       const root = "C:\\Users\\Demo\\Desktop\\log";
-      const folder = { lazada_ads_data: "lz泰国广告数据", temu_activity_export: "TEMU活动报名导出", temu_financial_export: "TEMU财务报表导出", lz_warehouse_inventory: "lz各仓库存" }[tool] || "lz各仓库存";
+      const folder = { mabang_order_sku_export: "马帮订单SKU汇总", lazada_ads_data: "lz泰国广告数据", temu_activity_export: "TEMU活动报名导出", temu_financial_export: "TEMU财务报表导出", lz_warehouse_inventory: "lz各仓库存" }[tool] || "lz各仓库存";
       const defaults = tool === "lazada_bill_detail"
         ? { output_dir: `${root}\\Lazada${name}账单明细`, screenshot_root: `${root}\\Lazada${name}账单明细截图` }
         : { output_dir: `${root}\\${folder}` };
@@ -888,6 +889,63 @@ const HQYL = (() => {
       async start_developer_sales_income_summary() { return startPreviewTask("developer_sales_income_summary", { developer_count: 2, salesperson_count: 4, source_row_count: 86, missing_developer_names: [], output_file: "C:\\Preview\\开发与销售收入汇总.xlsx", output_dir: "C:\\Preview" }); },
       async start_mabang_income_expense_report() { return startPreviewTask("mabang_income_expense_report", { target_count: 3, category_count: 0, warehouse_count: 3, csv_file_count: 3, record_count: 1286, output_files: ["C:\\Preview\\印尼雅仓海外仓_收支报表.csv", "C:\\Preview\\菲律宾雅仓海外仓_收支报表.csv", "C:\\Preview\\马来雅仓海外仓_收支报表.csv"], output_dir: "C:\\Preview\\马帮收支报表" }); },
       async start_purchase_log_query() { return startPreviewTask("purchase_log", { sku_count: 2, record_count: 8, output_file: "C:\\Preview\\采购.xlsx", output_dir: "C:\\Preview" }); },
+      async get_mabang_order_sku_export_info() {
+        const fields = [
+          ["order_no", "订单编号", true], ["shop", "店铺", true], ["platform", "平台", true],
+          ["order_status", "订单状态", true], ["pay_time", "付款时间", true], ["create_time", "创建时间", false],
+          ["buyer", "客户姓名", false], ["sku", "SKU", true], ["product_name", "商品中文名称", true],
+          ["quantity", "数量", true], ["unit_price", "商品单价", false], ["amount", "商品金额", false],
+          ["order_weight", "订单重量(g)", false], ["ship_time", "发货时间", false], ["sales", "店长", false],
+          ["mabang_order_id", "马帮订单ID", false],
+        ];
+        return {
+          ok: true,
+          fields: fields.map(([key, label, isDefault]) => ({ key, label, default: isDefault })),
+          default_fields: fields.filter((item) => item[2]).map((item) => item[0]),
+          output_dir: previewScopedDirs("mabang_order_sku_export").output_dir,
+          max_batch: 2000,
+          max_total: 50000,
+        };
+      },
+      async choose_mabang_order_file() {
+        return {
+          ok: true,
+          path: "C:\\Preview\\订单编号.xlsx",
+          name: "订单编号.xlsx",
+          sheet_name: "Sheet1",
+          column_name: "订单编号",
+          order_count: 128,
+          raw_row_count: 133,
+          duplicate_count: 3,
+          invalid_count: 2,
+          header_detected: true,
+          preview: ["261105GEBJ0W71", "261105GE99KNYV", "261105GE97NM37"],
+          preview_truncated: true,
+        };
+      },
+      async start_mabang_order_sku_export() {
+        const uniqueSkus = [
+          { sku: "hqkmh0197B", product_name: "RD收纳包_小狗(400/箱)", order_count: 2, total_quantity: 2, order_numbers: "261105GE99KNYV / 261105GEHC0AGB" },
+          { sku: "hqsI4353D", product_name: "JRH地垫-追梦海星", order_count: 1, total_quantity: 1, order_numbers: "261105GE97NM37" },
+          { sku: "hqsI9032G", product_name: "LM圣诞地垫-0813圣诞爆款", order_count: 1, total_quantity: 3, order_numbers: "261105GEBJ0W71" },
+        ];
+        const task = startPreviewTask("mabang_order_sku_export", {
+          input_order_count: 128,
+          matched_order_count: 126,
+          matched_order_numbers: ["261105GEBJ0W71", "261105GE99KNYV"],
+          not_found_count: 2,
+          not_found_orders: ["NOT-EXIST-9527", "NOT-EXIST-9528"],
+          detail_row_count: 166,
+          unique_sku_count: 163,
+          unique_skus: uniqueSkus,
+          unique_sku_truncated: true,
+          preview_rows: uniqueSkus,
+          output_file: "C:\\Preview\\马帮订单SKU汇总\\马帮订单SKU汇总_20261105_160000.xlsx",
+          output_dir: "C:\\Preview\\马帮订单SKU汇总",
+        });
+        task.context = { account_id: activeAccountIds.mabang || "", order_count: 128, output_dir: "C:\\Preview\\马帮订单SKU汇总" };
+        return task;
+      },
       async start_mabang_arrival_query() { return startPreviewTask("mabang_arrival_query", { remark_count: 3, matched_remark_count: 2, matched_batch_count: 2, exported_batch_count: 2, unmatched_remarks: ["未命中示例备注"], output_file: "C:\\Preview\\到货查询\\到货查询_20260825_090000_第一车.xls", output_files: ["C:\\Preview\\到货查询\\到货查询_20260825_090000_第一车.xls", "C:\\Preview\\到货查询\\到货查询_20260825_090000_第二车.xls"], file_count: 2, output_dir: "C:\\Preview\\到货查询", output_root: "C:\\Preview", exports: [{ remark: "第一车", matched_batch_count: 1, output_file: "C:\\Preview\\到货查询\\到货查询_20260825_090000_第一车.xls" }, { remark: "第二车", matched_batch_count: 1, output_file: "C:\\Preview\\到货查询\\到货查询_20260825_090000_第二车.xls" }] }); },
       async get_lz_warehouse_inventory_info(payload = {}) {
         const id = payload.account_id || activeAccountIds.mabang;

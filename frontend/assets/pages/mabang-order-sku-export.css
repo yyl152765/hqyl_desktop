@@ -1,0 +1,193 @@
+/* 马帮订单批量查询与 SKU 汇总 */
+
+#orderSkuForm .form-surface,
+#orderSkuForm .form-grid {
+  align-items: start;
+}
+
+.order-paste-field {
+  display: grid;
+  gap: 8px;
+  padding: 0 18px 4px;
+}
+
+.order-paste-field > span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted-strong);
+}
+
+.order-paste-field > span small {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.order-paste-field textarea {
+  min-height: 128px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.field-picker {
+  margin: 14px 18px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 14px 16px 16px;
+}
+
+.field-picker-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.field-picker-head strong {
+  font-size: 13px;
+}
+
+.field-picker-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.field-picker-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.field-option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 8px 10px;
+}
+
+.field-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.field-option:hover {
+  border-color: var(--green);
+}
+
+.field-option.is-checked {
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 10%, #ffffff);
+}
+
+.field-option.is-locked {
+  cursor: default;
+  color: var(--muted-strong);
+  background: #f1f5f9;
+  border-color: var(--border);
+}
+
+.field-option input {
+  margin: 0;
+  accent-color: var(--green);
+}
+
+.inline-switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  padding: 12px 18px 0;
+}
+
+.result-surface {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.result-table-wrap {
+  overflow: auto;
+  max-height: 320px;
+  border-top: 1px solid var(--border);
+}
+
+.result-table {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.result-table thead th:nth-child(2),
+.result-table tbody td:nth-child(2) {
+  min-width: 190px;
+}
+
+.result-table thead th:last-child,
+.result-table tbody td:last-child {
+  min-width: 160px;
+}
+
+.result-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 10px;
+  text-align: left;
+  white-space: nowrap;
+  background: var(--surface-soft);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-strong);
+  font-weight: 600;
+}
+
+.result-table tbody td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.result-table tbody tr:hover td {
+  background: var(--surface-soft);
+}
+
+.result-table td.sku-cell {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  white-space: nowrap;
+}
+
+.result-table td.num-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.result-table td.order-cell {
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.result-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 18px 0;
+}
+
+@media (max-width: 1180px) {
+  .field-option-grid {
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  }
+}
+
+#orderSkuForm .input-action button {
+  white-space: nowrap;
+}
