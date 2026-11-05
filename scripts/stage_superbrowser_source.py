@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.91"
+VERSION = "0.2.92"
 SOURCE = ROOT.parent / "superbrowser_process"
 INPUTS = ROOT / f"build/release_inputs_{VERSION}"
 TARGET = INPUTS / "superbrowser_source"

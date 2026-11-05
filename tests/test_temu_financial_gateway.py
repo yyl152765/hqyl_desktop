@@ -110,6 +110,7 @@ class FinancialGatewayTests(TestCase):
               patch.object(gateway, 'download_xlsx', return_value=Path('global.xlsx')) as download):
             result = self.gateway.export(self.store, START.isoformat(), END.isoformat(), Path('.'))
         self.assertEqual(dates.call_args.args[2], '日期选择')
+        self.browser.open_store.assert_called_once_with(self.store, url=gateway.RECONCILIATION_URL)
         query.assert_called_once()
         self.assertEqual(download.call_args.args[2], '#global')
         self.assertEqual(result['evidence']['download_label'], gateway.GLOBAL_DOWNLOAD)

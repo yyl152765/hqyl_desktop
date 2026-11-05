@@ -593,7 +593,12 @@ class TemuFinancialGateway:
         identity = store["store_id"]
         export_error = None
         try:
-            self.browser.open_store(store, url=BASE_URL)
+            # Financial exports originate in the China reconciliation center.
+            # Opening the global landing page first invokes an unrelated SSO
+            # flow and can fail on its public-key request before this page is
+            # ever reached. The reconciliation gateway checks login and seller
+            # identity itself; global authorization belongs to the download.
+            self.browser.open_store(store, url=RECONCILIATION_URL)
             seller, _ = self._open_reconciliation(identity, store)
             self._reset_filters(identity)
             set_custom_range(self.browser, identity, DATE_LABEL, start, end)

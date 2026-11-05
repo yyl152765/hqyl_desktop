@@ -15,7 +15,7 @@ def _release_output_path(release_dir: Path, name: str) -> Path:
     return output_path
 
 
-def package_release(version: str = "0.2.91"):
+def package_release(version: str = "0.2.92"):
     if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("Release version must use the numeric major.minor.patch format")
 
@@ -49,7 +49,7 @@ def package_release(version: str = "0.2.91"):
     latest_json_data = {
         "version": version,
         "mandatory": False,
-        "notes": "修复 TEMU 财务导出加载顺序问题：等待卖家身份和对账中心查询表单同时就绪，避免表单尚未出现时点击侧栏，并兼容全球下载确认页不带共享勾选框的样式。保留店名加载等待、登录失效提示及重复店名兼容。保留全球财务明细汇总、SKU 参考价筛选及已有业务功能。更新完全自愿，不更新也可继续使用；仅在设置中点击“检查更新”，再点击“下载并安装”才更新。安装后请重启客户端。",
+        "notes": "修复 TEMU 财务导出启动入口：直接进入中国卖家中心的对账页，避免先登录全球中心时因获取公钥失败而提前终止。继续核对真实登录状态和店铺身份，全球下载时再处理对应确认。保留每个 sheet 首列店铺名和同名 sheet 汇总。更新完全自愿，不更新也可继续使用；仅在设置中点击“检查更新”，再点击“下载并安装”才更新。安装后请重启客户端。",
         "frontend_url": "",
         "package_url": f"http://rpa.whhqyl.com.cn/hqyl/{installer_name}",
         "sha256": sha256_hash,
@@ -164,5 +164,5 @@ pause
     print(f"Release packaging complete for version {version}.")
 
 if __name__ == "__main__":
-    ver = sys.argv[1] if len(sys.argv) > 1 else "0.2.91"
+    ver = sys.argv[1] if len(sys.argv) > 1 else "0.2.92"
     package_release(ver)

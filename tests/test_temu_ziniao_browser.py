@@ -190,6 +190,35 @@ class NativeAccountBrowserTests(unittest.TestCase):
         driver.execute_script.return_value = {'connected':True,'clear':True,'x':50,'y':60}
         return client,runtime,driver,store
 
+    def test_financial_export_does_not_require_the_global_center_login(self):
+        from pathlib import Path
+        from backend.services import temu_financial_gateway as financial
+
+        client, runtime, driver, store = self.opened()
+        gateway = financial.TemuFinancialGateway(client.profile, browser=client)
+        gateway.current_stores = {store['store_id']: store}
+        row = {'generated': '2026-11-05 10:00:01', 'condition': {},
+               'global_download': {'selector': '#global', 'label': '下载财务明细(全球)'}}
+        # Exercise the real native open_store path. The unrelated global SSO
+        # helper fails exactly as it did in the packaged 0.2.91 desktop run.
+        with (patch('backend.services.temu_on_sale_login.ensure_temu_session',
+                    side_effect=ValueError('获取公钥失败')) as global_login,
+              patch.object(gateway, '_open_reconciliation', return_value=('testSeller', {})),
+              patch.object(gateway, '_reset_filters'), patch.object(gateway, '_ensure_filters'),
+              patch.object(gateway, '_baseline', return_value=set()), patch.object(gateway, '_close_history'),
+              patch.object(gateway, '_wait_for_seller'), patch.object(gateway, '_select_export_options'),
+              patch.object(gateway, '_confirm_export'), patch.object(gateway, '_wait_for_new_task', return_value=row),
+              patch.object(financial, 'set_custom_range'), patch.object(financial, 'query_and_wait'),
+              patch.object(financial, '_evaluate', return_value='2026-11-05 10:00:00'),
+              patch.object(financial, 'download_xlsx', return_value=Path('global.xlsx'))):
+            result = gateway.export(store, '2026-10-01', '2026-10-31', Path('.'))
+        self.assertEqual(result['path'], 'global.xlsx')
+        driver.get.assert_called_once_with(financial.RECONCILIATION_URL)
+        global_login.assert_not_called()
+        runtime.open_store.assert_called_once_with(store['store_id'])
+        client._test_ip_check.assert_called_once()
+        runtime.close_store.assert_called_once_with('opaque-test-oauth')
+
     def test_open_uses_selected_id_checks_ip_and_pins_page(self):
         client,runtime,driver,store = self.opened()
         client.open_store(store,url='https://agentseller.temu.com/goods/list')
