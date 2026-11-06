@@ -59,6 +59,7 @@ const HQYL = (() => {
       { id: "shopee_ads", href: "shopee-ads.html", name: "广告充值", icon: "充", tag: "Shopee", category: "Shopee 广告", description: "多站点店铺充值", keywords: "印尼 泰国 菲律宾 越南 马来西亚 马来 按表充值 营销" },
       { id: "lazada_withdrawal_statistics", href: "lazada-withdrawal-statistics.html", name: "提现统计", icon: "提", tag: "Lazada", category: "Lazada 财务", description: "Excel 与账单归档", keywords: "菲律宾 马来西亚 泰国 收入" },
       { id: "lazada_balance_statistics", href: "lazada-balance-statistics.html", name: "余额统计", icon: "余", tag: "Lazada", category: "Lazada 财务", description: "多站点当前余额与处理中提现截图", keywords: "Income Balance Ads processing 菲律宾 马来西亚 泰国 印尼 越南 新加坡" },
+      { id: "lazada_ads_monthly", href: "lazada-ads-monthly.html", name: "Lazada 广告月报", icon: "告", tag: "Lazada", category: "Lazada 广告", description: "六站点广告、联盟及优惠券月报导出", keywords: "Lazada 广告 联盟 优惠券 真实花费 月报 支出 Spend" },
       { id: "lazada_monthly_report", href: "lazada-monthly-report.html", name: "月度账单下载", icon: "月", tag: "Lazada", category: "Lazada 财务", description: "按月份批量下载账单", keywords: "泰国 马来西亚 菲律宾 月报" },
       { id: "lazada_ads_data", href: "lazada-ads-data.html", name: "广告数据", icon: "广", tag: "Lazada", category: "Lazada 广告", description: "指定日期采集广告费与业绩并写入 Sheet", keywords: "泰国 钉钉 广告 支出 业绩 Sheet" },
       { id: "lazada_bill_detail", href: "lazada-bill-detail.html", name: "后台收支数据", icon: "账", tag: "Lazada", category: "Lazada 账单", description: "按国家采集店铺后台收支数据并写入指定 Sheet", keywords: "泰国 菲律宾 马来 印尼 越南 钉钉 总金额 收入 扣减项 截图 账单区间" },
@@ -1050,6 +1051,40 @@ const HQYL = (() => {
       },
       async start_mabang_warehouse_permission_batch(payload) { const names = Array.isArray(payload.employee_names) ? payload.employee_names : []; const added = Array.isArray(payload.warehouse_ids) ? payload.warehouse_ids.length : 0; const permissionTypes = Array.isArray(payload.permission_types) ? payload.permission_types : ["product", "order", "warehouse"]; const labels = { product: "查看商品", order: "查看订单", warehouse: "查看仓库" }; const rows = names.slice(0, Math.max(1, names.length - 1)).map((name, index) => ({ input_name: name, employee_id: String(1117519 + index), employee_name: name, mobile: `1380000000${index}`, department: "运营部", status: "success", added_count: added, product_added_count: permissionTypes.includes("product") ? added : 0, order_added_count: permissionTypes.includes("order") ? added : 0, warehouse_added_count: permissionTypes.includes("warehouse") ? added : 0, message: permissionTypes.map((type) => `${labels[type]}补齐 ${added} 个`).join("；") })); return startPreviewTask("mabang_warehouse_permission_batch", { mode: "batch", employee_count: rows.length, success_count: rows.length, skipped_count: 0, failed_count: 0, permission_types: permissionTypes, rows }); },
       async start_shopee_ads_recharge() { return startPreviewTask("shopee_ads", { matched_store_count: 2, processed_store_count: 2, output_dir: "C:\\Preview" }); },
+      async get_lazada_ads_monthly_info() {
+        return {
+          ok: true,
+          default_month: "2026-10",
+          default_output_dir: "C:\\Users\\Preview\\Desktop\\log",
+          countries: [
+            { code: "AUTO", name: "自动识别" },
+            { code: "PH", name: "菲律宾 (PHP)" },
+            { code: "MY", name: "马来西亚 (MYR)" },
+            { code: "TH", name: "泰国 (THB)" },
+            { code: "ID", name: "印尼 (IDR)" },
+            { code: "VN", name: "越南 (VND)" },
+            { code: "SG", name: "新加坡 (SGD)" },
+          ],
+          cli_status: { available: true, profile: "preview-profile", error: null },
+        };
+      },
+      async preview_lazada_ads_monthly(payload) {
+        const inputStores = Array.isArray(payload.store_names) ? payload.store_names : String(payload.store_names || "").split(/\r?\n/);
+        const stores = Array.from(new Set(inputStores.map((name) => name.trim()).filter(Boolean)));
+        return {
+          ok: true,
+          matched_count: stores.length,
+          matched: stores.map((s, idx) => ({ requested_name: s, store_id: `mock_${idx + 1}`, store_name: s, platform: "lazada", country: "TH" })),
+          issues: [],
+          profile: "preview-profile",
+        };
+      },
+      async start_lazada_ads_monthly(payload) {
+        return startPreviewTask("lazada_ads_monthly", { is_preview: true, success: true, message: "演示模式任务" });
+      },
+      async retry_lazada_ads_monthly(payload) {
+        return startPreviewTask("lazada_ads_monthly", { is_preview: true, success: true, message: "演示模式重试" });
+      },
       async get_lazada_monthly_report_info() { return { ok: true, countries: [{ code: "TH", name: "泰国" }, { code: "MY", name: "马来西亚" }, { code: "PH", name: "菲律宾" }], default_month: "2026-07", client_path: "C:\\Program Files\\Ziniao\\ziniao.exe", webdriver_path: "C:\\ziniaodriver" }; },
       async start_lazada_monthly_report(payload) {
         const countryNames = { TH: "泰国", MY: "马来西亚", PH: "菲律宾" };

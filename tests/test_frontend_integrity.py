@@ -33,6 +33,7 @@ PAGE_SCRIPTS = {
     FRONTEND / "pages" / "shopee-ads.html": FRONTEND / "assets" / "pages" / "shopee-ads.js",
     FRONTEND / "pages" / "lazada-withdrawal-statistics.html": FRONTEND / "assets" / "pages" / "lazada-withdrawal-statistics.js",
     FRONTEND / "pages" / "lazada-monthly-report.html": FRONTEND / "assets" / "pages" / "lazada-monthly-report.js",
+    FRONTEND / "pages" / "lazada-ads-monthly.html": FRONTEND / "assets" / "pages" / "lazada-ads-monthly.js",
     FRONTEND / "pages" / "lazada-ads-data.html": FRONTEND / "assets" / "pages" / "lazada-ads-data.js",
     FRONTEND / "pages" / "lazada-bill-detail.html": FRONTEND / "assets" / "pages" / "lazada-bill-detail.js",
     FRONTEND / "pages" / "lazada-campaign-workbook.html": FRONTEND / "assets" / "pages" / "lazada-campaign-workbook.js",

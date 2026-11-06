@@ -165,6 +165,8 @@ from backend.services import temu_financial_export as financial_export
 from backend.services.temu_fee_refund_gateway import TemuFeeRefundGateway
 from backend.services.temu_financial_gateway import TemuFinancialGateway
 from backend.services import balance_statistics
+from backend.services import lazada_ads_monthly
+from backend.services.lazada_ads_monthly_cli import ZiniaoMonthlyCli
 from backend.services.temu_on_sale_gateway import TemuOnSaleGateway
 from backend.update_service import (
     calculate_sha256,
@@ -198,6 +200,8 @@ class AppBridge:
         self._temu_export_previews: dict[str, dict[str, Any]] = {}
         self._balance_statistics_lock = threading.RLock()
         self._balance_statistics_active = False
+        self._lazada_ads_monthly_lock = threading.RLock()
+        self._lazada_ads_monthly_active = False
         self._campaign_operation_lock = threading.Lock()
 
     def get_sidebar_preferences(self) -> dict[str, Any]:
@@ -296,6 +300,13 @@ class AppBridge:
                     "key": "lazada_withdrawal_statistics",
                     "name": "Lazada 提现统计",
                     "description": "菲律宾、马来提现流水 Excel 及泰国收入账单归档。",
+                    "status": "ready",
+                    "vendor": "ziniao",
+                },
+                {
+                    "key": "lazada_ads_monthly",
+                    "name": "Lazada 广告月报",
+                    "description": "按完整自然月采集广告、联盟及优惠券金额，导出带原始截图的报表。",
                     "status": "ready",
                     "vendor": "ziniao",
                 },
@@ -3437,6 +3448,124 @@ class AppBridge:
         if calculate_sha256(candidate) != update.sha256.upper():
             raise ValueError("安装包 SHA256 校验失败，已阻止运行")
         return candidate
+
+
+    def get_lazada_ads_monthly_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            default_month = lazada_ads_monthly.get_default_month()
+            default_out = str(lazada_ads_monthly.default_output_root())
+            cli_status = {"available": False, "profile": "", "error": None}
+            try:
+                cli = ZiniaoMonthlyCli()
+                cli.ready()
+                cli_status["available"] = True
+                cli_status["profile"] = cli.profile
+            except Exception as exc:
+                cli_status["error"] = str(exc)
+
+            return {
+                "ok": True,
+                "default_month": default_month,
+                "default_output_dir": default_out,
+                "countries": [
+                    {"code": "AUTO", "name": "自动识别"},
+                    {"code": "PH", "name": "菲律宾 (PHP)"},
+                    {"code": "MY", "name": "马来西亚 (MYR)"},
+                    {"code": "TH", "name": "泰国 (THB)"},
+                    {"code": "ID", "name": "印尼 (IDR)"},
+                    {"code": "VN", "name": "越南 (VND)"},
+                    {"code": "SG", "name": "新加坡 (SGD)"},
+                ],
+                "cli_status": cli_status,
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def preview_lazada_ads_monthly(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            service = lazada_ads_monthly.LazadaAdsMonthlyService()
+            validated = lazada_ads_monthly.validate_ads_monthly_request(payload)
+            res = service.preview_stores(validated)
+            return {"ok": True, **res}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def start_lazada_ads_monthly(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lazada_ads_monthly_lock:
+            try:
+                if self._lazada_ads_monthly_active:
+                    raise ValueError("已有 Lazada 广告月报任务正在运行，请完成后再开始")
+                validated = lazada_ads_monthly.validate_ads_monthly_request(payload)
+                self._lazada_ads_monthly_active = True
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        def release() -> None:
+            with self._lazada_ads_monthly_lock:
+                self._lazada_ads_monthly_active = False
+
+        def runner(progress_cb):
+            try:
+                service = lazada_ads_monthly.LazadaAdsMonthlyService()
+                return service.run_batch(validated, progress_cb=lambda event: progress_cb(
+                    ' '.join(str(event.get(k) or '') for k in ('type', 'store_name', 'step', 'status', 'note')).strip()))
+            finally:
+                release()
+
+        try:
+            task = self.tasks.start(
+                "Lazada 广告月报",
+                runner,
+                tool="lazada_ads_monthly",
+                context={"month": validated["month"]},
+                exclusive=True,
+            )
+            if not task.get("ok"):
+                release()
+            return task
+        except Exception as exc:
+            release()
+            return {"ok": False, "error": str(exc)}
+
+    def retry_lazada_ads_monthly(self, payload: dict[str, Any]) -> dict[str, Any]:
+        manifest_path = (payload or {}).get("manifest_path")
+        if not manifest_path or not Path(manifest_path).is_file():
+            return {"ok": False, "error": "请提供有效的批次 manifest 文件路径"}
+
+        with self._lazada_ads_monthly_lock:
+            try:
+                if self._lazada_ads_monthly_active:
+                    raise ValueError("已有 Lazada 广告月报任务正在运行，请完成后再重试")
+                self._lazada_ads_monthly_active = True
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        def release() -> None:
+            with self._lazada_ads_monthly_lock:
+                self._lazada_ads_monthly_active = False
+
+        def runner(progress_cb):
+            try:
+                service = lazada_ads_monthly.LazadaAdsMonthlyService()
+                return service.retry_batch(manifest_path, progress_cb=lambda event: progress_cb(
+                    ' '.join(str(event.get(k) or '') for k in ('type', 'store_name', 'step', 'status', 'note')).strip()))
+            finally:
+                release()
+
+        try:
+            task = self.tasks.start(
+                "Lazada 广告月报重试",
+                runner,
+                tool="lazada_ads_monthly",
+                context={"manifest_path": manifest_path},
+                exclusive=True,
+            )
+            if not task.get("ok"):
+                release()
+            return task
+        except Exception as exc:
+            release()
+            return {"ok": False, "error": str(exc)}
 
 
 class AccountRequiredError(ValueError):

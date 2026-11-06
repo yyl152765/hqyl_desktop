@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lazada 广告月报</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div>
+            <div class="page-kicker">紫鸟流程 / Lazada 广告 / 月度报表</div>
+            <h1>Lazada 广告月报</h1>
+          </div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+
+        <section class="overview-grid">
+          <article class="overview-card accent-green">
+            <span>输入店铺</span>
+            <strong id="inputCount">0</strong>
+            <small>本次填写店铺数</small>
+          </article>
+          <article class="overview-card">
+            <span>已匹配</span>
+            <strong id="matchedCount">0</strong>
+            <small>紫鸟唯一匹配数</small>
+          </article>
+          <article class="overview-card">
+            <span>成功完成</span>
+            <strong id="successCount">0</strong>
+            <small>三项精确采集店铺数</small>
+          </article>
+          <article class="overview-card file-card">
+            <span>任务报表</span>
+            <strong id="outputFile">未生成</strong>
+            <small id="statusText">等待任务启动</small>
+          </article>
+        </section>
+
+        <section class="layout-grid">
+          <form id="adsMonthlyForm" class="surface form-surface">
+            <div class="section-head">
+              <div>
+                <h2>采集条件</h2>
+                <p>自动登录六站点店铺，采集自然月广告 Spend、联盟 Spend、优惠券充值 Amount，精确计算真实花费并导出 Excel。</p>
+              </div>
+              <span class="section-badge">PH · MY · TH · ID · VN · SG 六站点</span>
+            </div>
+
+            <div class="flow-account-bar">
+              <span class="flow-account-icon ziniao-icon">Z</span>
+              <span class="flow-account-copy">
+                <small>紫鸟 CLI 当前 Profile</small>
+                <strong id="cliProfileText">检测中...</strong>
+              </span>
+              <span id="cliStatusBadge" class="status-pill idle">检测中</span>
+            </div>
+
+            <div class="form-grid">
+              <label>
+                <span>目标站点</span>
+                <select id="countrySelect" required>
+                  <option value="AUTO">自动识别</option>
+                  <option value="PH">菲律宾 (PHP)</option>
+                  <option value="MY">马来西亚 (MYR)</option>
+                  <option value="TH">泰国 (THB)</option>
+                  <option value="ID">印度尼西亚 (IDR)</option>
+                  <option value="VN">越南 (VND)</option>
+                  <option value="SG">新加坡 (SGD)</option>
+                </select>
+              </label>
+              <label>
+                <span>统计月份</span>
+                <input id="monthInput" type="month" required />
+              </label>
+              <label class="store-field">
+                <span>店铺完整名称 <small>每行一个，严格全名匹配</small></span>
+                <textarea id="storesInput" spellcheck="false" required placeholder="Lazada 紫鸟完整店铺名称，每行一个"></textarea>
+              </label>
+            </div>
+
+            <div class="form-grid">
+              <label class="store-field">
+                <span>报表输出目录</span>
+                <div class="input-action">
+                  <input id="outputDirInput" readonly />
+                  <button id="chooseOutputBtn" class="secondary" type="button">选择</button>
+                </div>
+              </label>
+            </div>
+
+            <div class="actions">
+              <button id="previewBtn" class="secondary" type="button">店铺预览核验</button>
+              <button id="startBtn" class="primary" type="submit">开始采集</button>
+              <button id="retryBtn" class="secondary" type="button" style="display:none;">重试失败店铺</button>
+              <button id="openOutputBtn" class="secondary" type="button" disabled>打开报表目录</button>
+            </div>
+          </form>
+
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight">
+                <div>
+                  <h2>运行日志</h2>
+                  <p>店铺生命周期、日期筛选、金额抽取与截图</p>
+                </div>
+                <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+              </div>
+              <pre id="logBox" class="log-box" tabindex="0"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section class="surface">
+          <div class="section-head tight">
+            <div>
+              <h2>店铺报表结果</h2>
+              <p>真实花费 ＝ 广告金额统计 － 联盟花费 － 优惠金额</p>
+            </div>
+            <span id="failureBadge" class="section-badge">未就绪</span>
+          </div>
+          <div class="collection-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>店铺名称</th>
+                  <th>广告金额</th>
+                  <th>联盟花费</th>
+                  <th>优惠金额</th>
+                  <th>真实花费</th>
+                  <th>站点</th>
+                  <th>币种</th>
+                  <th>状态</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody id="resultBody">
+                <tr><td colspan="9">尚未运行</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20261104-ads-monthly"></script>
+    <script src="../assets/pages/lazada-ads-monthly.js?v=20261104-ads-monthly"></script>
+  </body>
+</html>
