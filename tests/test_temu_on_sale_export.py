@@ -312,6 +312,79 @@ class BatchTests(unittest.TestCase):
             gateway.click_label('a','重置')
         self.assertEqual([call.args for call in browser.click.call_args_list],[('a','#todo-close'),('a','#reset')])
 
+    def test_message_panel_closes_before_todo_notice_and_filter_click(self):
+        browser = Mock(profile=FakeGateway.profile)
+        gateway = TemuOnSaleGateway(browser.profile, browser=browser)
+        browser.evaluate.side_effect = [
+            {'messages': ['#messages-close'], 'notices': ['#todo-close']},
+            {'messages': [], 'notices': ['#todo-close']},
+            {'messages': [], 'notices': []},
+            {'url': 'https://agentseller.temu.com/goods/list',
+             'found': {'重置': [{'selector': '#reset'}]}},
+        ]
+        with patch('backend.services.temu_on_sale_gateway.time.sleep'):
+            gateway.click_label('a', '重置')
+        self.assertEqual([call.args for call in browser.click.call_args_list],
+                         [('a', '#messages-close'), ('a', '#todo-close'), ('a', '#reset')])
+
+    def test_message_close_disappearance_allows_filter_only_after_absence_check(self):
+        from backend.core.ziniao_browser import ZiniaoBrowserError
+        browser = Mock(profile=FakeGateway.profile)
+        gateway = TemuOnSaleGateway(browser.profile, browser=browser)
+        browser.evaluate.side_effect = [
+            {'messages': ['#messages-close'], 'notices': []},
+            {'messages': [], 'notices': []},
+            {'url': 'https://agentseller.temu.com/goods/list',
+             'found': {'重置': [{'selector': '#reset'}]}},
+        ]
+        browser.click.side_effect = [ZiniaoBrowserError('close control disappeared'), None]
+        gateway.click_label('a', '重置')
+        self.assertEqual([call.args for call in browser.click.call_args_list],
+                         [('a', '#messages-close'), ('a', '#reset')])
+        self.assertEqual([call[0] for call in browser.mock_calls],
+                         ['evaluate', 'click', 'evaluate', 'evaluate', 'click'])
+
+    def test_close_error_is_preserved_if_any_known_panel_or_ambiguity_remains(self):
+        from backend.core.ziniao_browser import ZiniaoBrowserError
+        for remaining in (
+            {'messages': ['#messages-close'], 'notices': []},
+            {'messages': [], 'notices': ['#todo-close']},
+            {'messages': [], 'notices': [], 'notice_error': 'ambiguous close control'},
+        ):
+            with self.subTest(remaining=remaining):
+                browser = Mock(profile=FakeGateway.profile)
+                gateway = TemuOnSaleGateway(browser.profile, browser=browser)
+                browser.evaluate.side_effect = [
+                    {'messages': ['#messages-close'], 'notices': []}, remaining]
+                error = ZiniaoBrowserError('original close error')
+                browser.click.side_effect = error
+                with self.assertRaises(ZiniaoBrowserError) as caught:
+                    gateway.click_label('a', '重置')
+                self.assertIs(caught.exception, error)
+                browser.click.assert_called_once_with('a', '#messages-close')
+                self.assertEqual(browser.evaluate.call_count, 2)
+
+    def test_unknown_message_close_exception_is_not_suppressed_or_retried(self):
+        browser = Mock(profile=FakeGateway.profile)
+        gateway = TemuOnSaleGateway(browser.profile, browser=browser)
+        browser.evaluate.return_value = {'messages': ['#messages-close'], 'notices': []}
+        error = RuntimeError('unknown transport failure')
+        browser.click.side_effect = error
+        with self.assertRaises(RuntimeError) as caught:
+            gateway.click_label('a', '重置')
+        self.assertIs(caught.exception, error)
+        browser.click.assert_called_once_with('a', '#messages-close')
+        browser.evaluate.assert_called_once()
+
+    def test_ambiguous_message_close_prevents_all_page_clicks(self):
+        browser = Mock(profile=FakeGateway.profile)
+        gateway = TemuOnSaleGateway(browser.profile, browser=browser)
+        browser.evaluate.return_value = {
+            'messages': [], 'notices': [], 'notice_error': 'TEMU 消息面板关闭按钮无法唯一确认'}
+        with self.assertRaisesRegex(ValueError, '无法唯一确认'):
+            gateway.click_label('a', '重置')
+        browser.click.assert_not_called()
+
     def test_ambiguous_todo_notice_does_not_click_page(self):
         browser=Mock(profile=FakeGateway.profile)
         gateway=TemuOnSaleGateway(browser.profile,browser=browser)

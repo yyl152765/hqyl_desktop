@@ -4255,6 +4255,150 @@ select:focus {
   background: #fff;
 }
 
+/* 商品仓库报表按月导出：表单固定一屏高，分类与仓库清单横向并排并自动填满剩余空间 */
+.warehouse-export-main .overview-grid {
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.warehouse-export-main .overview-card {
+  min-height: 74px;
+  padding: 10px 12px;
+}
+
+.warehouse-export-layout {
+  grid-template-columns: minmax(560px, 1.6fr) minmax(260px, 0.7fr);
+  height: calc(100vh - 208px);
+  min-height: 520px;
+  align-items: stretch;
+}
+
+.warehouse-export-surface {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.warehouse-export-surface .section-head {
+  flex: 0 0 auto;
+  padding: 12px 18px 2px;
+}
+
+.warehouse-export-surface .section-head p {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+
+.warehouse-export-surface .flow-account-bar {
+  flex: 0 0 auto;
+  margin-top: 8px;
+}
+
+.warehouse-export-surface .form-grid {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  min-height: 0;
+  padding: 10px 18px 6px;
+  overflow: hidden;
+}
+
+.warehouse-export-layout .right-stack {
+  align-self: stretch;
+  height: 100%;
+}
+
+.warehouse-export-layout .log-surface {
+  height: 100%;
+}
+
+.warehouse-filter-grid .developer-search-field span {
+  display: none;
+}
+
+.warehouse-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.warehouse-filter-grid .developer-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.warehouse-filter-grid .developer-panel-head {
+  flex: 0 0 auto;
+  padding: 9px 14px 5px;
+}
+
+.warehouse-filter-grid .developer-search-field {
+  flex: 0 0 auto;
+}
+
+.warehouse-filter-grid .developer-search-field input {
+  min-height: 32px;
+  height: 32px;
+}
+
+.warehouse-filter-grid .developer-selection-actions {
+  flex: 0 0 auto;
+}
+
+.warehouse-filter-grid .developer-checklist {
+  flex: 1 1 auto;
+  grid-template-columns: 1fr;
+  min-height: 84px;
+  max-height: none;
+  padding-top: 8px;
+  overflow-y: auto;
+}
+
+.warehouse-filter-grid .developer-option {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+/* 按钮常驻表单底部，不随清单滚动，也不覆盖清单 */
+.warehouse-export-surface .actions {
+  flex: 0 0 auto;
+  padding: 10px 18px 12px;
+  border-top: 1px solid var(--border);
+  background: #fff;
+}
+
+@media (max-width: 1080px) {
+  .warehouse-export-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .warehouse-export-surface {
+    overflow: visible;
+  }
+
+  .warehouse-export-surface .form-grid {
+    grid-template-rows: none;
+    overflow: visible;
+  }
+
+  .warehouse-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .warehouse-filter-grid .developer-checklist {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: 190px;
+  }
+}
+
 .developer-option {
   display: flex;
   align-items: center;

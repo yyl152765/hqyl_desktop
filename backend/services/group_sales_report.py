@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable
 from bs4 import BeautifulSoup
 from openpyxl import Workbook
 
+from backend.config_store import ensure_output_directory
 from backend.core.mabang_client import MabangApiError, MabangClient, decode_html_page
 
 
@@ -174,7 +175,7 @@ def validate_group_sales_payload(payload: dict[str, Any]) -> GroupSalesReportQue
     password = safe_text(payload.get("password"))
     start_date = safe_text(payload.get("start_date"))
     end_date = safe_text(payload.get("end_date"))
-    output_dir = Path(safe_text(payload.get("output_dir"))).expanduser()
+    output_dir_text = safe_text(payload.get("output_dir"))
 
     if not username:
         raise ValueError("请输入马帮账号")
@@ -188,8 +189,8 @@ def validate_group_sales_payload(payload: dict[str, Any]) -> GroupSalesReportQue
     end_at = datetime.strptime(end_date, "%Y-%m-%d")
     if start_at > end_at:
         raise ValueError("开始日期不能晚于结束日期")
-    if not output_dir:
-        raise ValueError("请选择输出目录")
+    if not output_dir_text:
+        raise ValueError("请输入输出目录")
 
     selected_ids = _coerce_group_ids(payload.get("group_ids") or payload.get("group_id"))
     if not selected_ids:
@@ -205,6 +206,7 @@ def validate_group_sales_payload(payload: dict[str, Any]) -> GroupSalesReportQue
     if not selected_groups:
         raise ValueError("请选择至少一个自定义分类")
 
+    output_dir = ensure_output_directory(output_dir_text)
     return GroupSalesReportQuery(
         username=username,
         password=password,
@@ -222,8 +224,16 @@ def run_group_sales_report(
     start_date = datetime.strptime(job.start_date, "%Y-%m-%d").date()
     end_date = datetime.strptime(job.end_date, "%Y-%m-%d").date()
     period_label = f"{start_date:%Y%m%d}_{end_date:%Y%m%d}"
-    run_dir = job.output_dir / f"菲律宾各组商品销量报表_{period_label}_{datetime.now():%H%M%S}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_name = f"菲律宾各组商品销量报表_{period_label}_{datetime.now():%H%M%S}"
+    run_dir = job.output_dir / run_name
+    suffix = 1
+    while True:
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+            break
+        except FileExistsError:
+            suffix += 1
+            run_dir = job.output_dir / f"{run_name}_{suffix}"
 
     _emit(progress, f"输出目录: {run_dir}")
     _emit(progress, "正在登录马帮...")

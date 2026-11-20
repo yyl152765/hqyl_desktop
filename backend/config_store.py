@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import tempfile
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 
 APP_NAME = "HQYLAutomation"
+DEFAULT_OUTPUT_DIR = "D:\\报表"
+_GROUP_SALES_RUN_DIR = re.compile(r"菲律宾各组商品销量报表_\d{8}_\d{8}_\d{6}(?:_\d+)?")
 DEFAULT_ROWS_PER_PAGE = 500
 DEFAULT_UPDATE_MANIFEST_URL = "http://rpa.whhqyl.com.cn/hqyl/latest.json"
 LEGACY_DINGTALK_CONFIG_ENV = "HQYL_LEGACY_DINGTALK_CONFIG"
@@ -45,7 +49,7 @@ class DingTalkSettings:
 
 @dataclass
 class AppSettings:
-    output_dir: str = ""
+    output_dir: str = DEFAULT_OUTPUT_DIR
     rows_per_page: int = DEFAULT_ROWS_PER_PAGE
     update_manifest_url: str = DEFAULT_UPDATE_MANIFEST_URL
     captcha_username: str = ""
@@ -77,6 +81,38 @@ def _base_local_data_dir() -> Path:
 def desktop_path() -> Path:
     desktop = Path.home() / "Desktop"
     return desktop if desktop.exists() else Path.cwd()
+
+
+def normalize_output_directory(value: Any) -> str:
+    """Recover a saved report root without retaining generated run directories."""
+    text = str(value or "").strip().strip('"').strip()
+    if not text:
+        return DEFAULT_OUTPUT_DIR
+    if text.startswith("\\\\?\\UNC\\"):
+        text = "\\\\" + text[8:]
+    elif text.startswith("\\\\?\\"):
+        text = text[4:]
+    path = PureWindowsPath(text) if "\\" in text or re.match(r"^[A-Za-z]:", text) else Path(text)
+    root = path
+    while _GROUP_SALES_RUN_DIR.fullmatch(root.name):
+        root = root.parent
+    if root != path:
+        return str(root) if str(root) != "." else DEFAULT_OUTPUT_DIR
+    return text
+
+
+def ensure_output_directory(value: Any) -> Path:
+    """Create a requested output root and verify it before saving the preference."""
+    path = Path(normalize_output_directory(value)).expanduser()
+    if not path.is_absolute():
+        raise ValueError("请输入完整的输出目录路径，例如 D:\\报表\\")
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile(dir=path, prefix=".hqyl-write-check-"):
+            pass
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"无法创建或写入输出目录：{path}。请检查盘符和写入权限，或更换目录。原因：{exc}") from exc
+    return path
 
 
 def default_date_range() -> dict[str, str]:
@@ -113,7 +149,7 @@ class ConfigStore:
                 include_source_fallback=not self._explicit_config_path,
             )
             settings = AppSettings(
-                output_dir=str(desktop_path()),
+                output_dir=DEFAULT_OUTPUT_DIR,
                 dingtalk=_coerce_dingtalk_settings(legacy_dingtalk, seed_users=True),
             )
             self.save(settings)
@@ -153,7 +189,7 @@ class ConfigStore:
                 )
             )
         settings = AppSettings(
-            output_dir=str(payload.get("output_dir") or desktop_path()).strip(),
+            output_dir=normalize_output_directory(payload.get("output_dir")),
             tool_output_dirs=_coerce_tool_output_dirs(payload.get("tool_output_dirs")),
             rows_per_page=_coerce_rows_per_page(payload.get("rows_per_page")),
             update_manifest_url=_coerce_update_manifest_url(payload.get("update_manifest_url")),
@@ -177,7 +213,7 @@ class ConfigStore:
             lazada_bill_workbook_id=str(payload.get("lazada_bill_workbook_id") or "").strip(),
             lazada_bill_dws_node=str(payload.get("lazada_bill_dws_node") or "").strip(),
         )
-        if migrated_dingtalk:
+        if migrated_dingtalk or (payload.get("output_dir") and settings.output_dir != payload["output_dir"]):
             self._write_settings(settings)
         return settings
 
@@ -194,7 +230,7 @@ class ConfigStore:
             tool_output_dirs = dict(current.tool_output_dirs)
             tool_output_dirs.update(_coerce_tool_output_dirs(settings.get("tool_output_dirs")))
             settings = AppSettings(
-                output_dir=str(settings.get("output_dir", current.output_dir) or desktop_path()).strip(),
+                output_dir=normalize_output_directory(settings.get("output_dir", current.output_dir)),
                 tool_output_dirs=tool_output_dirs,
                 rows_per_page=_coerce_rows_per_page(settings.get("rows_per_page", current.rows_per_page)),
                 update_manifest_url=_coerce_update_manifest_url(
@@ -233,8 +269,7 @@ class ConfigStore:
                     settings.get("lazada_bill_dws_node", current.lazada_bill_dws_node) or ""
                 ).strip(),
             )
-        if not settings.output_dir:
-            settings.output_dir = str(desktop_path())
+        settings.output_dir = normalize_output_directory(settings.output_dir)
         settings.tool_output_dirs = _coerce_tool_output_dirs(settings.tool_output_dirs)
         settings.dingtalk = _coerce_dingtalk_settings(settings.dingtalk)
         settings.accounts = _coerce_accounts(settings.accounts)

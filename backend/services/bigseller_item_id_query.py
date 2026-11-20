@@ -70,27 +70,27 @@ class BigSellerRateLimitError(BigSellerQueryError):
         self.retry_after = max(0.0, retry_after)
 
 
-def parse_skus(value: object) -> tuple[str, ...]:
+def parse_skus(value: object, *, max_sku_count: int = MAX_SKU_COUNT) -> tuple[str, ...]:
     if not isinstance(value, str):
         raise ValueError("请以文本批量输入 SKU")
     skus = tuple(dict.fromkeys(part.strip() for part in re.split(r"[\r\n,，;；\t]+", value.lstrip("\ufeff")) if part.strip()))
     if not skus:
         raise ValueError("请至少输入一个 SKU")
-    if len(skus) > MAX_SKU_COUNT:
-        raise ValueError(f"单次最多查询 {MAX_SKU_COUNT} 个不同 SKU，请分批查询")
+    if len(skus) > max_sku_count:
+        raise ValueError(f"单次最多查询 {max_sku_count} 个不同 SKU，请分批查询")
     if any(ILLEGAL_CHARACTERS_RE.search(sku) or len(sku) > 32767 for sku in skus):
         raise ValueError("SKU 含不支持的控制字符或超出 Excel 单元格长度限制")
     return skus
 
 
-def validate_bigseller_item_id_query_payload(payload: dict[str, Any]) -> BigSellerItemIdQueryJob:
+def validate_bigseller_item_id_query_payload(payload: dict[str, Any], *, max_sku_count: int = MAX_SKU_COUNT) -> BigSellerItemIdQueryJob:
     username = str(payload.get("username") or "").strip()
     password = str(payload.get("password") or "")
     if not username:
         raise ValueError("请输入 BigSeller 账号")
     if not password.strip():
         raise ValueError("请输入 BigSeller 密码")
-    skus = parse_skus(payload.get("sku_text"))
+    skus = parse_skus(payload.get("sku_text"), max_sku_count=max_sku_count)
     output_text = str(payload.get("output_dir") or "").strip()
     if not output_text:
         raise ValueError("请选择输出目录")

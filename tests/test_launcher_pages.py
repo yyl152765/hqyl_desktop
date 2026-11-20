@@ -16,8 +16,14 @@ class LauncherPageTests(unittest.TestCase):
         frontend = Path(__file__).resolve().parents[1] / "frontend" / "assets"
         self.assertIn('id: "temu_activity_export", href: "temu-activity-export.html"', (frontend / "common.js").read_text(encoding="utf-8"))
         self.assertIn('temu_activity_export: { href: "temu-activity-export.html"', (frontend / "pages" / "dashboard.js").read_text(encoding="utf-8"))
-    def test_bigseller_claim_query_has_development_entry(self) -> None:
-        self.assertEqual(resolve_entry_html(["--page=bigseller-claim-query"]).name, "bigseller-claim-query.html")
+    def test_warehouse_sales_export_has_development_entry_and_menu(self) -> None:
+        page = resolve_entry_html(["--page=warehouse-sales-export"])
+        self.assertEqual(page.name, "warehouse-sales-export.html")
+        frontend = Path(__file__).resolve().parents[1] / "frontend" / "assets"
+        self.assertIn('id: "warehouse_sales_export", href: "warehouse-sales-export.html"', (frontend / "common.js").read_text(encoding="utf-8"))
+        self.assertIn('warehouse_sales_export: { href: "warehouse-sales-export.html"', (frontend / "pages" / "dashboard.js").read_text(encoding="utf-8"))
+
+    def test_bigseller_claim_query_has_development_entry(self) -> None:        self.assertEqual(resolve_entry_html(["--page=bigseller-claim-query"]).name, "bigseller-claim-query.html")
 
     def test_bigseller_sku_benchmark_has_development_entry(self) -> None:
         self.assertEqual(resolve_entry_html(["--page=bigseller-sku-benchmark"]).name, "bigseller-sku-benchmark.html")
@@ -51,6 +57,13 @@ class LauncherPageTests(unittest.TestCase):
     def test_mabang_income_expense_report_has_development_entry(self) -> None:
         page = resolve_entry_html(["--page=mabang-income-expense-report"])
         self.assertEqual(page.name, "mabang-income-expense-report.html")
+
+    def test_mabang_order_sku_export_has_development_entry_and_menu(self) -> None:
+        page = resolve_entry_html(["--page=mabang-order-sku-export"])
+        self.assertEqual(page.name, "mabang-order-sku-export.html")
+        frontend = Path(__file__).resolve().parents[1] / "frontend" / "assets"
+        self.assertIn('id: "mabang_order_sku_export", href: "mabang-order-sku-export.html"', (frontend / "common.js").read_text(encoding="utf-8"))
+        self.assertIn('mabang_order_sku_export: { href: "mabang-order-sku-export.html"', (frontend / "pages" / "dashboard.js").read_text(encoding="utf-8"))
 
     def test_temu_shipping_channel_has_development_entry_and_menu(self) -> None:
         page = resolve_entry_html(["--page=temu-shipping-channel"])
@@ -120,6 +133,16 @@ class LauncherPageTests(unittest.TestCase):
         source = common_js.read_text(encoding="utf-8")
         self.assertIn("bigseller-item-id-query.html", source)
         self.assertIn("商品ID查询", source)
+
+    def test_bigseller_link_query_has_development_entry(self) -> None:
+        page = resolve_entry_html(["--page=bigseller-link-query"])
+        self.assertEqual(page.name, "bigseller-link-query.html")
+
+    def test_sidebar_contains_bigseller_link_query_entry(self) -> None:
+        common_js = Path(__file__).resolve().parents[1] / "frontend" / "assets" / "common.js"
+        source = common_js.read_text(encoding="utf-8")
+        self.assertIn("bigseller-link-query.html", source)
+        self.assertIn("BS 抓取链接", source)
 
     def test_sidebar_contains_lazada_monthly_report_entry(self) -> None:
         common_js = Path(__file__).resolve().parents[1] / "frontend" / "assets" / "common.js"

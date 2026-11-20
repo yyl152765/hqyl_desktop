@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from backend.core.ziniao_browser import ZiniaoClickInterceptedError
+from backend.core.ziniao_browser import ZiniaoBrowserError, ZiniaoClickInterceptedError
 from backend.services.temu_on_sale_workbook import inspect_source, iter_source_rows
 
 
@@ -84,7 +84,13 @@ EXPORT_DIALOG = r"""(() => {
       if(buttons.length>1) break;
     }
   }
+  const messageHeaders=[...document.querySelectorAll('[class*="new-bell_header__"]')].filter(visible)
+    .filter(e=>[...e.querySelectorAll('div')].some(label=>visible(label) && label.textContent.trim()==='全部消息'));
+  const messageCloses=messageHeaders.flatMap(e=>[...e.querySelectorAll(':scope > svg[data-testid="beast-core-icon-close"]')].filter(visible));
+  const notice_error=messageHeaders.length>1 || (messageHeaders.length===1 && messageCloses.length!==1)
+    ? 'TEMU 消息面板关闭按钮无法唯一确认' : '';
   return JSON.stringify({notices:[...new Set(closeButtons)].map(path),
+    messages:messageCloses.map(path),notice_error,
     dialogs:found.map(e=>({text:e.innerText, skcCount:Number(e.innerText.match(/共查询到([\d,]+)个SKC/)?.[1].replace(/,/g,'')||0),
       fields:[...e.querySelectorAll('label')].map(l=>({text:l.innerText.trim(),checked:Boolean(l.querySelector('input')?.checked),selector:path(l)})),
       buttons:[...e.querySelectorAll('button')].filter(visible).map(b=>({text:b.innerText.trim(),disabled:b.disabled,selector:path(b)}))}))});
@@ -199,12 +205,25 @@ class TemuOnSaleGateway:
     def dismiss_notices(self, store_id: str):
         dismissed = False
         for _ in range(3):
-            notices = self.browser.evaluate(store_id, EXPORT_DIALOG).get('notices', [])
-            if not notices:
+            state = self.browser.evaluate(store_id, EXPORT_DIALOG)
+            if state.get('notice_error'):
+                raise ValueError(state['notice_error'])
+            notices = state.get('notices', [])
+            messages = state.get('messages', [])
+            if not notices and not messages:
                 return dismissed
-            if len(notices) != 1:
+            if len(notices) > 1 or len(messages) > 1:
                 raise ValueError('存在多个待办提示弹窗，请检查页面后重试')
-            self.browser.click(store_id, notices[0])
+            try:
+                self.browser.click(store_id, (messages or notices)[0])
+            except ZiniaoBrowserError:
+                # A panel can disappear while its close animation is running.
+                # Confirm absence before continuing; never suppress an error
+                # while any recognized overlay is still present.
+                current = self.browser.evaluate(store_id, EXPORT_DIALOG)
+                if current.get('notice_error') or current.get('messages') or current.get('notices'):
+                    raise
+                return True
             dismissed = True
             time.sleep(.25)
         raise ValueError('待办提示弹窗未关闭，请检查页面后重试')

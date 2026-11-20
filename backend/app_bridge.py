@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from backend.config_store import AppSettings, BoundAccount, ConfigStore, default_date_range
+from backend.config_store import AppSettings, BoundAccount, ConfigStore, default_date_range, ensure_output_directory
 from backend.output_paths import directory_scope_key, resolve_output_directories
 from backend.sidebar_preferences import SidebarPreferencesStore
 from backend.services.kec_reconciliation import (
@@ -22,6 +22,12 @@ from backend.services.group_sales_report import (
     get_group_options,
     run_group_sales_report,
     validate_group_sales_payload,
+)
+from backend.services.warehouse_sales_export import (
+    default_month_range as warehouse_export_default_months,
+    fetch_report_options as fetch_warehouse_report_options,
+    run_warehouse_sales_export,
+    validate_export_payload as validate_warehouse_export_payload,
 )
 from backend.services.developer_sales_income_summary import (
     run_developer_sales_income_summary,
@@ -100,6 +106,10 @@ from backend.services.bigseller_claim_query import (
     run_bigseller_claim_query,
     validate_bigseller_claim_payload,
 )
+from backend.services.bigseller_link_query import (
+    run_bigseller_link_query,
+    validate_bigseller_link_query_payload,
+)
 from backend.services.echotik_collector import (
     get_echotik_filter_options,
     run_echotik_collection,
@@ -176,7 +186,7 @@ from backend.update_service import (
 )
 
 
-APP_VERSION = "0.2.92"
+APP_VERSION = "1.0.0"
 APP_NAME = "寰球云联自动化平台"
 
 
@@ -239,6 +249,12 @@ class AppBridge:
                 "warehouses": get_income_expense_warehouse_options(),
                 "date_range": income_expense_default_period(),
             },
+            "warehouse_sales_export": {
+                "month_range": warehouse_export_default_months(),
+                "categories": [],
+                "warehouses": [],
+                "output_dir": resolve_output_directories(settings, "warehouse_sales_export")["output_dir"],
+            },
             "tools": [
                 {
                     "key": "purchase_log",
@@ -286,6 +302,13 @@ class AppBridge:
                     "key": "ph_group_sales_report",
                     "name": "菲律宾各组商品销量报表",
                     "description": "按小组和时间范围导出马帮商品销量报表。",
+                    "status": "ready",
+                    "vendor": "mabang",
+                },
+                {
+                    "key": "warehouse_sales_export",
+                    "name": "商品仓库报表按月导出",
+                    "description": "多选自定义分类与仓库，按月份导出商品仓库报表，每月一个工作表合并成一张表。",
                     "status": "ready",
                     "vendor": "mabang",
                 },
@@ -409,6 +432,13 @@ class AppBridge:
                     "vendor": "bigseller",
                 },
                 {
+                    "key": "bigseller_link_query",
+                    "name": "BS 抓取链接",
+                    "description": "批量输入 SKU，在售优先、无匹配再查下架，查询最早上架商品的店铺和链接。",
+                    "status": "ready",
+                    "vendor": "bigseller",
+                },
+                {
                     "key": "sample_registration",
                     "name": "网红寄样登记",
                     "description": "查询样品订单、导出 Excel、同步钉钉在线表格。",
@@ -468,8 +498,14 @@ class AppBridge:
         }
 
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
-        settings = self.config_store.save(payload or {})
-        return {"ok": True, "settings": _settings_payload(settings)}
+        try:
+            updates = dict(payload or {})
+            if "output_dir" in updates:
+                updates["output_dir"] = str(ensure_output_directory(updates["output_dir"]))
+            settings = self.config_store.save(updates)
+            return {"ok": True, "settings": _settings_payload(settings)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def query_captcha_balance(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         request_payload = dict(payload or {})
@@ -558,15 +594,21 @@ class AppBridge:
             import webview
 
             directory = current_dir or self.config_store.load().output_dir
+            # A typed directory may not exist yet; start the picker at its nearest existing parent.
+            candidate = Path(directory).expanduser()
+            while not candidate.is_dir() and candidate != candidate.parent:
+                candidate = candidate.parent
             result = webview.windows[0].create_file_dialog(
                 webview.FOLDER_DIALOG,
-                directory=directory if directory else None,
+                directory=str(candidate) if candidate.is_dir() else None,
             )
             if not result:
                 return {"ok": False, "cancelled": True}
             selected = result[0] if isinstance(result, (list, tuple)) else result
-            settings = self.config_store.save({"output_dir": str(selected)})
-            return {"ok": True, "path": str(selected), "settings": _settings_payload(settings)}
+            saved = self.save_settings({"output_dir": str(selected)})
+            if not saved["ok"]:
+                return saved
+            return {"ok": True, "path": saved["settings"]["output_dir"], "settings": saved["settings"]}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -1295,6 +1337,8 @@ class AppBridge:
     def start_group_sales_report(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             request_payload = self._payload_with_account(payload, "mabang")
+            if "output_dir" not in request_payload:
+                request_payload["output_dir"] = self.config_store.load().output_dir
             job = validate_group_sales_payload(request_payload)
             self.config_store.save(
                 {
@@ -1315,9 +1359,64 @@ class AppBridge:
                 "csv_file_count": result.csv_file_count,
                 "output_file": str(result.output_file),
                 "output_dir": str(result.output_dir),
+                "output_root": str(job.output_dir),
             }
 
-        return self.tasks.start("菲律宾各组商品销量报表", runner, tool="group_sales")
+        return self.tasks.start(
+            "菲律宾各组商品销量报表", runner, tool="group_sales",
+            context={"output_root": str(job.output_dir)},
+        )
+
+    def get_warehouse_export_options(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            request_payload = self._payload_with_account(payload, "mabang")
+            categories, warehouses = fetch_warehouse_report_options(
+                request_payload["username"],
+                request_payload["password"],
+            )
+            settings = self.config_store.load()
+            return {
+                "ok": True,
+                "categories": [{"id": item.id, "name": item.name} for item in categories],
+                "warehouses": [{"id": item.id, "name": item.name} for item in warehouses],
+                "output_dir": resolve_output_directories(settings, "warehouse_sales_export")["output_dir"],
+                "month_range": warehouse_export_default_months(),
+            }
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def start_warehouse_sales_export(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            request_payload = self._payload_with_account(payload, "mabang")
+            if not str(request_payload.get("output_dir") or "").strip():
+                request_payload["output_dir"] = resolve_output_directories(
+                    self.config_store.load(), "warehouse_sales_export"
+                )["output_dir"]
+            job = validate_warehouse_export_payload(request_payload)
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+        def runner(progress):
+            result = run_warehouse_sales_export(job, progress)
+            return {
+                "month_count": result.month_count,
+                "record_count": result.record_count,
+                "output_file": str(result.output_file),
+                "output_dir": str(result.output_dir),
+                "failed_months": list(result.failed_months),
+                "category_count": len(job.category_ids),
+                "warehouse_count": len(job.warehouse_ids),
+                "months": [
+                    {"label": item.label, "record_count": item.record_count}
+                    for item in result.months
+                ],
+            }
+
+        return self.tasks.start("商品仓库报表按月导出", runner, tool="warehouse_sales_export")
 
     def start_mabang_income_expense_report(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -3119,6 +3218,23 @@ class AppBridge:
                      "resume_checkpoint": str(getattr(job, "resume_checkpoint", None) or "")},
         )
 
+    def start_bigseller_link_query(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """批量查询 SKU 最早上架商品的店铺和链接。"""
+        try:
+            request_payload = self._payload_with_account(payload, "bigseller")
+            job = validate_bigseller_link_query_payload(request_payload)
+            self.config_store.save({"output_dir": str(job.output_dir)})
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            return {"ok": False, "error": "无法读取查询参数，请检查账号配置与输出目录"}
+        return self.tasks.start(
+            "BS 抓取链接", lambda progress: run_bigseller_link_query(job, progress),
+            tool="bigseller_link_query", context={"sku_count": len(job.skus), "site": job.site},
+        )
+
     def inspect_bigseller_claim_file(self, source_file: str) -> dict[str, Any]:
         try:
             source = str(source_file or "").strip()
@@ -3503,7 +3619,6 @@ class AppBridge:
         if calculate_sha256(candidate) != update.sha256.upper():
             raise ValueError("安装包 SHA256 校验失败，已阻止运行")
         return candidate
-
 
     def get_lazada_ads_monthly_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:

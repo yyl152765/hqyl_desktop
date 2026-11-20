@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -11,8 +12,12 @@ from backend.services.group_sales_report import GroupSalesReportResult
 
 class GroupSalesBridgeTests(unittest.TestCase):
     def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.output_root = Path(temporary.name) / "new-reports"
         self.bridge = AppBridge.__new__(AppBridge)
         self.settings = AppSettings(
+            output_dir=str(self.output_root),
             accounts=[BoundAccount("a", "mabang", "测试账号", "bound-user", "bound-password")],
             active_account_ids={"mabang": "a"},
         )
@@ -43,14 +48,16 @@ class GroupSalesBridgeTests(unittest.TestCase):
         with patch("backend.services.group_sales_report.get_group_options", return_value=self.options):
             result = self.bridge.start_group_sales_report({
                 "account_id": "a", "group_ids": ["new-category"],
-                "start_date": "2026-09-01", "end_date": "2026-09-20", "output_dir": "exports",
+                "start_date": "2026-09-01", "end_date": "2026-09-20", "output_dir": str(self.output_root),
             })
         self.assertTrue(result["ok"])
         self.bridge.config_store.save.assert_called_once_with({
-            "output_dir": "exports", "sales_group_ids": ["new-category"],
+            "output_dir": str(self.output_root), "sales_group_ids": ["new-category"],
         })
+        self.assertTrue(self.output_root.is_dir())
         runner = self.bridge.tasks.start.call_args.args[1]
-        export_result = GroupSalesReportResult(3, 1, 1, Path("exports/summary.xlsx"), Path("exports"))
+        run_dir = self.output_root / "菲律宾各组商品销量报表_20260901_20260920_120000"
+        export_result = GroupSalesReportResult(3, 1, 1, run_dir / "summary.xlsx", run_dir)
         with patch("backend.app_bridge.run_group_sales_report", return_value=export_result) as exporter:
             output = runner(Mock())
         job = exporter.call_args.args[0]
@@ -58,6 +65,30 @@ class GroupSalesBridgeTests(unittest.TestCase):
         self.assertEqual(job.groups[0].id, "new-category")
         self.assertEqual(output["group_count"], 1)
         self.assertEqual(output["record_count"], 3)
+        self.assertEqual(output["output_dir"], str(run_dir))
+        self.assertEqual(output["output_root"], str(self.output_root))
+        self.assertEqual(self.bridge.tasks.start.call_args.kwargs["context"]["output_root"], str(self.output_root))
+
+    def test_missing_directory_uses_saved_root_and_invalid_directory_is_not_saved(self) -> None:
+        payload = {
+            "account_id": "a", "group_ids": ["new-category"],
+            "start_date": "2026-09-01", "end_date": "2026-09-20",
+        }
+        with patch("backend.services.group_sales_report.get_group_options", return_value=self.options):
+            result = self.bridge.start_group_sales_report(payload)
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(self.output_root.is_dir())
+        self.bridge.config_store.save.reset_mock()
+        self.bridge.tasks.start.reset_mock()
+        blocked = self.output_root / "a-file"
+        blocked.write_text("keep", encoding="utf-8")
+        with patch("backend.services.group_sales_report.get_group_options", return_value=self.options):
+            result = self.bridge.start_group_sales_report({**payload, "output_dir": str(blocked)})
+        self.assertFalse(result["ok"])
+        self.assertIn("输出目录", result["error"])
+        self.bridge.config_store.save.assert_not_called()
+        self.bridge.tasks.start.assert_not_called()
+        self.assertEqual(blocked.read_text(encoding="utf-8"), "keep")
 
 
 if __name__ == "__main__":

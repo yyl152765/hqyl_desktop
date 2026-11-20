@@ -5,13 +5,14 @@ import unittest
 import json
 import sys
 import csv
-from datetime import date
+from datetime import date, datetime
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
+from openpyxl import load_workbook
 
 from backend.config_store import BoundAccount, ConfigStore, DEFAULT_UPDATE_MANIFEST_URL
 from backend.core.mabang_client import MabangApiError
@@ -21,6 +22,7 @@ from backend.services.group_sales_report import (
     get_group_options,
     normalize_sales_csv,
     parse_group_options,
+    run_group_sales_report,
     validate_group_sales_payload,
 )
 
@@ -186,6 +188,55 @@ class GroupSalesReportServiceTests(unittest.TestCase):
                     "output_dir": str(Path.cwd()),
                 }
             )
+
+    def test_empty_output_path_is_rejected_before_looking_up_categories(self) -> None:
+        with patch("backend.services.group_sales_report.get_group_options") as options:
+            with self.assertRaisesRegex(ValueError, "请输入输出目录"):
+                validate_group_sales_payload({
+                    "username": "u", "password": "p", "group_ids": ["group"],
+                    "start_date": "2026-10-01", "end_date": "2026-10-09", "output_dir": "  ",
+                })
+        options.assert_not_called()
+
+    def test_repeated_exports_create_sibling_folders_and_readable_files(self) -> None:
+        group = {"id": "group", "name": "测试组", "shop_label_id": "group"}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "new" / "reports"
+            old_run = root / "菲律宾各组商品销量报表_20261001_20261009_120000"
+            with patch("backend.services.group_sales_report.get_group_options", return_value=[group]):
+                job = validate_group_sales_payload({
+                    "username": "u", "password": "p", "group_ids": ["group"],
+                    "start_date": "2026-10-01", "end_date": "2026-10-09",
+                    "output_dir": str(old_run / old_run.name),
+                })
+            self.assertEqual(job.output_dir, root)
+            self.assertTrue(root.is_dir())
+            self.assertFalse(old_run.exists())
+            with patch("backend.services.group_sales_report.MabangClient") as factory, patch(
+                "backend.services.group_sales_report.datetime", wraps=datetime
+            ) as clock:
+                clock.now.return_value = datetime(2026, 11, 10, 12, 0, 0)
+                client = factory.return_value.__enter__.return_value
+                client.download_product_sales_report_csv.side_effect = [
+                    SimpleNamespace(content="SKU,销售数量,平均单天销量\nfirst,9,1\n".encode("utf-8")),
+                    SimpleNamespace(content="SKU,销售数量,平均单天销量\nsecond,18,2\n".encode("utf-8")),
+                ]
+                first = run_group_sales_report(job)
+                first_workbook = first.output_file.read_bytes()
+                second = run_group_sales_report(job)
+            self.assertEqual(first.output_dir.parent, root)
+            self.assertEqual(second.output_dir.parent, root)
+            self.assertNotEqual(first.output_dir, second.output_dir)
+            self.assertEqual(first.output_file.read_bytes(), first_workbook)
+            for result, sku in ((first, "first"), (second, "second")):
+                self.assertEqual(result.record_count, 1)
+                csv_path = next(result.output_dir.glob("*.csv"))
+                self.assertEqual(self._sales_row(csv_path.read_bytes())["SKU"], sku)
+                workbook = load_workbook(result.output_file)
+                try:
+                    self.assertEqual(workbook.active.cell(2, 1).value, sku)
+                finally:
+                    workbook.close()
 
     def test_config_store_round_trips_accounts_and_sales_groups(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

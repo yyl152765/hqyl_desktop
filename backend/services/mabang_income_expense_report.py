@@ -35,6 +35,7 @@ EXPORT_INIT_ROWS_PER_PAGE = 100
 EXPORT_REQUEST_TIMEOUT_SECONDS = 360
 MAX_EXPORT_CHUNKS = 10_000
 MAX_EXPORT_ATTEMPTS = 4
+MAX_EXPORT_GROUP_ATTEMPTS = 2
 WAF_RETRY_DELAYS = (60, 120, 300)
 TRANSIENT_RETRY_DELAYS = (5, 15, 30)
 
@@ -171,6 +172,7 @@ REPORT_CATEGORIES = (
     _category("tk印尼", "1042624"),
     _category("tk越南", "1045562"),
     _category("tk巴西", "1059666"),
+    _category("tk新加坡", "1061654"),
     _category("MercadoLivre巴西", "1059517"),
     _category("shopee巴西", "1059368"),
     _category("菲TEMU-袁晶组", "1058948"),
@@ -671,6 +673,10 @@ def build_income_detail_form(
 
 class IncomeExpenseExportError(MabangApiError):
     """Raised when the official income/expense file export is incomplete."""
+
+
+class IncomeExpenseIncompleteExportError(IncomeExpenseExportError):
+    """A structurally valid export was incomplete and may need a fresh query."""
 
 
 def _is_explicit_no_data_payload(payload: Mapping[str, Any]) -> bool:
@@ -1239,7 +1245,7 @@ class IncomeExpenseCsvExporter:
                         f"{target.name}: [{index}/{len(groups)}] 开始导出 {group_name}",
                     )
                     expected_count = self._initialize_form_query(display_name, form_data)
-                    row_count, chunk_count, wrote_header = self._write_export_chunks(
+                    row_count, chunk_count, wrote_header = self._write_export_group_with_recovery(
                         display_name,
                         form_data,
                         expected_count,
@@ -1307,7 +1313,7 @@ class IncomeExpenseCsvExporter:
         try:
             with temp_path.open("w", encoding="utf-8-sig", newline="") as output:
                 for display_name, form_data, expected_count in groups:
-                    row_count, chunk_count, wrote_header = self._write_export_chunks(
+                    row_count, chunk_count, wrote_header = self._write_export_group_with_recovery(
                         display_name,
                         form_data,
                         expected_count,
@@ -1326,6 +1332,55 @@ class IncomeExpenseCsvExporter:
         finally:
             self._remove_temporary_csv(temp_path)
         return total_rows, total_chunks
+
+    def _write_export_group_with_recovery(
+        self,
+        display_name: str,
+        form_data: Sequence[tuple[str, str]],
+        expected_count: int,
+        output: TextIO,
+        *,
+        wrote_header: bool,
+        previous_group_fingerprints: set[bytes] | None = None,
+        current_group_fingerprints: set[bytes] | None = None,
+    ) -> tuple[int, int, bool]:
+        # A short, nonempty chunk has no reliable expected size. If the final
+        # count disagrees, retry the whole query instead of guessing which page
+        # to append. Roll back only this group, including its fingerprint state.
+        group_start = output.tell()
+        for attempt in range(1, MAX_EXPORT_GROUP_ATTEMPTS + 1):
+            attempt_fingerprints: set[bytes] | None = (
+                set() if current_group_fingerprints is not None else None
+            )
+            try:
+                result = self._write_export_chunks(
+                    display_name,
+                    form_data,
+                    expected_count,
+                    output,
+                    wrote_header=wrote_header,
+                    previous_group_fingerprints=previous_group_fingerprints,
+                    current_group_fingerprints=attempt_fingerprints,
+                )
+            except IncomeExpenseIncompleteExportError as exc:
+                output.seek(group_start)
+                output.truncate()
+                if attempt >= MAX_EXPORT_GROUP_ATTEMPTS:
+                    raise
+                delay = float(TRANSIENT_RETRY_DELAYS[0])
+                _emit(
+                    self.progress,
+                    f"{display_name}: {exc}；已丢弃本次不完整分片，"
+                    f"等待 {delay:.0f} 秒后按原筛选条件重新查询并完整重导本项 "
+                    f"({attempt + 1}/{MAX_EXPORT_GROUP_ATTEMPTS})",
+                )
+                self.sleep(delay)
+                expected_count = self._initialize_form_query(display_name, list(form_data))
+                continue
+            if current_group_fingerprints is not None and attempt_fingerprints is not None:
+                current_group_fingerprints.update(attempt_fingerprints)
+            return result
+        raise AssertionError("export group retry budget must be positive")
 
     def _write_export_chunks(
         self,
@@ -1349,6 +1404,7 @@ class IncomeExpenseCsvExporter:
         header: list[str] | None = None
         written_rows = 0
         chunk_count = 0
+        empty_chunk_attempts = 0
 
         while page_no < MAX_EXPORT_CHUNKS:
             params: list[tuple[str, str]] = [
@@ -1395,6 +1451,36 @@ class IncomeExpenseCsvExporter:
 
             assert header is not None
             frame = self._normalize_frame(data, header)
+            has_next = self._parse_has_next(payload.get("hasNext"))
+            if frame.empty and (has_next or written_rows < expected_count):
+                # A successful HTTP/JSON response can still omit an entire
+                # chunk. Keep both request cursors until it contains details;
+                # never write, count, or accept a new cache key from that reply.
+                empty_chunk_attempts += 1
+                detail = (
+                    f"原始 {len(data)} 行，有效明细 0 行，"
+                    f"累计 {written_rows}/{expected_count} 条"
+                )
+                if empty_chunk_attempts >= self.max_attempts:
+                    raise IncomeExpenseIncompleteExportError(
+                        f"{display_name} 导出第 {page_no + 1} 个分片连续 "
+                        f"{empty_chunk_attempts} 次未返回有效明细（{detail}），"
+                        "已停止导出，未生成不完整文件"
+                    )
+                delay = float(
+                    TRANSIENT_RETRY_DELAYS[
+                        min(empty_chunk_attempts - 1, len(TRANSIENT_RETRY_DELAYS) - 1)
+                    ]
+                )
+                _emit(
+                    self.progress,
+                    f"{display_name} 导出第 {page_no + 1} 个分片未返回有效明细"
+                    f"（{detail}），等待 {delay:.0f} 秒后重试同一分片 "
+                    f"({empty_chunk_attempts}/{self.max_attempts})",
+                )
+                self.sleep(delay)
+                continue
+            empty_chunk_attempts = 0
             if (
                 previous_group_fingerprints is not None
                 and current_group_fingerprints is not None
@@ -1415,11 +1501,11 @@ class IncomeExpenseCsvExporter:
             written_rows += len(frame)
             chunk_count += 1
 
-            has_next = self._parse_has_next(payload.get("hasNext"))
             response_cache_key = _safe_text(payload.get("cacheKey"))
             _emit(
                 self.progress,
                 f"{display_name}: 第 {page_no + 1} 个分片完成，"
+                f"本片 {len(frame)} 条（接口明细 {len(data)} 行），"
                 f"累计 {written_rows}/{expected_count} 条",
             )
             if has_next:
@@ -1432,7 +1518,7 @@ class IncomeExpenseCsvExporter:
                 continue
 
             if max_page is not None and page_no != max_page:
-                raise IncomeExpenseExportError(
+                raise IncomeExpenseIncompleteExportError(
                     f"导出提前结束: 当前分片 {page_no + 1}，预计 {max_page + 1}"
                 )
             break
@@ -1440,9 +1526,14 @@ class IncomeExpenseCsvExporter:
             raise IncomeExpenseExportError("导出分片超过安全上限")
 
         if written_rows != expected_count:
-            raise IncomeExpenseExportError(
+            difference = (
+                f"少 {expected_count - written_rows} 条"
+                if written_rows < expected_count
+                else f"多 {written_rows - expected_count} 条"
+            )
+            raise IncomeExpenseIncompleteExportError(
                 f"{display_name} 导出明细数不一致: "
-                f"查询 {expected_count} 条，实际 {written_rows} 条"
+                f"查询 {expected_count} 条，实际 {written_rows} 条（{difference}）"
             )
         return written_rows, chunk_count, wrote_header
 

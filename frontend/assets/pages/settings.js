@@ -118,6 +118,7 @@
       const result = await HQYL.api().save_settings({ output_dir: $("outputDir").value.trim(), rows_per_page: Number($("rowsPerPage").value || 500), update_manifest_url: $("updateManifestUrl").value.trim() });
       if (!result.ok) throw new Error(result.error || "配置保存失败");
       HQYL.state.outputDir = result.settings.output_dir || $("outputDir").value.trim();
+      $("outputDir").value = HQYL.state.outputDir;
       HQYL.showToast("配置已保存");
     } catch (error) {
       HQYL.showToast(error.message || String(error));

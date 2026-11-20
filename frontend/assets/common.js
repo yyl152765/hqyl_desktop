@@ -39,6 +39,7 @@ const HQYL = (() => {
     ] },
     { id: "mabang", name: "马帮流程", icon: "M", keywords: "马帮 Mabang ERP", items: [
       { id: "group_sales", href: "group-sales.html", name: "各组销量报表", icon: "销", tag: "菲律宾", category: "菲律宾 Shopee", description: "按小组导出销量", keywords: "销售 商品 小组" },
+      { id: "warehouse_sales_export", href: "warehouse-sales-export.html", name: "商品仓库报表按月导出", icon: "仓", tag: "按月", category: "马帮报表", description: "多选分类与仓库按月分表", keywords: "仓库 报表 按月 月份 分类 多选 账单 商品仓库 warehouseReports" },
       { id: "sample_registration", href: "sample-registration.html", name: "网红寄样登记", icon: "样", tag: "TikTok", category: "TikTok", description: "样品订单查询与导出", keywords: "达人 钉钉 同步" },
       { id: "developer_sales_income_summary", href: "developer-sales-income-summary.html", name: "开发与销售收入汇总", icon: "汇", tag: "采购", category: "采购流程", description: "付款日期 · 美元收入", keywords: "开发员 订单金额 报表" },
       { id: "mabang_arrival_query", href: "mabang-arrival-query.html", name: "到货查询", icon: "到", tag: "调拨", category: "仓库调拨", description: "按备注查询调拨并导出", keywords: "仓储 仓库" },
@@ -60,8 +61,8 @@ const HQYL = (() => {
       { id: "shopee_ads", href: "shopee-ads.html", name: "广告充值", icon: "充", tag: "Shopee", category: "Shopee 广告", description: "多站点店铺充值", keywords: "印尼 泰国 菲律宾 越南 马来西亚 马来 按表充值 营销" },
       { id: "lazada_withdrawal_statistics", href: "lazada-withdrawal-statistics.html", name: "提现统计", icon: "提", tag: "Lazada", category: "Lazada 财务", description: "Excel 与账单归档", keywords: "菲律宾 马来西亚 泰国 收入" },
       { id: "lazada_balance_statistics", href: "lazada-balance-statistics.html", name: "余额统计", icon: "余", tag: "Lazada", category: "Lazada 财务", description: "多站点当前余额与处理中提现截图", keywords: "Income Balance Ads processing 菲律宾 马来西亚 泰国 印尼 越南 新加坡" },
-      { id: "lazada_ads_monthly", href: "lazada-ads-monthly.html", name: "Lazada 广告月报", icon: "告", tag: "Lazada", category: "Lazada 广告", description: "六站点广告、联盟及优惠券月报导出", keywords: "Lazada 广告 联盟 优惠券 真实花费 月报 支出 Spend" },
       { id: "lazada_monthly_report", href: "lazada-monthly-report.html", name: "月度账单下载", icon: "月", tag: "Lazada", category: "Lazada 财务", description: "按月份批量下载账单", keywords: "泰国 马来西亚 菲律宾 月报" },
+      { id: "lazada_ads_monthly", href: "lazada-ads-monthly.html", name: "Lazada 广告月报", icon: "告", tag: "Lazada", category: "Lazada 广告", description: "六站点广告、联盟及优惠券月报导出", keywords: "Lazada 广告 联盟 优惠券 真实花费 月报 支出 Spend" },
       { id: "lazada_ads_data", href: "lazada-ads-data.html", name: "广告数据", icon: "广", tag: "Lazada", category: "Lazada 广告", description: "指定日期采集广告费与业绩并写入 Sheet", keywords: "泰国 钉钉 广告 支出 业绩 Sheet" },
       { id: "lazada_bill_detail", href: "lazada-bill-detail.html", name: "后台收支数据", icon: "账", tag: "Lazada", category: "Lazada 账单", description: "按国家采集店铺后台收支数据并写入指定 Sheet", keywords: "泰国 菲律宾 马来 印尼 越南 钉钉 总金额 收入 扣减项 截图 账单区间" },
     ] },
@@ -76,6 +77,7 @@ const HQYL = (() => {
       { id: "bigseller_item_id_query", href: "bigseller-item-id-query.html", name: "BS 商品ID查询", icon: "ID", tag: "Shopee", category: "Shopee 商品", description: "批量 SKU 匹配商品ID", keywords: "子SKU Item ID Fuzzy Search Views" },
       { id: "bigseller_sku_benchmark", href: "bigseller-sku-benchmark.html", name: "滞销SKU爆款对标", icon: "标", tag: "Shopee", category: "Shopee 商品", description: "按浏览量或销量对标店铺", keywords: "选品 Views 销售" },
       { id: "bigseller_claim_query", href: "bigseller-claim-query.html", name: "新品认领时间查询", icon: "新", tag: "Shopee", category: "Shopee 商品", description: "导入 SKU 查询最早创建商品", keywords: "新品 认领 主SKU 创建时间 上架时间 店铺 Excel" },
+      { id: "bigseller_link_query", href: "bigseller-link-query.html", name: "BS 抓取链接", icon: "链", tag: "Shopee", category: "Shopee 商品", description: "查询最早上架链接和店铺", keywords: "SKU 子SKU 店铺名 商品链接 上架时间 最早 Excel" },
     ] },
   ];
   const SIDEBAR_MODULES = SIDEBAR_GROUPS.flatMap((group) => group.items.map((item) => ({ ...item, group })));
@@ -808,7 +810,7 @@ const HQYL = (() => {
       const code = country || (tool === "lazada_ads_data" || tool === "lazada_bill_detail" ? "TH" : "");
       const name = { TH: "泰国", PH: "菲律宾", MY: "马来西亚", ID: "印尼", VN: "越南" }[code] || "泰国";
       const root = "C:\\Users\\Demo\\Desktop\\log";
-      const folder = { mabang_order_sku_export: "马帮订单SKU汇总", lazada_ads_data: "lz泰国广告数据", temu_activity_export: "TEMU活动报名导出", temu_financial_export: "TEMU财务报表导出", lz_warehouse_inventory: "lz各仓库存" }[tool] || "lz各仓库存";
+      const folder = { mabang_order_sku_export: "马帮订单SKU汇总", lazada_ads_data: "lz泰国广告数据", temu_activity_export: "TEMU活动报名导出", temu_financial_export: "TEMU财务报表导出", lz_warehouse_inventory: "lz各仓库存", warehouse_sales_export: "商品仓库报表导出" }[tool] || "lz各仓库存";
       const defaults = tool === "lazada_bill_detail"
         ? { output_dir: `${root}\\Lazada${name}账单明细`, screenshot_root: `${root}\\Lazada${name}账单明细截图` }
         : { output_dir: `${root}\\${folder}` };
@@ -817,7 +819,7 @@ const HQYL = (() => {
       return { ...defaults, ...saved };
     };
     return {
-      async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "0.2.92" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
+      async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "1.0.0" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, warehouse_sales_export: { month_range: { start_month: "2026-06", end_month: "2026-11" }, categories: [], warehouses: [], output_dir: previewScopedDirs("warehouse_sales_export").output_dir }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
       async get_latest_task_status(tool) { return tasks[tool] || { ok: false, empty: true }; },
       async get_task_status(id) { return Object.values(tasks).find((task) => task.id === id) || { ok: false, error: "任务不存在" }; },
       async get_lazada_campaign_workbook_info() { return { ok: true, preview: true, workflow: "local_excel", supports_reprice_equal_prices: true, supports_sku_price_filter: true, supports_removed_sku_export: true, default_threshold: "0.95", output_dir: "C:\\Preview\\Excel折扣筛选", max_files: 100 }; },
@@ -890,6 +892,8 @@ const HQYL = (() => {
           body_sample: "[界面演示] 未访问真实页面，仅展示检查结果的呈现方式。" };
       },
       async get_group_sales_options() { return { ok: true, groups: [{ id: "preview-group", name: "菲S-示例小组" }, { id: "preview-tk", name: "tk菲律宾" }, { id: "preview-lazada", name: "lazada马来" }] }; },      async start_group_sales_report(payload) { return startPreviewTask("group_sales", { group_count: (payload.group_ids || []).length, record_count: 16, output_file: "C:\\Preview\\销量.xlsx", output_dir: "C:\\Preview" }); },
+      async get_warehouse_export_options() { return { ok: true, categories: [{ id: "1042621", name: "泰国TK" }, { id: "1038954", name: "lazada泰国" }, { id: "1049992", name: "泰国th01店铺" }], warehouses: [{ id: "330978", name: "泰国新仓TH01" }, { id: "1101002", name: "泰国TH05仓" }, { id: "1102469", name: "泰国TH06仓" }], output_dir: previewScopedDirs("warehouse_sales_export").output_dir, month_range: { start_month: "2026-06", end_month: "2026-11" } }; },
+      async start_warehouse_sales_export(payload) { return startPreviewTask("warehouse_sales_export", { month_count: 6, record_count: 612340, output_file: "C:\\Preview\\商品仓库报表导出\\商品仓库报表_202606_202611.xlsx", output_dir: "C:\\Preview\\商品仓库报表导出", failed_months: [], category_count: (payload.category_ids || []).length, warehouse_count: (payload.warehouse_ids || []).length, months: [] }); },
       async start_developer_sales_income_summary() { return startPreviewTask("developer_sales_income_summary", { developer_count: 2, salesperson_count: 4, source_row_count: 86, missing_developer_names: [], output_file: "C:\\Preview\\开发与销售收入汇总.xlsx", output_dir: "C:\\Preview" }); },
       async start_mabang_income_expense_report() { return startPreviewTask("mabang_income_expense_report", { target_count: 3, category_count: 0, warehouse_count: 3, csv_file_count: 3, record_count: 1286, output_files: ["C:\\Preview\\印尼雅仓海外仓_收支报表.csv", "C:\\Preview\\菲律宾雅仓海外仓_收支报表.csv", "C:\\Preview\\马来雅仓海外仓_收支报表.csv"], output_dir: "C:\\Preview\\马帮收支报表" }); },
       async start_purchase_log_query() { return startPreviewTask("purchase_log", { sku_count: 2, record_count: 8, output_file: "C:\\Preview\\采购.xlsx", output_dir: "C:\\Preview" }); },
@@ -1296,6 +1300,32 @@ const HQYL = (() => {
         task.error = task.result.completion_message;
         task.context = { ...payload, sku_count: 4 };
         task.logs = ["演示模式未读取实际 Excel、未登录 BigSeller，也未生成文件。", "[BS认领进度 3/4] 演示结果已展示"];
+        return task;
+      },
+      async start_bigseller_link_query(payload) {
+        const siteNames = { PH: "菲律宾", ID: "印尼", MY: "马来西亚", VN: "越南", TH: "泰国", SG: "新加坡", TW: "台湾", BR: "巴西", MX: "墨西哥", CO: "哥伦比亚", CL: "智利" };
+        const site = payload.site || "PH";
+        if (!siteNames[site]) return { ok: false, error: "请选择有效的 Shopee 国家/地区" };
+        const skus = Array.from(new Set(String(payload.sku_text || "").split(/[\r\n,，;；\t]+/).map((sku) => sku.trim()).filter(Boolean)));
+        if (!skus.length || skus.length > 50000) return { ok: false, error: "请输入 1 至 50000 个不同 SKU" };
+        const rows = skus.map((sku, index) => ({
+          sku, shop_name: index % 3 === 2 ? "" : "示例店铺（演示）", product_url: "",
+          listed_time: index % 3 === 2 ? "" : "2025-01-02 09:30:00", item_id: index % 3 === 2 ? "" : String(100001 + index),
+          listing_scope: index % 3 === 2 ? "" : index % 3 === 1 ? "unlisted" : "live",
+          status: index % 3 === 2 ? "not_found" : "matched", message: "演示数据，未查询 BigSeller",
+        }));
+        const matched = rows.filter((row) => row.status === "matched").length;
+        const task = startPreviewTask("bigseller_link_query", {
+          site, site_name: siteNames[site],
+          is_preview: true, is_complete: true, completion_message: "界面演示已完成，未执行真实查询",
+          sku_count: rows.length, confirmed_count: rows.length, matched_count: matched,
+          live_matched_count: rows.filter((row) => row.listing_scope === "live").length,
+          unlisted_matched_count: rows.filter((row) => row.listing_scope === "unlisted").length,
+          not_found_count: rows.length - matched, failed_count: 0, failed_skus: [],
+          rows: rows.slice(0, 500), preview_limited: rows.length > 500, output_file: "", output_dir: "",
+        });
+        task.context = { sku_count: skus.length, site };
+        task.logs = ["演示模式未登录 BigSeller、未发送真实请求，也未生成 Excel。"];
         return task;
       },
       async choose_bigseller_benchmark_checkpoint() { return { ok: false, error: "演示模式不读取真实进度文件；请在桌面平台中恢复查询" }; },
