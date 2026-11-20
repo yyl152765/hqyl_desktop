@@ -112,9 +112,18 @@ class LinkFrontendTests(unittest.TestCase):
         expect(page.locator("#resultTableBody tr")).to_have_count(3)
         self.assertEqual(self.errors, [])
 
+    def paste_skus(self, count):
+        self.page.locator("#skuText").evaluate(
+            """(field, text) => {
+              field.value = text;
+              field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste' }));
+            }""",
+            "\n".join(f"sku-{i}" for i in range(count)),
+        )
+
     def test_large_batch_paginates_and_shows_limited_preview(self):
         page = self.page
-        page.locator("#skuText").fill("\n".join(f"sku-{i}" for i in range(15001)))
+        self.paste_skus(15001)
         expect(page.locator("#skuInputSummary")).to_have_text("已输入 15001 个唯一 SKU")
         page.locator("#runBtn").click()
         expect(page.locator("#previewNotice")).to_be_visible()
@@ -130,8 +139,14 @@ class LinkFrontendTests(unittest.TestCase):
 
     def test_over_50000_unique_skus_is_rejected_before_starting_task(self):
         page = self.page
-        page.evaluate("window.largeBatchCalls = 0; window.pywebview.api.start_bigseller_link_query = async () => { window.largeBatchCalls++; return {ok: false}; };")
-        page.locator("#skuText").fill("\n".join(f"sku-{i}" for i in range(50001)))
+        page.evaluate("""() => {
+          window.largeBatchCalls = 0;
+          window.pywebview.api.start_bigseller_link_query = async () => {
+            window.largeBatchCalls++;
+            return {ok: false};
+          };
+        }""")
+        self.paste_skus(50001)
         expect(page.locator("#skuInputSummary")).to_contain_text("超过 50000 个上限")
         page.locator("#runBtn").click()
         self.assertEqual(page.evaluate("window.largeBatchCalls"), 0)
