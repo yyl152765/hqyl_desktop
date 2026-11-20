@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, Mock, patch
@@ -78,7 +80,7 @@ class UpdateServiceTests(unittest.TestCase):
                 def get(url, **kwargs):
                     seen.append(url)
                     request = httpx.Request("GET", url)
-                    if len(seen) == 1 and failed == "offline":
+                    if url == primary and failed == "offline":
                         raise httpx.ConnectError("offline", request=request)
                     if len(seen) == 1 and isinstance(failed, int):
                         return httpx.Response(failed, request=request)
@@ -89,7 +91,12 @@ class UpdateServiceTests(unittest.TestCase):
                 with patch("backend.update_service.httpx.get", side_effect=get):
                     result = check_update_manifest(primary, "1.0.0")
                 self.assertFalse(result.error)
-                self.assertEqual(seen, [primary, expected_source] if failed else [primary])
+                expected_requests = [primary]
+                if failed == "offline":
+                    expected_requests.append(primary)
+                if failed:
+                    expected_requests.append(expected_source)
+                self.assertEqual(seen, expected_requests)
                 self.assertEqual(result.package_url, expected_url)
                 self.assertEqual(result.sha256, "AB" * 32)
 
@@ -128,9 +135,45 @@ class UpdateServiceTests(unittest.TestCase):
     def test_both_official_sources_unavailable_return_optional_error(self) -> None:
         with patch("backend.update_service.httpx.get", side_effect=httpx.ConnectError("offline")) as get:
             result = check_update_manifest(DEFAULT_UPDATE_MANIFEST_URL, "1.0.1")
-        self.assertEqual(get.call_count, 2)
+        self.assertEqual([call.kwargs["trust_env"] for call in get.call_args_list], [False, True, True])
         self.assertIn("两个官方更新地址", result.error)
         self.assertFalse(result.mandatory)
+
+    def test_origin_download_can_restart_through_system_proxy_after_interrupted_transfer(self) -> None:
+        url = DEFAULT_UPDATE_MANIFEST_URL.replace("latest.json", "HQYLAutomationSetup_1.0.1.exe")
+        content = b"complete verified installer"
+        request = httpx.Request("GET", url)
+        routes = []
+
+        def interrupted():
+            yield b"x" * (256 * 1024)
+            raise httpx.ReadError("connection closed", request=request)
+
+        @contextmanager
+        def stream(method, target, *, trust_env, **kwargs):
+            self.assertEqual((method, target), ("GET", url))
+            routes.append(trust_env)
+            response = httpx.Response(200, request=request, content=content if trust_env else interrupted())
+            try:
+                yield response
+            finally:
+                response.close()
+
+        with TemporaryDirectory() as temp_dir, patch("backend.update_service.httpx.stream", side_effect=stream):
+            path = download_update_package(url, "1.0.1", hashlib.sha256(content).hexdigest(), Path(temp_dir), lambda _: None)
+            self.assertEqual(path.read_bytes(), content)
+            self.assertEqual(list(Path(temp_dir).iterdir()), [path])
+        self.assertEqual(routes, [False, True])
+
+    def test_origin_checksum_failure_does_not_retry_or_leave_an_installer(self) -> None:
+        url = DEFAULT_UPDATE_MANIFEST_URL.replace("latest.json", "HQYLAutomationSetup_1.0.1.exe")
+        context = MagicMock()
+        context.__enter__.return_value = httpx.Response(200, request=httpx.Request("GET", url), content=b"wrong")
+        with TemporaryDirectory() as temp_dir, patch("backend.update_service.httpx.stream", return_value=context) as stream:
+            with self.assertRaisesRegex(ValueError, "SHA256"):
+                download_update_package(url, "1.0.1", "AB" * 32, Path(temp_dir), lambda _: None)
+            self.assertEqual(list(Path(temp_dir).iterdir()), [])
+            stream.assert_called_once()
 
     def test_calculate_sha256(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -152,7 +195,7 @@ class UpdateServiceTests(unittest.TestCase):
         context = MagicMock()
         context.__enter__.return_value = response
         context.__exit__.return_value = False
-        with TemporaryDirectory() as temp_dir, patch("backend.update_service.httpx.stream", return_value=context):
+        with TemporaryDirectory() as temp_dir, patch("backend.update_service.httpx.stream", return_value=context) as stream:
             expected = "11C22243629AC48E6B70ADF316DBABE4C01E313BD957C4DC5013ABECF5D6A8B4"
             path = download_update_package(
                 "https://example.com/setup.exe",
@@ -163,6 +206,7 @@ class UpdateServiceTests(unittest.TestCase):
             )
             self.assertTrue(path.exists())
             self.assertEqual(calculate_sha256(path), expected)
+            self.assertTrue(stream.call_args.kwargs["trust_env"])
 
 
 if __name__ == "__main__":

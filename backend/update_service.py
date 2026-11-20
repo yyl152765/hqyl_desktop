@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -14,8 +14,11 @@ from backend.update_sources import (
     DEFAULT_UPDATE_MANIFEST_URL,
     DOMAIN_UPDATE_MANIFEST_URL,
     OFFICIAL_MANIFEST_URLS,
+    ORIGIN_MANIFEST_URLS,
     official_installer_url,
 )
+
+_Result = TypeVar("_Result")
 
 
 @dataclass(frozen=True)
@@ -32,19 +35,36 @@ class UpdateCheckResult:
     error: str = ""
 
 
+def _unavailable(exc: httpx.TransportError | httpx.HTTPStatusError) -> bool:
+    return isinstance(exc, httpx.TransportError) or exc.response.status_code in (502, 503, 504)
+
+
+def _using_update_network(request: Callable[[bool], _Result], *, direct_first: bool) -> _Result:
+    # Only the documented HTTP origin is eligible for a direct connection.
+    # A network that requires a proxy can still use the system route.
+    if direct_first:
+        try:
+            return request(False)
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            if not _unavailable(exc):
+                raise
+    return request(True)
+
+
 def _fetch_manifest(url: str) -> httpx.Response:
-    response = httpx.get(url, timeout=12, follow_redirects=True)
-    response.raise_for_status()
-    return response
+    def fetch(trust_env: bool) -> httpx.Response:
+        response = httpx.get(url, timeout=12, follow_redirects=True, trust_env=trust_env)
+        response.raise_for_status()
+        return response
+
+    return _using_update_network(fetch, direct_first=url in ORIGIN_MANIFEST_URLS)
 
 
 def _read_manifest(url: str) -> tuple[str, httpx.Response]:
     try:
         return url, _fetch_manifest(url)
     except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-        if url not in OFFICIAL_MANIFEST_URLS:
-            raise
-        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code not in (502, 503, 504):
+        if url not in OFFICIAL_MANIFEST_URLS or not _unavailable(exc):
             raise
 
     alternate = DEFAULT_UPDATE_MANIFEST_URL if url == DOMAIN_UPDATE_MANIFEST_URL else DOMAIN_UPDATE_MANIFEST_URL
@@ -131,12 +151,12 @@ def download_update_package(
     partial_path = installer_path.with_suffix(".exe.part")
     partial_path.unlink(missing_ok=True)
 
-    digest = hashlib.sha256()
-    downloaded = 0
-    last_percent = -1
-    try:
+    def download(trust_env: bool) -> None:
+        digest = hashlib.sha256()
+        downloaded = 0
+        last_percent = -1
         progress("正在连接更新服务器")
-        with httpx.stream("GET", package_url, timeout=60, follow_redirects=True) as response:
+        with httpx.stream("GET", package_url, timeout=60, follow_redirects=True, trust_env=trust_env) as response:
             response.raise_for_status()
             total = int(response.headers.get("content-length") or 0)
             with partial_path.open("wb") as target:
@@ -158,6 +178,13 @@ def download_update_package(
         progress("下载完成，正在校验安装包")
         if actual_hash != expected_hash:
             raise ValueError("更新包 SHA256 校验失败，请重新下载")
+
+    try:
+        direct_first = (
+            re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", str(version)) is not None
+            and package_url in {official_installer_url(item, version) for item in ORIGIN_MANIFEST_URLS}
+        )
+        _using_update_network(download, direct_first=direct_first)
         os.replace(partial_path, installer_path)
         progress("安装包校验通过")
         return installer_path
