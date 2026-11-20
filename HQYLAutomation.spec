@@ -85,6 +85,7 @@ a = Analysis(
         "cryptography.hazmat.primitives.padding",
         "cryptography.hazmat.primitives.ciphers",
         *collect_submodules("selenium"),
+        *collect_submodules("pywinauto"),
         *playwright_hiddenimports,
         *shopee_ads_site_modules,
         *lazada_withdrawal_modules,

@@ -8,7 +8,7 @@
 2. 批量选择需要处理的 `.xlsx` 或 `.xlsm` 文件，也可填写文件完整路径。每批最多100份，重复路径自动去除。
 3. 如需增加SKU底价限制，在活动文件列表下单独选择一份「SKU价格表」。不选择时，保持原来的折扣筛选规则。
 4. 选择价格处理方式：自动识别、按已有活动价筛选，或按推荐价填充并筛选。可先检查表头识别、异常行数量，以及参考表的SKU条数。
-5. 输入最低折扣率，例如95%，并选择结果保存目录。
+5. 输入最低折扣率，例如 95%。如需把同价商品按这个折扣改价，勾选「已有活动价等于原价时，按最低折扣率改价」，然后选择结果保存目录。
 6. 开始处理，查看每份文件的填价、保留、折扣剔除、SKU价格剔除和异常行数。
 7. 打开处理后的表格、审核汇总或 ZIP。所有结果另存到新的批次目录，源文件不修改。
 
@@ -35,11 +35,13 @@
 
 工具识别常见中英文价格表头，例如「原价」「活动价」「市场活动价」「推荐价」及 `Original Price`、`Campaign Price`、`Recommended Price`。新版中文特邀表的「市场活动价」按活动价处理，「流量加权价」不参与填价；推荐价格按实际表头定位，不限定在H列。缺少关键列或关键价格表头重复时，检查结果会给出原因；自动识别的处理方式不符合预期时，可选择明确的方式后重试。
 
-已有 Lazada 特邀和普通表格也可作为本地 Excel 导入。例如普通表的售价为100、活动价为空、推荐价格为 `0 < Price <= 95`，自动识别后活动价填95，最低折扣率95%时保留。活动价已经填写时沿用原值；选择「按已有活动价筛选」始终不自动补价，空价格记为异常。活动表的中英文说明行保留，不计入商品数据行；本工具不下载或提交店铺活动。
+已有 Lazada 特邀和普通表格也可作为本地 Excel 导入。例如普通表的售价为100、活动价为空、推荐价格为 `0 < Price <= 95`，自动识别后活动价填95，最低折扣率95%时保留。普通表默认沿用已填的活动价。选择「按已有活动价筛选」时，空价格记为异常。活动表的中英文说明行保留，不计入商品数据行；本工具不下载或提交店铺活动。
 
 ## 折扣与异常规则
 
 折扣率 = 活动价 ÷ 原价。低于输入阈值的行移出结果表，等于阈值时保留。页面95%对应接口参数 `0.95`，表示活动价至少为原价的95%。
+
+开启同价改价后，如果本次沿用的已有活动价等于原价，就按「原价 × 最低折扣率」写入结果表。例如售价和大促价均为 132，设置 95% 后大促价变为 125.4。推荐价或最高活动价填充的行按填充后的价格筛选。计算结果超出 Excel 的 15 位有效数字时向上取到可保存的精度。通过折扣筛选的行使用最终活动价匹配 SKU 参考价格。
 
 | 原价 | 活动价 | 比例 | 最低折扣率95%时的结果 |
 | --- | --- | --- | --- |
@@ -90,12 +92,13 @@ SKU只去除首尾空白，区分大小写并保留文本中的前导零、符�
 get_lazada_campaign_workbook_info()
 choose_lazada_campaign_files()
 choose_lazada_campaign_sku_price_file()
-inspect_lazada_campaign_files({source_files, sku_price_file, mode, threshold, output_dir})
+inspect_lazada_campaign_files({source_files, sku_price_file, mode, threshold, reprice_equal_prices, output_dir})
 export_lazada_campaign_template({output_dir})
 start_lazada_campaign_workbook({
   source_files: ["C:/表格/商品价格.xlsx"],
   sku_price_file: "C:/表格/SKU价格.xlsx", // 选填，空字符串或省略表示不启用
   mode: "auto" | "plain" | "invited",
+  reprice_equal_prices: true, // 选填，默认 false
   threshold: "0.95", output_dir: "C:/表格/筛选结果"
 })
 get_task_status(task_id)
@@ -106,7 +109,7 @@ open_path(result_path)
 
 `source_files` 为1至100个本地文件路径，`threshold` 必须大于0且不超过1。`sku_price_file` 为可选的独立参考表路径，不能与活动输入文件相同。检查结果的 `sku_reference` 提供 `enabled`、`source_file` 和去重后的 `sku_count`；无效参考表返回 `ok: false`。`sku_removed_rows` 分别记录各工作表、文件和批次因SKU底价剔除的行数，`removed_rows` 仍只记录折扣剔除。
 
-任务context使用 `workflow: "local_excel"`，仅保存文件路径、可选参考表路径、模式、阈值和输出目录。`get_lazada_campaign_workbook_info()` 的 `supports_sku_price_filter: true` 表示后端支持该功能。启动、检查和模板导出不需要账号参数。
+任务context使用 `workflow: "local_excel"`，保存文件路径、可选参考表路径、模式、阈值、同价改价选项和输出目录。`get_lazada_campaign_workbook_info()` 通过 `supports_sku_price_filter` 和 `supports_reprice_equal_prices` 标识支持的功能。启用同价改价时，`updated_rows` 包含填价和改价。启动、检查和模板导出不需要账号参数。
 
 每份结果的 `removed_sku_preview` 为前100行预览，字段为 `sku`、`worksheet`、`source_row`、`activity_price`、`reference_price`、`reason`；预览价格为字符串，`sku_removed_rows` 为全部剔除行数。`removed_sku_file` 指向该文件的完整 `.xlsx` 明细。`supports_removed_sku_export: true` 表示后端支持保存导出；导出API只接收任务ID和从0开始的文件序号，弹出本机保存对话框后复制任务已生成的完整明细，不从前100行预览重新拼接文件。
 

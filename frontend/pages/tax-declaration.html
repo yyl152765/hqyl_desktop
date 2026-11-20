@@ -1,0 +1,74 @@
+<!doctype html>
+<!-- Layout review: existing finance workbench, visible run state and explicit declaration consent. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>电子税务局申报</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">财务流程 / 个税</div><h1>电子税务局申报</h1></div>
+          <div id="taskBadge" class="status-pill idle" role="status">待运行</div>
+        </header>
+
+        <section class="overview-grid" aria-label="任务概览">
+          <article class="overview-card"><span>已处理</span><strong id="taxTotal">—</strong><small>本次处理的公司数</small></article>
+          <article class="overview-card accent-green"><span>正常结果</span><strong id="taxSuccessful">—</strong><small id="taxSkipped">含已有导出跳过</small></article>
+          <article class="overview-card"><span>处理失败</span><strong id="taxFailed">—</strong><small id="taxExportFailed">另列申报后导出失败</small></article>
+          <article class="overview-card file-card"><span>结果 Excel</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+
+        <section class="layout-grid sku-inventory-layout">
+          <form id="taxDeclarationForm" class="surface form-surface">
+            <div class="section-head">
+              <div><h2>配置申报流程</h2><p>默认只导出申报记录。需要提交时，请切换模式并单独确认。</p></div>
+              <span class="section-badge">扣缴端</span>
+            </div>
+            <div class="form-grid">
+              <div class="collection-store-field">
+                <label for="taxWorkbook">账号表</label>
+                <div class="input-action"><input id="taxWorkbook" type="text" spellcheck="false" autocomplete="off" placeholder="输入本地账号表路径" aria-describedby="taxWorkbookHint" required /><button class="secondary" type="button" data-tax-file-kind="workbook" aria-label="选择账号表">选择</button></div>
+                <small id="taxWorkbookHint">Excel 的 B 列填写公司名称，D 列填写申报密码。账号表只在本机读取。</small>
+              </div>
+              <div class="collection-store-field">
+                <label for="taxAppPath">税务客户端</label>
+                <div class="input-action"><input id="taxAppPath" type="text" spellcheck="false" autocomplete="off" placeholder="选择 EPEvenue_SH.exe" required /><button class="secondary" type="button" data-tax-file-kind="app" aria-label="选择税务客户端">选择</button></div>
+              </div>
+              <label><span>运行模式</span><select id="taxMode" autocomplete="off"><option value="export_only" selected>仅导出申报记录</option><option value="declare">正式申报并导出</option></select></label>
+              <label><span>最多处理公司数（可选）</span><input id="taxMaxRows" type="number" min="1" step="1" placeholder="留空处理全部" /></label>
+              <label><span>导出开始月份</span><input id="taxExportStart" type="month" aria-describedby="taxPeriodHint" required /></label>
+              <label><span>导出结束月份</span><input id="taxExportEnd" type="month" aria-describedby="taxPeriodHint" required /></label>
+            </div>
+            <div class="collection-scope-note">
+              <strong>运行前请确认</strong>
+              <span id="taxPeriodHint">以上月份只用于查询导出。实际申报的税款所属期以税务客户端显示为准。</span>
+              <span>请先保存并关闭已打开的税务客户端。运行时会占用 Windows 桌面、鼠标与键盘，请保持桌面解锁，不要手动操作或关闭客户端。</span>
+              <label id="taxConfirmField" class="checkbox-field" hidden><input id="taxConfirmDeclaration" type="checkbox" autocomplete="off" disabled /><span>我已核对税款所属期和公司范围，同意提交正式申报。</span></label>
+            </div>
+            <div id="taxFormError" class="collection-scope-note error-text" role="alert" hidden></div>
+            <div class="actions">
+              <button id="taxRunBtn" class="primary" type="submit" disabled>开始导出</button>
+              <button id="taxOpenResultBtn" class="secondary" type="button" disabled>打开结果目录</button>
+              <button id="taxOpenExportsBtn" class="secondary" type="button" disabled>打开导出目录</button>
+            </div>
+          </form>
+          <div class="right-stack">
+            <section class="surface log-surface">
+              <div class="section-head tight"><div><h2>运行日志</h2><p>查看处理进度、跳过及失败原因；公司明细请查看本地结果 Excel。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button></div>
+              <pre id="logBox" class="log-box" tabindex="0" aria-label="运行日志"></pre>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden" role="status"></div>
+    <script src="../assets/common.js?v=20261112-tax-declaration"></script>
+    <script src="../assets/pages/tax-declaration.js?v=20261112"></script>
+  </body>
+</html>

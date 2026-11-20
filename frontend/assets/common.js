@@ -35,6 +35,7 @@ const HQYL = (() => {
     { id: "finance", name: "财务流程", icon: "¥", keywords: "财务 对账 Reconciliation", items: [
       { id: "vietnam_income_reconciliation", href: "vietnam-income-reconciliation.html", name: "越南收支报表", icon: "账", tag: "越南", category: "越南 Shopee", description: "紫鸟+马帮数据核对", keywords: "ziniao mabang 收入 支出 对账" },
       { id: "kec_reconciliation", href: "kec-reconciliation.html", name: "KEC 对账", icon: "K", tag: "KEC", category: "海外仓对账", description: "仓租费按实际体积核对", keywords: "kec 仓储 仓租 对账 实际体积 卸货 耗材 退件 杂费" },
+      { id: "tax_declaration", href: "tax-declaration.html", name: "电子税务局申报", icon: "税", tag: "个税", category: "财务流程", description: "单位申报记录导出与批量申报", keywords: "税务 税局 申报 记录 扣缴 个税" },
     ] },
     { id: "mabang", name: "马帮流程", icon: "M", keywords: "马帮 Mabang ERP", items: [
       { id: "group_sales", href: "group-sales.html", name: "各组销量报表", icon: "销", tag: "菲律宾", category: "菲律宾 Shopee", description: "按小组导出销量", keywords: "销售 商品 小组" },
@@ -819,7 +820,7 @@ const HQYL = (() => {
       async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "0.2.92" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
       async get_latest_task_status(tool) { return tasks[tool] || { ok: false, empty: true }; },
       async get_task_status(id) { return Object.values(tasks).find((task) => task.id === id) || { ok: false, error: "任务不存在" }; },
-      async get_lazada_campaign_workbook_info() { return { ok: true, preview: true, workflow: "local_excel", supports_sku_price_filter: true, supports_removed_sku_export: true, default_threshold: "0.95", output_dir: "C:\\Preview\\Excel折扣筛选", max_files: 100 }; },
+      async get_lazada_campaign_workbook_info() { return { ok: true, preview: true, workflow: "local_excel", supports_reprice_equal_prices: true, supports_sku_price_filter: true, supports_removed_sku_export: true, default_threshold: "0.95", output_dir: "C:\\Preview\\Excel折扣筛选", max_files: 100 }; },
       async choose_lazada_campaign_files() { return { ok: true, paths: ["C:\\Preview\\商品表格.xlsx"] }; },
       async choose_lazada_campaign_sku_price_file() { return { ok: true, preview: true, path: "C:\\Preview\\SKU价格表.xlsx" }; },
       async inspect_lazada_campaign_files(payload = {}) { return { ok: true, preview: true, sku_reference: { enabled: Boolean(payload.sku_price_file), source_file: payload.sku_price_file || "", sku_count: payload.sku_price_file ? 8 : 0 }, files: (payload.source_files || []).map(path => ({ ok: true, name: path.split(/[\\/]/).pop(), mode: payload.mode === "auto" ? "plain" : payload.mode, total_rows: 20, unparseable_rows: 1, sku_removed_rows: payload.sku_price_file ? 2 : 0 })) }; },
@@ -827,11 +828,13 @@ const HQYL = (() => {
       async export_lazada_campaign_removed_skus() { return { ok: false, preview: true, error: "界面演示不支持真实导出" }; },
       async start_lazada_campaign_workbook(payload = {}) {
         if (!Array.isArray(payload.source_files) || !payload.source_files.length || payload.source_files.length > 100) return { ok: false, error: "请选择 1 至 100 个 Excel 文件" };
-        const files = payload.source_files.map(path => ({ name: path.split(/[\\/]/).pop(), mode: payload.mode === "auto" ? "plain" : payload.mode, status: "preview", total_rows: 20, updated_rows: payload.mode === "invited" ? 20 : 0, kept_rows: payload.sku_price_file ? 14 : 16, removed_rows: 3, sku_removed_rows: payload.sku_price_file ? 2 : 0, unparseable_rows: 1, source_file: path, processed_file: "", audit_file: "", removed_sku_file: "", removed_sku_preview: payload.sku_price_file ? [{ sku: "DEMO-001", worksheet: "商品", source_row: 3, activity_price: "95", reference_price: "96", reason: "活动价低于SKU参考价格" }, { sku: "DEMO-002", worksheet: "商品", source_row: 8, activity_price: "98", reference_price: "100", reason: "活动价低于SKU参考价格" }] : [] }));
-        const result = { preview: true, workflow: "local_excel", is_complete: false, file_count: files.length, success_count: 0, failed_count: 0, output_dir: "", output_file: "", archive_file: "", output_files: [], sku_reference: { enabled: Boolean(payload.sku_price_file), source_file: payload.sku_price_file || "", sku_count: payload.sku_price_file ? 8 : 0 }, files };
+        const repriceEqualPrices = payload.reprice_equal_prices === true;
+        const updatedRows = payload.mode === "invited" ? 20 : repriceEqualPrices && Number(payload.threshold) < 1 ? 5 : 0;
+        const files = payload.source_files.map(path => ({ name: path.split(/[\\/]/).pop(), mode: payload.mode === "auto" ? "plain" : payload.mode, status: "preview", total_rows: 20, updated_rows: updatedRows, kept_rows: payload.sku_price_file ? 14 : 16, removed_rows: 3, sku_removed_rows: payload.sku_price_file ? 2 : 0, unparseable_rows: 1, source_file: path, processed_file: "", audit_file: "", removed_sku_file: "", removed_sku_preview: payload.sku_price_file ? [{ sku: "DEMO-001", worksheet: "商品", source_row: 3, activity_price: "95", reference_price: "96", reason: "活动价低于SKU参考价格" }, { sku: "DEMO-002", worksheet: "商品", source_row: 8, activity_price: "98", reference_price: "100", reason: "活动价低于SKU参考价格" }] : [] }));
+        const result = { preview: true, workflow: "local_excel", is_complete: false, reprice_equal_prices: repriceEqualPrices, file_count: files.length, success_count: 0, failed_count: 0, output_dir: "", output_file: "", archive_file: "", output_files: [], sku_reference: { enabled: Boolean(payload.sku_price_file), source_file: payload.sku_price_file || "", sku_count: payload.sku_price_file ? 8 : 0 }, files };
         ["total_rows", "updated_rows", "kept_rows", "removed_rows", "sku_removed_rows", "unparseable_rows"].forEach(key => { result[key] = files.reduce((total, file) => total + Number(file[key] || 0), 0); });
         const task = startPreviewTask("lazada_campaign_workbook", result);
-        task.context = { workflow: "local_excel", source_files: payload.source_files, sku_price_file: payload.sku_price_file || "", mode: payload.mode, threshold: payload.threshold, output_dir: payload.output_dir };
+        task.context = { workflow: "local_excel", source_files: payload.source_files, sku_price_file: payload.sku_price_file || "", mode: payload.mode, threshold: payload.threshold, reprice_equal_prices: repriceEqualPrices, output_dir: payload.output_dir };
         task.logs = ["[界面演示] 仅展示表格筛选流程。", "[界面演示] 未读取真实 Excel，未生成结果文件。"];
         task.created_at = new Date().toISOString();
         return task;
@@ -1339,6 +1342,34 @@ const HQYL = (() => {
         } catch (error) { return { ok: false, error: error.message || "目录保存失败" }; }
       },
       async get_kec_reconciliation_info() { return { ok: true, settings: {}, account_state: accountState(), basis: "实际体积（长 × 宽 × 高 × 数量 × 0.000001）" }; },
+      async get_tax_declaration_info() {
+        const now = new Date();
+        const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const month = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+        return {
+          ok: true, preview: true, workbook: "C:\\Preview\\0申报个税账密.xlsx",
+          app_path: "D:\\software\\EPPortal_DS3.0\\EPEvenue_SH.exe",
+          export_start_month: `${now.getFullYear()}-01`, export_end_month: month(now),
+          declaration_month: month(previous), export_dir: `C:\\Preview\\财务报税\\${month(previous)}`,
+        };
+      },
+      async choose_tax_declaration_file(payload) {
+        const defaults = await this.get_tax_declaration_info();
+        return { ok: true, path: payload?.kind === "app" ? defaults.app_path : defaults.workbook };
+      },
+      async start_tax_declaration(payload) {
+        if (payload.mode === "declare" && payload.confirm_declaration !== true) {
+          return { ok: false, error: "请确认正式申报模式" };
+        }
+        const { export_dir } = await this.get_tax_declaration_info();
+        const task = startPreviewTask("tax_declaration", {
+          preview: true, total: 3, successful: 3, failed: 0, skipped: 1, export_failed: 0,
+          export_dir, output_file: `${export_dir}\\电子税务局申报结果.xlsx`, is_complete: true,
+          completion_message: "演示：处理 3 家，跳过 1 家，未连接税务局",
+        });
+        task.logs = ["界面演示，未打开税务客户端或发送申报。"];
+        return task;
+      },
       async inspect_kec_reconciliation_source(payload) {
         if (!payload || !payload.input_file) return { ok: false, error: "请选择 KEC 账单 Excel" };
         return {

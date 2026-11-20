@@ -190,6 +190,39 @@ class CampaignFrontendTests(unittest.TestCase):
         expect(self.page.locator("#discountThreshold")).to_have_value("95.05")
         self.assertFalse(self.errors)
 
+    def test_equal_price_option_exports_at_custom_discount_and_restores(self):
+        source = self.root / "同价活动表.xlsx"
+        book = Workbook()
+        book.active.append(["卖家SKU", "售价", "大促价格 (必填)"])
+        for row in (("same", 132, 132), ("above", 100, 95), ("below", 100, 93.49)):
+            book.active.append(row)
+        book.save(source)
+        book.close()
+        self.selected = [str(source)]
+        self.open_page()
+        self.choose_files()
+        option = self.page.get_by_role("checkbox", name="已有活动价等于原价时，按最低折扣率改价")
+        expect(option).not_to_be_checked()
+        self.page.locator("#discountThreshold").fill("93.5")
+        option.check()
+        self.page.locator("#startBtn").click()
+        expect(self.page.locator("#completedCount")).to_have_text("完成 1 · 失败 0")
+        expect(self.page.locator("#updatedCount")).to_have_text("填充或调整活动价 1 行")
+        expect(self.page.locator("#keptCount")).to_have_text("2")
+        task = self.bridge.get_latest_task_status("lazada_campaign_workbook")
+        self.assertEqual(task["context"]["threshold"], "0.935")
+        self.assertIs(task["context"]["reprice_equal_prices"], True)
+        output = load_workbook(task["result"]["files"][0]["processed_file"])
+        try:
+            self.assertEqual(list(output.active.iter_rows(min_row=2, values_only=True)),
+                             [("same", 132, 123.42), ("above", 100, 95)])
+        finally:
+            output.close()
+        self.page.reload()
+        expect(option).to_be_checked()
+        expect(self.page.locator("#discountThreshold")).to_have_value("93.5")
+        self.assertFalse(self.errors)
+
     def test_localized_invited_template_detected_and_filled_automatically(self):
         source = self.root / "新版特邀.xlsx"
         book = Workbook()
@@ -506,6 +539,7 @@ class CampaignFrontendTests(unittest.TestCase):
         self.open_page()
         expect(self.page.locator("#sourceFileList [data-remove-file]")).to_have_count(1)
         expect(self.page.locator("#skuPriceFile")).to_have_value("")
+        expect(self.page.locator("#repriceEqualPrices")).not_to_be_checked()
         expect(self.page.locator("#skuRemovedCount")).to_have_text("SKU价格剔除 0 行")
         expect(self.page.locator("[data-view-removed-skus]")).to_have_count(0)
         self.assertFalse(self.errors)

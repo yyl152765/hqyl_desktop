@@ -9,8 +9,9 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import ROUND_CEILING, Decimal, InvalidOperation, localcontext
 from pathlib import Path
+from sys import float_info
 from typing import Any, Callable
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -25,6 +26,7 @@ MAX_FILES = 100
 MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_ROWS = 100_000
 MAX_COLUMNS = 200
+EXCEL_PRICE_DIGITS = 15
 REMOVED_SKU_PREVIEW_LIMIT = 100
 MODES = {"auto", "plain", "invited", "regular"}
 COUNTERS = ("total_rows", "updated_rows", "removed_rows", "unparseable_rows", "kept_rows", "sku_removed_rows")
@@ -45,6 +47,7 @@ class CampaignWorkbookJob:
     mode: str = "auto"
     threshold: Decimal = Decimal("0.95")
     sku_price_file: Path | None = None
+    reprice_equal_prices: bool = False
 
 
 def _threshold(value: Any) -> Decimal:
@@ -68,6 +71,9 @@ def validate_campaign_payload(payload: Any) -> CampaignWorkbookJob:
     mode = payload.get("mode", "auto")
     if not isinstance(mode, str) or mode not in MODES:
         raise ValueError("模板类型必须是 auto、plain、invited 或 regular")
+    reprice_equal_prices = payload.get("reprice_equal_prices", False)
+    if not isinstance(reprice_equal_prices, bool):
+        raise ValueError("同价改价选项必须是布尔值")
     files, seen = [], set()
     for value in source_files:
         if not isinstance(value, (str, Path)) or not str(value).strip():
@@ -102,7 +108,10 @@ def validate_campaign_payload(payload: Any) -> CampaignWorkbookJob:
                 raise ValueError("SKU 价格表必须非空且不超过 50 MiB")
             if os.path.normcase(str(sku_price_file)) in seen:
                 raise ValueError("SKU 价格表请单独导入，不要同时作为活动表格处理")
-    return CampaignWorkbookJob(tuple(files), output_dir, mode, _threshold(payload.get("threshold", "0.95")), sku_price_file)
+    return CampaignWorkbookJob(
+        tuple(files), output_dir, mode, _threshold(payload.get("threshold", "0.95")),
+        sku_price_file, reprice_equal_prices,
+    )
 
 
 def _header(value: Any) -> str:
@@ -216,7 +225,7 @@ def _layouts(book: Any, mode: str) -> list[dict[str, Any]]:
 def _currency(value: Any) -> Decimal:
     if value is None or isinstance(value, (bool, date, datetime)):
         raise ValueError("缺少有效价格")
-    text = format(value, "f") if isinstance(value, Decimal) else str(value).strip()
+    text = format(Decimal(str(value)), "f") if isinstance(value, (float, Decimal)) else str(value).strip()
     text = re.sub(r"^(?:PHP|USD|₱|\$|￥|¥)\s*", "", text, flags=re.I)
     text = re.sub(r"\s*(?:PHP|USD|比索|元)$", "", text, flags=re.I)
     if not re.fullmatch(r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?", text):
@@ -225,7 +234,7 @@ def _currency(value: Any) -> Decimal:
         number = Decimal(text.replace(",", ""))
     except InvalidOperation as exc:
         raise ValueError("价格不是有效正数") from exc
-    if not number.is_finite() or number <= 0 or len(number.as_tuple().digits) > 15:
+    if not number.is_finite() or number <= 0 or len(number.as_tuple().digits) > EXCEL_PRICE_DIGITS:
         raise ValueError("价格必须是有限的正数，且不超过 Excel 的 15 位有效数字")
     return number
 
@@ -266,7 +275,7 @@ def _is_recommended_textafter(cell: Any, recommended: Any) -> bool:
                 and isinstance(recommended.value, str) and match.group(2) in recommended.value)
 
 
-def _prices(sheet: Any, layout: dict[str, Any], row: int) -> tuple[Decimal, Decimal, bool]:
+def _prices(sheet: Any, layout: dict[str, Any], row: int, job: CampaignWorkbookJob) -> tuple[Decimal, Decimal, bool]:
     columns = layout["columns"]
     base = _read_price(sheet.cell(row, columns["base_price"]))
     campaign_cell = sheet.cell(row, columns["campaign_price"])
@@ -293,7 +302,21 @@ def _prices(sheet: Any, layout: dict[str, Any], row: int) -> tuple[Decimal, Deci
             raise ValueError(f"{campaign_cell.coordinate} 缺少活动价，且没有最高活动价或推荐价格可用于填充")
     elif layout["mode"] == "plain" and (campaign_cell.value is None or not str(campaign_cell.value).strip()):
         raise ValueError(f"{campaign_cell.coordinate} 缺少活动价，请在源 Excel 中填写后再筛选")
-    return base, _read_price(selected_cell, recommended=recommended), selected_cell is not campaign_cell
+    price = _read_price(selected_cell, recommended=recommended)
+    if selected_cell is not campaign_cell:
+        return base, price, True
+    if not job.reprice_equal_prices or price != base or job.threshold == 1:
+        return base, price, False
+
+    # Round up only when the product exceeds Excel's numeric precision. This
+    # keeps the saved price at or above the exact minimum used for screening.
+    with localcontext() as context:
+        context.prec = EXCEL_PRICE_DIGITS
+        context.rounding = ROUND_CEILING
+        discounted = base * job.threshold
+    if float(discounted) < float_info.min:
+        raise ValueError(f"{campaign_cell.coordinate} 改价结果太小，无法保存为有效的 Excel 价格")
+    return base, discounted, discounted != price
 
 
 def _book(source: Path):
@@ -333,7 +356,7 @@ def inspect_campaign_files(payload: Any) -> dict[str, Any]:
                     if cell.value is None or not str(cell.value).strip():
                         missing += 1
                     try:
-                        base, price, _ = _prices(sheet, layout, row)
+                        base, price, _ = _prices(sheet, layout, row, job)
                         if sku_column is not None and not _below_threshold(base, price, job.threshold):
                             sku_value(sheet.cell(row, sku_column))
                     except ValueError:
@@ -502,7 +525,7 @@ def _audit_row(source: Path, sheet: Any, row: int, status: str, reason: str,
             json.dumps(values, ensure_ascii=False, default=str)]
 
 
-def _process(source: Path, output: Path, mode: str, threshold: Decimal, audit: list[list[Any]],
+def _process(source: Path, output: Path, job: CampaignWorkbookJob, audit: list[list[Any]],
              sku_prices: dict[str, Decimal] | None = None,
              removed_skus: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     result = _base_result(source)
@@ -510,7 +533,7 @@ def _process(source: Path, output: Path, mode: str, threshold: Decimal, audit: l
     local_audit = []
     local_removed_skus = []
     try:
-        layouts = _layouts(book, mode)
+        layouts = _layouts(book, job.mode)
         deletion_plans = {}
         for layout in layouts:
             sheet, remove = book[layout["worksheet"]], []
@@ -521,7 +544,7 @@ def _process(source: Path, output: Path, mode: str, threshold: Decimal, audit: l
                 summary["total_rows"] += 1
                 source_values = [sheet.cell(row, column).value for column in range(1, column_count + 1)]
                 try:
-                    base, price, updated = _prices(sheet, layout, row)
+                    base, price, updated = _prices(sheet, layout, row, job)
                 except ValueError as exc:
                     summary["unparseable_rows"] += 1
                     remove.append(row)
@@ -530,10 +553,10 @@ def _process(source: Path, output: Path, mode: str, threshold: Decimal, audit: l
                 if updated:
                     sheet.cell(row, layout["columns"]["campaign_price"]).value = int(price) if price == price.to_integral() else float(price)
                     summary["updated_rows"] += 1
-                if _below_threshold(base, price, threshold):
+                if _below_threshold(base, price, job.threshold):
                     summary["removed_rows"] += 1
                     remove.append(row)
-                    local_audit.append(_audit_row(source, sheet, row, "折扣筛除", f"活动价/原价低于 {threshold}", layout, base, price, source_values))
+                    local_audit.append(_audit_row(source, sheet, row, "折扣筛除", f"活动价/原价低于 {job.threshold}", layout, base, price, source_values))
                     continue
                 if sku_column is not None:
                     try:
@@ -612,15 +635,16 @@ def _write_removed_skus(rows: list[dict[str, Any]], output: Path, source: Path) 
         book.close()
 
 
-def _report(files: list[dict[str, Any]], audit: list[list[Any]], output: Path, threshold: Decimal,
+def _report(files: list[dict[str, Any]], audit: list[list[Any]], output: Path, job: CampaignWorkbookJob,
             sku_reference: dict[str, Any] | None = None) -> None:
     book = Workbook()
     sheet = book.active
     sheet.title = "处理汇总"
-    _text_row(sheet, ["源文件", "结果", "模板类型", "商品行", "填充行", "折扣筛除行", "异常行", "保留行", "SKU价格筛除行", "结果文件", "错误", "最低活动价/原价", "删除SKU明细"])
+    updated_header = "填充或调整行" if job.reprice_equal_prices else "填充行"
+    _text_row(sheet, ["源文件", "结果", "模板类型", "商品行", updated_header, "折扣筛除行", "异常行", "保留行", "SKU价格筛除行", "结果文件", "错误", "最低活动价/原价", "删除SKU明细"])
     for result in files:
         _text_row(sheet, [result["source_file"], result["status"], result["mode"],
-                          *(result[key] for key in COUNTERS), result["processed_file"], result["error"], str(threshold),
+                          *(result[key] for key in COUNTERS), result["processed_file"], result["error"], str(job.threshold),
                           result.get("removed_sku_file", "")])
     detail = book.create_sheet("筛除与异常明细")
     _text_row(detail, ["源文件名", "源文件路径", "工作表", "原始行号", "模板类型", "处理分类", "原因", "活动价", "原价", "活动价/原价", "源行数据 JSON"])
@@ -648,7 +672,8 @@ def _report(files: list[dict[str, Any]], audit: list[list[Any]], output: Path, t
 def run_campaign_batch(job: CampaignWorkbookJob, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     # Recheck direct callers as well as bridge callers before creating outputs.
     job = validate_campaign_payload({"source_files": job.source_files, "output_dir": job.output_dir,
-                                     "mode": job.mode, "threshold": job.threshold, "sku_price_file": job.sku_price_file})
+                                     "mode": job.mode, "threshold": job.threshold, "sku_price_file": job.sku_price_file,
+                                     "reprice_equal_prices": job.reprice_equal_prices})
     # Load once for the entire batch; conflicts fail before any outputs exist.
     sku_prices = load_sku_prices(job.sku_price_file) if job.sku_price_file else None
     sku_reference = _sku_reference(job, sku_prices)
@@ -664,7 +689,7 @@ def run_campaign_batch(job: CampaignWorkbookJob, progress: Callable[[str], None]
         output = output_dir / f"{index:03d}_{source.stem}_已处理{source.suffix.lower()}"
         removed_skus = []
         try:
-            result = _process(source, output, job.mode, job.threshold, audit, sku_prices, removed_skus)
+            result = _process(source, output, job, audit, sku_prices, removed_skus)
         except Exception as exc:
             result = _base_result(source)
             result["error"] = str(exc)
@@ -683,7 +708,7 @@ def run_campaign_batch(job: CampaignWorkbookJob, progress: Callable[[str], None]
     output_files = [path for result in files if result["status"] == "success"
                     for path in (result["processed_file"], result["removed_sku_file"]) if path]
     try:
-        _report(files, audit, report, job.threshold, sku_reference)
+        _report(files, audit, report, job, sku_reference)
         output_files.append(str(report))
         for result in files:
             result["audit_file"] = str(report)
@@ -707,4 +732,5 @@ def run_campaign_batch(job: CampaignWorkbookJob, progress: Callable[[str], None]
             "failed_count": total - success, **{key: sum(result[key] for result in files) for key in COUNTERS},
             "output_dir": str(output_dir), "output_file": str(report) if report.exists() else "",
             "archive_file": str(archive) if archive.exists() else "", "completion_message": "；".join(completion_errors),
-            "output_files": output_files, "files": files, "sku_reference": sku_reference}
+            "output_files": output_files, "files": files, "sku_reference": sku_reference,
+            "reprice_equal_prices": job.reprice_equal_prices}

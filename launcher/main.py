@@ -44,6 +44,7 @@ PAGE_ENTRIES = {
     "lazada-campaign-workbook": "lazada-campaign-workbook.html",
     "vietnam-income-reconciliation": "vietnam-income-reconciliation.html",
     "kec-reconciliation": "kec-reconciliation.html",
+    "tax-declaration": "tax-declaration.html",
 }
 
 

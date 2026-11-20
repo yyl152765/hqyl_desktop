@@ -13,3 +13,7 @@ playwright>=1.58
 psycopg2-binary>=2.9
 alibabacloud-dingtalk>=2.2
 pyinstaller>=6.0
+pywinauto>=0.6.9; platform_system == "Windows"
+PyAutoGUI>=0.9.54; platform_system == "Windows"
+opencv-python>=4.13.0.92,<5; platform_system == "Windows"
+numpy>=2,<3; platform_system == "Windows"

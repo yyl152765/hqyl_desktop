@@ -2,6 +2,7 @@
   const $ = HQYL.$;
   const MODE_LABELS = { auto: "自动识别", plain: "按已有活动价筛选", invited: "按推荐价填充", regular: "普通活动模板", mixed: "多种处理方式" };
   let snapshot = null, ready = false, running = false, preparing = false, preview = false, supportsSkuFilter = false, supportsRemovedSkuExport = false;
+  let supportsEqualPriceRepricing = false;
   let removedSkuIndex = -1, removedSkuOrigin = null, exportingRemovedSkus = false, removedSkuVersion = 0;
   let maxFiles = 100, epoch = 0;
   const busy = () => running || preparing || exportingRemovedSkus;
@@ -31,6 +32,7 @@
     const disabled = !ready || busy(), selected = paths();
     ["chooseFilesBtn", "sourcePaths", "chooseSkuPriceBtn", "skuPriceFile", "processingMode", "discountThreshold", "campaignOutputDir", "chooseOutputBtn"].forEach(id => { $(id).disabled = disabled; });
     ["chooseSkuPriceBtn", "skuPriceFile"].forEach(id => { $(id).disabled = disabled || !supportsSkuFilter; });
+    $("repriceEqualPrices").disabled = disabled || !supportsEqualPriceRepricing;
     $("clearSkuPriceBtn").disabled = disabled || !skuPricePath();
     $("clearFilesBtn").disabled = disabled || !selected.length;
     $("exportTemplateBtn").disabled = disabled || !$("campaignOutputDir").value.trim();
@@ -98,7 +100,11 @@
     const reference = skuPricePath();
     if (reference && !supportsSkuFilter) throw new Error("当前后端未支持SKU筛选，请重启或升级工作台");
     if (reference && !/\.(xlsx|xlsm)$/i.test(reference)) throw new Error("SKU价格表仅支持 .xlsx 或 .xlsm 文件。");
-    return { source_files: selected, sku_price_file: reference, mode: $("processingMode").value, threshold: String(Number((percent / 100).toFixed(4))), output_dir: output };
+    const repriceEqualPrices = $("repriceEqualPrices").checked;
+    if (repriceEqualPrices && !supportsEqualPriceRepricing) throw new Error("请更新工作台后使用同价改价功能。");
+    return { source_files: selected, sku_price_file: reference, mode: $("processingMode").value,
+             threshold: String(Number((percent / 100).toFixed(4))), reprice_equal_prices: repriceEqualPrices,
+             output_dir: output };
   }
 
   async function start() {
@@ -173,7 +179,9 @@
     $("fileCount").textContent = count(result.file_count);
     $("completedCount").textContent = result.preview ? "演示数据 · 未处理真实文件" : `完成 ${count(result.success_count)} · 失败 ${count(result.failed_count)}`;
     $("keptCount").textContent = count(result.kept_rows);
-    $("updatedCount").textContent = `填充活动价 ${count(result.updated_rows)} 行`;
+    const adjusted = result.reprice_equal_prices === true;
+    $("updatedCount").textContent = `${adjusted ? "填充或调整活动价" : "填充活动价"} ${count(result.updated_rows)} 行`;
+    $("updatedRowsHeading").textContent = adjusted ? "填价或改价行" : "填价行";
     $("removedCount").textContent = count(Number(result.removed_rows || 0) + Number(result.sku_removed_rows || 0) + Number(result.unparseable_rows || 0));
     $("skuRemovedCount").textContent = `SKU价格剔除 ${count(result.sku_removed_rows)} 行`;
     $("exceptionCount").textContent = `异常行 ${count(result.unparseable_rows)} · 另存明细`;
@@ -219,6 +227,9 @@
       $("skuPriceFile").addEventListener("input", filesChanged);
       $("processingMode").addEventListener("change", () => { showIssue(); $("inspectionMessage").textContent = "处理方式已更新，可重新检查表格。"; });
       $("discountThreshold").addEventListener("input", () => { $("thresholdLabel").textContent = `${$("discountThreshold").value || "—"}%`; showIssue(); });
+      $("repriceEqualPrices").addEventListener("change", () => {
+        showIssue(); $("inspectionMessage").textContent = "改价选项已更新，可重新检查表格。";
+      });
       $("campaignOutputDir").addEventListener("input", controls);
       $("clearFilesBtn").addEventListener("click", () => { $("sourcePaths").value = ""; filesChanged(); });
       $("chooseFilesBtn").addEventListener("click", () => prepare(async () => {
@@ -257,6 +268,8 @@
         const response = await call("get_lazada_campaign_workbook_info");
         if (response.workflow !== "local_excel") throw new Error("请关闭并重新启动工作台，加载本地 Excel 处理后端。");
         preview = Boolean(response.preview); $("previewNotice").hidden = !preview;
+        supportsEqualPriceRepricing = response.supports_reprice_equal_prices === true;
+        $("repriceEqualPricesOption").hidden = !supportsEqualPriceRepricing;
         supportsSkuFilter = response.supports_sku_price_filter === true; $("skuSupportNotice").hidden = supportsSkuFilter;
         supportsRemovedSkuExport = response.supports_removed_sku_export === true;
         maxFiles = Number(response.max_files) || 100;
@@ -273,6 +286,7 @@
       snapshot = null;
       ["keptCount", "removedCount", "totalCount"].forEach(id => { $(id).textContent = "0"; });
       $("completedCount").textContent = "完成 0 · 失败 0"; $("updatedCount").textContent = "填充活动价 0 行"; $("exceptionCount").textContent = "异常行 0 · 另存明细";
+      $("updatedRowsHeading").textContent = "填价行";
       $("skuRemovedCount").textContent = "SKU价格剔除 0 行";
       emptyResults("处理完成后显示每个文件的结果。"); controls();
     },
@@ -282,6 +296,7 @@
       if (!page.taskContextFilter(context)) return;
       $("sourcePaths").value = context.source_files.join("\n");
       $("skuPriceFile").value = typeof context.sku_price_file === "string" ? context.sku_price_file : "";
+      $("repriceEqualPrices").checked = supportsEqualPriceRepricing && context.reprice_equal_prices === true;
       if (["auto", "plain", "invited"].includes(context.mode)) $("processingMode").value = context.mode;
       if (context.threshold !== undefined) { $("discountThreshold").value = String(Number((Number(context.threshold) * 100).toFixed(2))); $("thresholdLabel").textContent = `${$("discountThreshold").value}%`; }
       if (context.output_dir) $("campaignOutputDir").value = context.output_dir;

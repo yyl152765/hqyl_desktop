@@ -164,7 +164,7 @@ from backend.services import temu_activity_page as activity_page
 from backend.services import temu_financial_export as financial_export
 from backend.services.temu_fee_refund_gateway import TemuFeeRefundGateway
 from backend.services.temu_financial_gateway import TemuFinancialGateway
-from backend.services import balance_statistics
+from backend.services import balance_statistics, tax_declaration_service
 from backend.services import lazada_ads_monthly
 from backend.services.lazada_ads_monthly_cli import ZiniaoMonthlyCli
 from backend.services.temu_on_sale_gateway import TemuOnSaleGateway
@@ -449,6 +449,13 @@ class AppBridge:
                     "description": "核对 KEC 账单的仓储费、卸货费、出库耗材、退件上架费与杂费，回查马帮订单并导出结果。",
                     "status": "ready",
                     "vendor": "mabang",
+                },
+                {
+                    "key": "tax_declaration",
+                    "name": "电子税务局申报",
+                    "description": "批量导出申报记录，或在确认后执行正式申报并导出。",
+                    "status": "ready",
+                    "vendor": "local",
                 },
                 {
                     "key": "echotik_collect",
@@ -1448,6 +1455,52 @@ class AppBridge:
             },
         )
 
+    def get_tax_declaration_info(self) -> dict[str, Any]:
+        return {"ok": True, **tax_declaration_service.get_defaults(self.config_store.local_data_dir)}
+
+    def choose_tax_declaration_file(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        kind = (payload or {}).get("kind")
+        if kind not in ("workbook", "app"):
+            return {"ok": False, "error": "请选择账号表或税务客户端"}
+        try:
+            import webview
+
+            file_types = ("Excel 账号表 (*.xlsx;*.xlsm)",) if kind == "workbook" else ("税务客户端 (*.exe)",)
+            selected = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=False, file_types=file_types,
+            )
+            if not selected:
+                return {"ok": False, "cancelled": True}
+            path = Path(selected[0] if isinstance(selected, (list, tuple)) else selected)
+            return {"ok": True, "path": str(path), "name": path.name}
+        except Exception:
+            return {"ok": False, "error": "无法打开文件选择器，请粘贴文件的完整路径"}
+
+    def start_tax_declaration(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            settings = tax_declaration_service.validate_request(payload, self.config_store.local_data_dir)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "message": str(exc)}
+        except OSError:
+            message = "无法读取账号表或税务客户端路径，请检查文件权限"
+            return {"ok": False, "error": message, "message": message}
+
+        def runner(progress):
+            return tax_declaration_service.run_tax_declaration(settings, progress)
+
+        try:
+            task = self.tasks.start(
+                "电子税务局申报", runner, tool="tax_declaration", exclusive=True,
+                context={"mode": "export_only" if settings.export_records_only else "declare"},
+            )
+        except (OSError, RuntimeError):
+            message = "无法启动后台任务，请检查桌面程序运行环境"
+            return {"ok": False, "error": message, "message": message}
+        if not task.get("ok"):
+            message = "已有任务正在运行，请等待完成后再启动电子税务局流程"
+            return {"ok": False, "error": message, "message": message}
+        return {**task, "task_id": task["id"]}
+
     def get_task_status(self, task_id: str) -> dict[str, Any]:
         return self.tasks.snapshot(str(task_id or ""))
 
@@ -2181,6 +2234,7 @@ class AppBridge:
             "default_threshold": "0.95",
             "output_dir": settings.output_dir,
             "max_files": lazada_campaign_workbook.MAX_FILES,
+            "supports_reprice_equal_prices": True,
             "supports_sku_price_filter": True,
             "supports_removed_sku_export": True,
             "modes": [{"value": "auto", "label": "自动识别"},
@@ -2320,6 +2374,7 @@ class AppBridge:
                 "Excel 折扣筛选", runner, tool="lazada_campaign_workbook",
                 context={"workflow": "local_excel", "source_files": [str(path) for path in job.source_files],
                          "mode": job.mode, "threshold": str(job.threshold), "output_dir": str(job.output_dir),
+                         "reprice_equal_prices": job.reprice_equal_prices,
                          "sku_price_file": str(job.sku_price_file or "")},
             )
             if not task.get("ok"):

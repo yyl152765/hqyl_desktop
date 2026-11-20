@@ -31,6 +31,7 @@
     mabang_developer_permission: { href: "mabang-developer-permission.html", icon: "开", featured: true },
     echotik_collect: { href: "echotik-collect.html", icon: "采" },
     kec_reconciliation: { href: "kec-reconciliation.html", icon: "K", featured: true },
+    tax_declaration: { href: "tax-declaration.html", icon: "税", featured: true },
   };
   const VENDORS = {
     local: { label: "通用工具", mark: "表" },
@@ -70,6 +71,7 @@
     { key: "bigseller_sku_benchmark", name: "滞销SKU爆款对标", description: "导入滞销 SKU 表，按浏览量或销量比较各店最高单商品指标并导出 Excel。", vendor: "bigseller" },
     { key: "echotik_collect", name: "EchoTik 商品达人采集", description: "固定泰国站，按关键词采集商品库和商品达人列表。", vendor: "echotik" },
     { key: "kec_reconciliation", name: "KEC 对账", description: "核对 KEC 账单五项费用，仓租费改以实际体积为核算基数并回查马帮订单。", vendor: "mabang" },
+    { key: "tax_declaration", name: "电子税务局申报", description: "批量导出申报记录，或在确认后执行正式申报并导出。", vendor: "local" },
   ];
   let tools = [];
   let selectedVendor = "all";

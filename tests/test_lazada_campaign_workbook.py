@@ -67,6 +67,48 @@ class CampaignWorkbookTests(unittest.TestCase):
         book.close()
         return source
 
+    def test_equal_campaign_prices_are_adjusted_before_discount_and_sku_checks(self):
+        source = self.write(mode="regular", rows=[
+            ["same", "1", "s1", "商品", "", 132, "132", "<=132"],
+            ["sku-floor", "2", "s2", "商品", "", 119, 119, "<=119"],
+            ["above", "3", "s3", "商品", "", 100, 97, "<=95"],
+            ["at-threshold", "4", "s4", "商品", "", 100, 95, "<=95"],
+            ["below", "5", "s5", "商品", "", 100, 94.99, "<=95"],
+            ["fill", "6", "s6", "商品", "", 100, None, "0 < Price <= 100"],
+        ])
+        reference = self.reference([["sku-floor", 113.06], ["below", 100]])
+        original = source.read_bytes()
+
+        default = self.run_job([source], sku_price_file=reference)
+        self.assertEqual(self.output(default).active["G3"].value, "132")
+        self.assertEqual(default["sku_removed_rows"], 0)
+
+        result = self.run_job([source], threshold="0.95", sku_price_file=reference, reprice_equal_prices=True)
+        self.assertTrue(result["is_complete"], result)
+        self.assertEqual([result[key] for key in ("updated_rows", "kept_rows", "removed_rows", "sku_removed_rows")],
+                         [3, 4, 1, 1])
+        sheet = self.output(result).active
+        self.assertEqual([(row[0], row[6]) for row in sheet.iter_rows(min_row=3, values_only=True)],
+                         [("same", 125.4), ("above", 97), ("at-threshold", 95), ("fill", 100)])
+        self.assertEqual(sheet["G3"].data_type, "n")
+        removed = result["files"][0]["removed_sku_preview"]
+        self.assertEqual([(row["sku"], row["activity_price"]) for row in removed], [("sku-floor", "113.05")])
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_repriced_excel_values_pass_the_same_threshold_when_read_back(self):
+        source = self.write(mode="regular", rows=[
+            ["large", "1", "s1", "商品", "", 123456789012345, 123456789012345, None],
+            ["decimal", "2", "s2", "商品", "", 129.99, 129.99, None],
+            ["small", "3", "s3", "商品", "", 0.0001, 0.0001, None],
+        ])
+        result = self.run_job([source], threshold="0.9505", reprice_equal_prices=True)
+        self.assertTrue(result["is_complete"], result)
+        sheet = self.output(result).active
+        values = [Decimal(str(sheet[f"G{row}"].value)) for row in (3, 4, 5)]
+        self.assertEqual(values, [Decimal("117345677956234"), Decimal("123.555495"), Decimal("0.00009505")])
+        reopened = self.run_job([Path(result["files"][0]["processed_file"])], threshold="0.9505")
+        self.assertEqual((reopened["kept_rows"], reopened["removed_rows"], reopened["unparseable_rows"]), (3, 0, 0))
+
     def test_sku_floor_runs_after_discount_and_records_separate_reasons(self):
         source = self.write(rows=[
             ["A", "1", "shop1", "低于底价", 100, 5, None, "<=95"],
@@ -607,6 +649,7 @@ class CampaignWorkbookTests(unittest.TestCase):
                {**payload, "mode": "wrong"}, {**payload, "output_dir": ""},
                {**payload, "source_files": [str(path)] * 101}]
         bad += [{**payload, "threshold": value} for value in (0, 1.1, -0.1, "NaN", "Infinity", True, None, "x", [])]
+        bad += [{**payload, "reprice_equal_prices": value} for value in ("false", 1, None)]
         for value in bad:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 validate_campaign_payload(value)
