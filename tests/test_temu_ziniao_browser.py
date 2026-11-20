@@ -221,7 +221,9 @@ class NativeAccountBrowserTests(unittest.TestCase):
 
     def test_open_uses_selected_id_checks_ip_and_pins_page(self):
         client,runtime,driver,store = self.opened()
-        client.open_store(store,url='https://agentseller.temu.com/goods/list')
+        with patch('backend.services.temu_on_sale_login.ensure_temu_session') as login:
+            client.open_store(store,url='https://agentseller.temu.com/goods/list')
+        login.assert_called_once_with(driver, business_url='https://agentseller.temu.com/goods/list')
         runtime.open_store.assert_called_once_with('123')
         client._test_ip_check.assert_called_once_with(driver, 'http://127.0.0.1/ip')
         runtime.open_ip_check.assert_not_called()

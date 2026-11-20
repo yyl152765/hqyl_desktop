@@ -187,10 +187,19 @@ class MabangIncomeExpenseReportTests(unittest.TestCase):
         ids = [option["id"] for option in options]
         names = {option["name"] for option in options}
 
-        self.assertEqual(len(options), 21)
-        self.assertEqual(len(set(ids)), 21)
+        self.assertEqual(len(options), 22)
+        self.assertEqual(len(set(ids)), 22)
         self.assertIn("lazada菲律宾", names)
+        self.assertIn("tk新加坡", names)
         self.assertNotIn("1100204", ids)
+        self.assertEqual(
+            next(option for option in options if option["name"] == "tk新加坡"),
+            {
+                "id": "1061654",
+                "name": "tk新加坡",
+                "mabang_name": "tk新加坡",
+            },
+        )
 
         warehouses = get_warehouse_options()
         warehouse_keys = {option["key"] for option in warehouses}
@@ -271,6 +280,17 @@ class MabangIncomeExpenseReportTests(unittest.TestCase):
             ["1078593", "1099710"],
         )
         self.assertFalse(any(key == "shopLabelIds[]" for key, _ in grouped))
+
+    def test_tk_singapore_category_filters_by_its_own_shop_label(self) -> None:
+        target = next(item for item in REPORT_CATEGORIES if item.name == "tk新加坡")
+        form_items = build_income_detail_form(target, "2026-10-01", "2026-10-31")
+        form = dict(form_items)
+
+        self.assertEqual(len(form_items), 45)
+        self.assertEqual(form["shopLabelIds[]"], "1061654")
+        self.assertNotIn("stockWarehouseId[]", form)
+        self.assertEqual(form["expresstimeTimeStart"], "2026-10-01 00:00:00")
+        self.assertEqual(form["expresstimeTimeEnd"], "2026-10-31 23:59:59")
 
     def test_malaysia_page_parser_keeps_temu_page_order_and_validates_groups(self) -> None:
         page_html = _malaysia_report_page_html()
@@ -736,7 +756,10 @@ class MabangIncomeExpenseReportTests(unittest.TestCase):
         self.assertEqual(sleeps, [60.0])
 
     def test_official_export_count_mismatch_preserves_existing_file(self) -> None:
+        requests: list[httpx.Request] = []
+
         def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
             if request.method == "POST":
                 return httpx.Response(200, json=_official_query_payload(2))
             return httpx.Response(
@@ -767,6 +790,422 @@ class MabangIncomeExpenseReportTests(unittest.TestCase):
 
             self.assertEqual(output_file.read_text(encoding="utf-8"), original)
             self.assertEqual(list(Path(temp_dir).glob(".*.part")), [])
+        self.assertEqual([request.method for request in requests], ["POST", "GET"] * 2)
+
+    def test_official_export_count_mismatch_requeries_and_replaces_attempt(self) -> None:
+        cases = (
+            ("short", 3, 2, 3),
+            ("excess", 2, 3, 2),
+            ("changed_total", 3, 2, 4),
+            ("now_empty", 3, 2, 0),
+        )
+        for name, first_expected, first_actual, fresh_expected in cases:
+            with self.subTest(case=name):
+                query_forms: list[bytes] = []
+                requests: list[httpx.Request] = []
+                progress: list[str] = []
+                sleeps: list[float] = []
+                stale_rows = [
+                    _official_export_row(f"STALE-{i}", "X" * 100)
+                    for i in range(first_actual)
+                ]
+                # Legitimate multiple detail lines for one order must survive.
+                fresh_rows = [
+                    _official_export_row("ORDER-SAME", str(i))
+                    for i in range(fresh_expected)
+                ]
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    if request.method == "POST":
+                        query_forms.append(request.content)
+                        self.assertLessEqual(len(query_forms), 2)
+                        expected = first_expected if len(query_forms) == 1 else fresh_expected
+                        return httpx.Response(200, json=_official_query_payload(expected))
+                    requests.append(request)
+                    page = int(request.url.params["pageNo"])
+                    if len(query_forms) == 1:
+                        data = [RAW_EXPORT_HEADER, *stale_rows[:-1]] if page == 0 else stale_rows[-1:]
+                        has_next, max_page = page == 0, 1
+                    else:
+                        self.assertEqual(page, 0)
+                        data = [RAW_EXPORT_HEADER, *fresh_rows]
+                        has_next, max_page = False, 0
+                    return httpx.Response(200, json=_official_chunk_payload(
+                        data, cache_key="attempt-cache", has_next=has_next, max_page=max_page
+                    ))
+
+                exporter, http_client = _make_official_exporter(handler, sleep=sleeps.append)
+                exporter.progress = progress.append
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output_file = Path(temp_dir) / "income-expense.csv"
+                    output_file.write_bytes(b"existing-file\n")
+                    try:
+                        result = exporter.export_to_csv(
+                            REPORT_CATEGORIES[0], "2026-08-01", "2026-08-31", output_file
+                        )
+                    finally:
+                        http_client.close()
+                    rows = _read_csv_rows(output_file)
+                    self.assertEqual(output_file.read_bytes().count(b"\xef\xbb\xbf"), 1)
+                    self.assertEqual(list(Path(temp_dir).glob(".*.part")), [])
+
+                self.assertEqual(query_forms[0], query_forms[1])
+                self.assertEqual(result, (fresh_expected, 1 if fresh_expected else 0))
+                self.assertEqual(rows[0], list(ORDERED_COLUMNS))
+                self.assertEqual(len(rows), fresh_expected + 1)
+                self.assertEqual([row[0] for row in rows[1:]], ["ORDER-SAME"] * fresh_expected)
+                self.assertEqual([row[1] for row in rows[1:]], [f"TX-{i}" for i in range(fresh_expected)])
+                self.assertEqual([r.url.params["pageNo"] for r in requests], ["0", "1", "0"] if fresh_expected else ["0", "1"])
+                if fresh_expected:
+                    self.assertEqual(requests[-1].url.params["cacheKey"], "1")
+                self.assertEqual(sleeps, [5.0])
+                self.assertTrue(any("重新查询并完整重导" in message for message in progress))
+                difference = "多 1 条" if name == "excess" else "少 1 条"
+                self.assertTrue(any(difference in message for message in progress))
+
+    def test_malaysia_group_retry_preserves_prior_rows_and_fingerprint_checks(self) -> None:
+        for duplicate_on_retry in (False, True):
+            with self.subTest(duplicate_on_retry=duplicate_on_retry):
+                query_forms: list[dict[str, list[str]]] = []
+                shopee_attempts = 0
+                active_group = ""
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    nonlocal shopee_attempts, active_group
+                    if request.url.params["mod"] == "reports.incomePayParticulars":
+                        return httpx.Response(200, text=_malaysia_report_page_html())
+                    if request.method == "POST":
+                        form = parse_qs(request.content.decode(), keep_blank_values=True)
+                        query_forms.append(form)
+                        active_group = form.get("shopLabelIds[]", [""])[0]
+                        if active_group == "1038957":
+                            shopee_attempts += 1
+                            expected = 2
+                        else:
+                            expected = 1 if active_group in ("1038956", "1042623") else 0
+                        return httpx.Response(200, json=_official_query_payload(expected))
+                    if active_group == "1038956":
+                        rows = [_official_export_row("ORDER-LZ", "LZ")]
+                    elif active_group == "1038957" and shopee_attempts == 1:
+                        # This stale fingerprint must not contaminate the later
+                        # TikTok group once the failed attempt is rolled back.
+                        rows = [_official_export_row("ORDER-TK", "TK")]
+                    elif active_group == "1038957":
+                        rows = [
+                            _official_export_row("ORDER-LZ", "LZ") if duplicate_on_retry
+                            else _official_export_row("ORDER-SP-1", "SP1"),
+                            _official_export_row("ORDER-SP-2", "SP2"),
+                        ]
+                    else:
+                        self.assertEqual(active_group, "1042623")
+                        rows = [_official_export_row("ORDER-TK", "TK")]
+                    return httpx.Response(200, json=_official_chunk_payload(
+                        [RAW_EXPORT_HEADER, *rows], cache_key="done", has_next=False, max_page=0
+                    ))
+
+                exporter, http_client = _make_official_exporter(handler)
+                target = next(item for item in OVERSEAS_WAREHOUSES if item.key == "1096191")
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output_file = Path(temp_dir) / "malaysia.csv"
+                    original = b"existing-file-must-survive\n"
+                    output_file.write_bytes(original)
+                    try:
+                        if duplicate_on_retry:
+                            with self.assertRaisesRegex(IncomeExpenseExportError, "跨业务组重复明细"):
+                                exporter.export_to_csv(target, "2026-08-01", "2026-08-31", output_file)
+                            self.assertEqual(output_file.read_bytes(), original)
+                        else:
+                            result = exporter.export_to_csv(target, "2026-08-01", "2026-08-31", output_file)
+                            rows = _read_csv_rows(output_file)
+                            self.assertEqual(result, (4, 3))
+                            self.assertEqual(rows[0], list(ORDERED_COLUMNS))
+                            self.assertEqual([row[0] for row in rows[1:]], ["ORDER-LZ", "ORDER-SP-1", "ORDER-SP-2", "ORDER-TK"])
+                            self.assertEqual(output_file.read_bytes().count(b"\xef\xbb\xbf"), 1)
+                    finally:
+                        http_client.close()
+                    self.assertEqual(list(Path(temp_dir).glob(".*.part")), [])
+                expected_groups = ["1038956", "1038957", "1038957"]
+                if not duplicate_on_retry:
+                    expected_groups += ["1042623", "", ""]
+                self.assertEqual([form.get("shopLabelIds[]", [""])[0] for form in query_forms], expected_groups)
+                self.assertEqual(query_forms[1], query_forms[2])
+
+    def test_official_export_schema_error_does_not_restart_query(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "POST":
+                return httpx.Response(200, json=_official_query_payload(2))
+            return httpx.Response(200, json={"hasNext": False, "max": 0})
+
+        exporter, http_client = _make_official_exporter(handler)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_file = Path(temp_dir) / "income-expense.csv"
+            try:
+                with self.assertRaisesRegex(IncomeExpenseExportError, "缺少 data"):
+                    exporter.export_to_csv(REPORT_CATEGORIES[0], "2026-08-01", "2026-08-31", output_file)
+            finally:
+                http_client.close()
+            self.assertFalse(output_file.exists())
+            self.assertEqual(list(Path(temp_dir).glob(".*.part")), [])
+        self.assertEqual([request.method for request in requests], ["POST", "GET"])
+
+    def test_official_export_recovers_interrupted_group_and_propagates_refresh_failure(self) -> None:
+        for failure in ("empty_chunk", "early_end", "refresh_rejected"):
+            with self.subTest(failure=failure):
+                queries = 0
+                export_pages: list[str] = []
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    nonlocal queries
+                    if request.method == "POST":
+                        queries += 1
+                        self.assertLessEqual(queries, 2)
+                        if failure == "refresh_rejected" and queries == 2:
+                            return httpx.Response(200, json={"success": False})
+                        return httpx.Response(200, json=_official_query_payload(2))
+                    page = request.url.params["pageNo"]
+                    export_pages.append(page)
+                    if queries == 2:
+                        data = [RAW_EXPORT_HEADER, _official_export_row("NEW-1"), _official_export_row("NEW-2")]
+                        has_next, max_page = False, 0
+                    elif page == "0":
+                        data = [RAW_EXPORT_HEADER, _official_export_row("STALE")]
+                        has_next, max_page = failure == "empty_chunk", 1
+                    else:
+                        data = []
+                        has_next, max_page = False, 1
+                    return httpx.Response(200, json=_official_chunk_payload(
+                        data, cache_key="unused", has_next=has_next, max_page=max_page
+                    ))
+
+                exporter, http_client = _make_official_exporter(handler)
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output_file = Path(temp_dir) / "income-expense.csv"
+                    original = b"existing-file-must-survive\n"
+                    output_file.write_bytes(original)
+                    try:
+                        if failure == "refresh_rejected":
+                            with self.assertRaisesRegex(IncomeExpenseExportError, "查询未明确返回成功"):
+                                exporter.export_to_csv(REPORT_CATEGORIES[0], "2026-08-01", "2026-08-31", output_file)
+                            self.assertEqual(output_file.read_bytes(), original)
+                        else:
+                            result = exporter.export_to_csv(REPORT_CATEGORIES[0], "2026-08-01", "2026-08-31", output_file)
+                            self.assertEqual(result, (2, 1))
+                            self.assertEqual([row[0] for row in _read_csv_rows(output_file)[1:]], ["NEW-1", "NEW-2"])
+                            self.assertTrue(output_file.read_bytes().startswith(b"\xef\xbb\xbf"))
+                    finally:
+                        http_client.close()
+                    self.assertEqual(list(Path(temp_dir).glob(".*.part")), [])
+                self.assertEqual(queries, 2)
+                expected_pages = {"empty_chunk": ["0", "1", "0"], "early_end": ["0", "0"], "refresh_rejected": ["0"]}
+                self.assertEqual(export_pages, expected_pages[failure])
+
+    def test_official_export_retries_empty_chunk_without_advancing_cursor(self) -> None:
+        # Reproduce the missing middle chunk, including responses that contain
+        # only a repeated header, totals, or rows removed during normalization.
+        for empty_data in (
+            [],
+            [RAW_EXPORT_HEADER],
+            [_official_export_row("合计"), _official_export_row("")],
+        ):
+            with self.subTest(empty_data=empty_data):
+                requests: list[httpx.Request] = []
+                sleeps: list[float] = []
+                progress: list[str] = []
+                chunks = [
+                    _official_chunk_payload(
+                        [RAW_EXPORT_HEADER, _official_export_row("ORDER-1", "A")],
+                        cache_key="middle-cache",
+                        has_next=True,
+                        max_page=2,
+                    ),
+                    _official_chunk_payload(
+                        empty_data,
+                        cache_key="must-not-advance-cache",
+                        has_next=True,
+                        max_page=2,
+                    ),
+                    _official_chunk_payload(
+                        [_official_export_row("ORDER-2", "B")],
+                        cache_key="last-cache",
+                        has_next=True,
+                        max_page=2,
+                    ),
+                    _official_chunk_payload(
+                        [_official_export_row("ORDER-3", "C")],
+                        cache_key="finished-cache",
+                        has_next=False,
+                        max_page=2,
+                    ),
+                ]
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    if request.method == "POST":
+                        return httpx.Response(200, json=_official_query_payload(3))
+                    requests.append(request)
+                    return httpx.Response(200, json=chunks.pop(0))
+
+                exporter, http_client = _make_official_exporter(
+                    handler, max_attempts=2, sleep=sleeps.append
+                )
+                exporter.progress = progress.append
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output_file = Path(temp_dir) / "income-expense.csv"
+                    try:
+                        result = exporter.export_to_csv(
+                            REPORT_CATEGORIES[0], "2026-08-01", "2026-08-31", output_file
+                        )
+                    finally:
+                        http_client.close()
+                    rows = _read_csv_rows(output_file)
+                    self.assertEqual(list(Path(temp_dir).glob(".*.part")), [])
+
+                self.assertEqual(result, (3, 3))
+                self.assertEqual([row[0] for row in rows[1:]], ["ORDER-1", "ORDER-2", "ORDER-3"])
+                self.assertEqual([r.url.params["pageNo"] for r in requests], ["0", "1", "1", "2"])
+                self.assertEqual(requests[1].url, requests[2].url)
+                self.assertEqual(requests[-1].url.params["cacheKey"], "last-cache")
+                self.assertEqual(sleeps, [5.0])
+                self.assertEqual(sum("个分片完成" in message for message in progress), 3)
+                self.assertTrue(any("第 2 个分片" in message and "重试" in message for message in progress))
+
+    def test_official_export_persistent_empty_chunk_fails_before_next_page(self) -> None:
+        for existing_file in (False, True):
+            with self.subTest(existing_file=existing_file):
+                requests: list[httpx.Request] = []
+                sleeps: list[float] = []
+                progress: list[str] = []
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    if request.method == "POST":
+                        return httpx.Response(200, json=_official_query_payload(3))
+                    requests.append(request)
+                    page = int(request.url.params["pageNo"])
+                    if page > 1:
+                        raise AssertionError("must not skip an empty middle chunk")
+                    return httpx.Response(
+                        200,
+                        json=_official_chunk_payload(
+                            [RAW_EXPORT_HEADER, _official_export_row("ORDER-1", "A")]
+                            if page == 0 else [],
+                            cache_key="middle-cache" if page == 0 else "bad-response-cache",
+                            has_next=True,
+                            max_page=2,
+                        ),
+                    )
+
+                exporter, http_client = _make_official_exporter(
+                    handler, max_attempts=3, sleep=sleeps.append
+                )
+                exporter.progress = progress.append
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output_file = Path(temp_dir) / "income-expense.csv"
+                    original = b"existing-file-must-survive\n"
+                    if existing_file:
+                        output_file.write_bytes(original)
+                    try:
+                        with self.assertRaisesRegex(
+                            IncomeExpenseExportError, "第 2 个分片.*3 次.*明细"
+                        ):
+                            exporter.export_to_csv(
+                                REPORT_CATEGORIES[0], "2026-08-01", "2026-08-31", output_file
+                            )
+                    finally:
+                        http_client.close()
+                    if existing_file:
+                        self.assertEqual(output_file.read_bytes(), original)
+                    else:
+                        self.assertFalse(output_file.exists())
+                    self.assertEqual(list(Path(temp_dir).glob(".*.part")), [])
+
+                self.assertEqual([r.url.params["pageNo"] for r in requests], ["0", "1", "1", "1"] * 2)
+                self.assertEqual(len({str(r.url) for r in requests if r.url.params["pageNo"] == "1"}), 1)
+                self.assertEqual(sleeps, [5.0, 15.0, 5.0, 5.0, 15.0])
+                self.assertFalse(any("第 2 个分片完成" in message for message in progress))
+
+    def test_official_export_retries_header_only_first_chunk(self) -> None:
+        requests: list[httpx.Request] = []
+        chunks = [
+            _official_chunk_payload(
+                data, cache_key="ignored-cache", has_next=False, max_page=0
+            )
+            for data in (
+                [RAW_EXPORT_HEADER],
+                [RAW_EXPORT_HEADER, _official_export_row("ORDER-1", "A")],
+            )
+        ]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                return httpx.Response(200, json=_official_query_payload(1))
+            requests.append(request)
+            return httpx.Response(200, json=chunks.pop(0))
+
+        exporter, http_client = _make_official_exporter(handler, max_attempts=2)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_file = Path(temp_dir) / "income-expense.csv"
+            try:
+                result = exporter.export_to_csv(
+                    REPORT_CATEGORIES[0], "2026-08-01", "2026-08-31", output_file
+                )
+            finally:
+                http_client.close()
+            self.assertEqual([row[0] for row in _read_csv_rows(output_file)[1:]], ["ORDER-1"])
+
+        self.assertEqual(result, (1, 1))
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0].url, requests[1].url)
+
+    def test_official_export_empty_final_chunk_retries_only_when_rows_missing(self) -> None:
+        for expected_count in (1, 2):
+            with self.subTest(expected_count=expected_count):
+                requests: list[httpx.Request] = []
+                sleeps: list[float] = []
+                chunks = [
+                    _official_chunk_payload(
+                        [RAW_EXPORT_HEADER, _official_export_row("ORDER-1", "A")],
+                        cache_key="last-cache", has_next=True, max_page=1,
+                    ),
+                    _official_chunk_payload(
+                        [_official_export_row("合计")],
+                        cache_key="finished-cache", has_next=False, max_page=1,
+                    ),
+                    _official_chunk_payload(
+                        [_official_export_row("ORDER-2", "B")],
+                        cache_key="finished-cache", has_next=False, max_page=1,
+                    ),
+                ]
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    if request.method == "POST":
+                        return httpx.Response(200, json=_official_query_payload(expected_count))
+                    requests.append(request)
+                    return httpx.Response(200, json=chunks.pop(0))
+
+                exporter, http_client = _make_official_exporter(
+                    handler, max_attempts=2, sleep=sleeps.append
+                )
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output_file = Path(temp_dir) / "income-expense.csv"
+                    try:
+                        result = exporter.export_to_csv(
+                            REPORT_CATEGORIES[0], "2026-08-01", "2026-08-31", output_file
+                        )
+                    finally:
+                        http_client.close()
+                    rows = _read_csv_rows(output_file)
+
+                self.assertEqual(result, (expected_count, 2))
+                self.assertEqual([row[0] for row in rows[1:]], [f"ORDER-{i}" for i in range(1, expected_count + 1)])
+                if expected_count == 2:
+                    self.assertEqual(sleeps, [5.0])
+                    self.assertEqual([r.url.params["pageNo"] for r in requests], ["0", "1", "1"])
+                    self.assertEqual(requests[1].url, requests[2].url)
+                else:
+                    self.assertEqual(sleeps, [])
+                    self.assertEqual([r.url.params["pageNo"] for r in requests], ["0", "1"])
 
     def test_official_export_real_no_data_shape_still_writes_header(self) -> None:
         requests: list[httpx.Request] = []

@@ -345,7 +345,7 @@ class ZiniaoBrowser:
                 phase = 'TEMU 登录确认'
                 from backend.services.temu_on_sale_login import ensure_temu_session
                 try:
-                    ensure_temu_session(driver)
+                    ensure_temu_session(driver, business_url=url)
                 except ValueError as error:
                     raise ZiniaoBrowserError(str(error)) from None
             phase = '业务页签确认'

@@ -68,7 +68,7 @@
           </section>
           <section class="surface settings-surface">
             <div class="section-head"><div><h2>基础配置</h2><p>设置任务输出位置和常用查询参数。</p></div><span class="section-badge">本机</span></div>
-            <div class="form-grid"><label><span>每页数量</span><input id="rowsPerPage" type="number" min="50" max="1000" step="50" /></label><label class="output-field"><span>输出目录</span><div class="input-action"><input id="outputDir" /><button id="chooseDirBtn" class="secondary" type="button">选择</button></div></label></div>
+            <div class="form-grid"><label><span>每页数量</span><input id="rowsPerPage" type="number" min="50" max="1000" step="50" /></label><label class="output-field"><span>输出目录</span><div class="input-action"><input id="outputDir" placeholder="D:\报表\" /><button id="chooseDirBtn" class="secondary" type="button">选择</button></div></label><small class="group-field form-note">默认输出目录为 D:\报表\，也可手动输入其他目录；保存时会自动创建不存在的目录。</small></div>
             <div class="actions"><button id="saveSettingsBtn" class="primary" type="button">保存配置</button></div>
           </section>
           <section class="surface update-surface">
@@ -86,6 +86,6 @@
     </div>
     <div id="toast" class="toast hidden"></div>
     <script src="../assets/common.js?v=20260702-nav-vietnam-income"></script>
-    <script src="../assets/pages/settings.js?v=20261010-builtin-database"></script>
+    <script src="../assets/pages/settings.js?v=20261110-output-root"></script>
   </body>
 </html>

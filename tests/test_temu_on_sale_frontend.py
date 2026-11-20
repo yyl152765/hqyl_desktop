@@ -238,7 +238,7 @@ class TemuFrontendTests(unittest.TestCase):
     def test_ziniao_autofill_readiness_returns_only_booleans(self):
         self.page.set_content('<input placeholder="手机号码" value="fixture-account"><input type="password" value="fixture-secret">')
         result=self.page.evaluate('() => {'+LOGIN_READY+'}')
-        self.assertEqual(result,{'filled':True,'confirmation':False,'challenge':False,'key_error':False})
+        self.assertEqual(result,{'filled':True,'form':True,'confirmation':False,'challenge':False,'key_error':False,'key_ready':False})
         self.assertTrue(all(type(value) is bool for value in result.values()))
         self.assertNotIn('fixture-secret',json.dumps(result))
         self.page.locator('input[type=password]').fill('')
@@ -247,11 +247,102 @@ class TemuFrontendTests(unittest.TestCase):
         self.assertTrue(self.page.evaluate('() => {'+LOGIN_READY+'}')['challenge'])
         self.page.set_content('<label><input type="checkbox">同意</label><button>确认授权并前往</button>')
         self.assertEqual(self.page.evaluate('() => {'+LOGIN_READY+'}'),
-                         {'filled':False,'confirmation':True,'challenge':False,'key_error':False})
+                         {'filled':False,'form':False,'confirmation':True,'challenge':False,'key_error':False,'key_ready':False})
         self.page.set_content('<div role="alert">获取公钥失败，请刷新页面</div>')
         result = self.page.evaluate('() => {'+LOGIN_READY+'}')
-        self.assertEqual(result,{'filled':False,'confirmation':False,'challenge':False,'key_error':True})
+        self.assertEqual(result,{'filled':False,'form':False,'confirmation':False,'challenge':False,'key_error':True,'key_ready':False})
         self.assertTrue(all(type(value) is bool for value in result.values()))
+
+    def test_phone_login_observed_inputs_and_async_public_key_readiness(self):
+        from backend.services.temu_on_sale_login import PHONE_TAB, PHONE_BUTTON
+        self.page.goto(f'http://127.0.0.1:{self.server.server_port}/')
+        self.page.set_content('''<div class="password-login_tabItem__fixture">扫码登录</div>
+          <div class="password-login_tabItem__fixture password-login_tabItemChecked__fixture">手机号登录</div>
+          <div class="password-login_tabItem__fixture">邮箱登录</div>
+          <input type="text" style="display:none">
+          <input id="usernameId" placeholder="请输入手机号" value="fixture-phone">
+          <input id="passwordId" type="password" placeholder="请输入密码" value="fixture-secret">
+          <label data-testid="beast-core-checkbox"><input type="checkbox">我已阅读并同意</label>
+          <button><span>登录</span></button><a>邮箱登录</a>''')
+        expect(self.page.locator('xpath='+PHONE_TAB)).to_have_count(1)
+        expect(self.page.locator('xpath='+PHONE_BUTTON)).to_have_count(1)
+        state = self.page.evaluate('() => {'+LOGIN_READY+'}')
+        self.assertTrue(state['filled'])
+        self.assertFalse(state['key_ready'])
+        # Resource timing contains only request metadata; no response/key is read.
+        self.page.evaluate('''performance.getEntriesByType = () => [{
+          name:location.origin+'/bg/quiet/api/mms/key/login',initiatorType:'xmlhttprequest',
+          startTime:1,responseEnd:2,responseStatus:200}]''')
+        state = self.page.evaluate('() => {'+LOGIN_READY+'}')
+        self.assertTrue(state['key_ready'])
+        self.assertNotIn('fixture-secret', json.dumps(state))
+        self.page.evaluate('''performance.getEntriesByType = () => [{
+          name:location.origin+'/bg/quiet/api/mms/key/login',initiatorType:'fetch',
+          startTime:1,responseEnd:2,responseStatus:503}]''')
+        state = self.page.evaluate('() => {'+LOGIN_READY+'}')
+        self.assertFalse(state['key_ready'])
+        self.assertTrue(state['key_error'])
+        self.page.set_content('<input id="userEmailId" value="fixture-email"><input type="password" value="fixture-secret">')
+        self.assertFalse(self.page.evaluate('() => {'+LOGIN_READY+'}')['filled'])
+
+    def test_site_picker_global_entry_selects_only_global_excluding_eu_and_us(self):
+        from backend.services.temu_on_sale_login import GLOBAL_ENTRY
+        self.page.set_content('''
+          <label><input type="checkbox">同意分享账号 ID 与店名</label>
+          <div class="site-main_content__fixture"><div>全球</div><div>除欧区、美国</div>
+            <div id="global-enter" class="site-main_enter__fixture">进入</div></div>
+          <div class="site-main_content__fixture"><div>美国</div><div>美国市场</div>
+            <div id="us-enter" class="site-main_enter__fixture">进入</div></div>
+          <div class="site-main_content__fixture"><div>欧区</div><div>欧洲市场</div>
+            <div id="eu-enter" class="site-main_enter__fixture">进入</div></div>
+          <div class="site-main_content__fixture"><div>全球</div><div>包括欧区、美国</div>
+            <div id="different-scope" class="site-main_enter__fixture">进入</div></div>''')
+        entry = self.page.locator('xpath=' + GLOBAL_ENTRY)
+        expect(entry).to_have_count(1)
+        expect(entry).to_have_attribute('id', 'global-enter')
+        self.assertFalse(self.page.evaluate('() => {' + LOGIN_READY + '}')['challenge'])
+        self.page.evaluate("document.body.insertAdjacentHTML('beforeend','<div role=dialog>安全验证</div>')")
+        self.assertTrue(self.page.evaluate('() => {' + LOGIN_READY + '}')['challenge'])
+
+    def test_site_picker_consent_preparation_distinguishes_absent_and_hidden_checkbox(self):
+        from backend.services.temu_on_sale_login import GLOBAL_ENTRY, _prepare_submit
+
+        class Element:
+            def __init__(self, locator):
+                self.locator = locator
+
+            def is_displayed(self):
+                return self.locator.is_visible()
+
+            def is_enabled(self):
+                return self.locator.is_enabled()
+
+            def is_selected(self):
+                return self.locator.is_checked()
+
+            def find_element(self, by, selector):
+                return Element(self.locator.locator(selector))
+
+            def click(self):
+                self.locator.click()
+
+        page = self.page
+        driver = SimpleNamespace(find_elements=lambda by, selector: [
+            Element(locator) for locator in page.locator(('xpath=' if by == 'xpath' else '') + selector).all()])
+        self.page.set_content('''<label id="consent"><input type="checkbox">同意分享账号 ID 与店名</label>
+          <div class="site-main_content__fixture"><div>全球</div><div>除欧区、美国</div>
+            <div id="global-enter" class="site-main_enter__fixture">进入</div></div>''')
+        entry = _prepare_submit(driver, GLOBAL_ENTRY, wait_for_controls=True, optional_consent=True)
+        self.assertEqual(entry.locator.get_attribute('id'), 'global-enter')
+        expect(self.page.locator('input[type=checkbox]')).to_be_checked()
+        self.page.locator('#consent').evaluate("e => e.style.display = 'none'")
+        self.assertIs(_prepare_submit(driver, GLOBAL_ENTRY, wait_for_controls=True, optional_consent=True), False)
+        self.page.locator('#consent').evaluate('e => e.remove()')
+        entry = _prepare_submit(driver, GLOBAL_ENTRY, wait_for_controls=True, optional_consent=True)
+        self.assertEqual(entry.locator.get_attribute('id'), 'global-enter')
+        self.page.locator('.site-main_content__fixture').evaluate('e => e.after(e.cloneNode(true))')
+        with self.assertRaisesRegex(ValueError, '无法唯一确认'):
+            _prepare_submit(driver, GLOBAL_ENTRY, wait_for_controls=True, optional_consent=True)
 
     def test_observed_custom_todo_modal_locates_only_its_close_control(self):
         self.page.set_content('''<div data-testid="beast-core-modal-container">
@@ -262,6 +353,19 @@ class TemuFrontendTests(unittest.TestCase):
         state=json.loads(self.page.evaluate(EXPORT_DIALOG))
         self.assertEqual(len(state['notices']),1)
         self.assertEqual(self.page.locator(state['notices'][0]).get_attribute('id'),'todo-close')
+
+    def test_message_panel_dismisses_only_its_own_close_control(self):
+        self.page.set_content('''<div class="new-bell_header__fixture"><div>全部消息</div>
+          <svg id="message-close" data-testid="beast-core-icon-close" width="16" height="16"></svg></div>
+          <button>去处理</button><button>查看详情</button><button>标记为已读</button>
+          <svg id="other-close" data-testid="beast-core-icon-close" width="16" height="16"></svg>''')
+        state = json.loads(self.page.evaluate(EXPORT_DIALOG))
+        self.assertEqual(state['notice_error'], '')
+        self.assertEqual(len(state['messages']), 1)
+        self.assertEqual(self.page.locator(state['messages'][0]).get_attribute('id'), 'message-close')
+        self.assertEqual(state['notices'], [])
+        self.page.evaluate("document.querySelector('#message-close').remove()")
+        self.assertIn('无法唯一确认', json.loads(self.page.evaluate(EXPORT_DIALOG))['notice_error'])
 
     def test_observed_beast_menu_tabs_and_selected_site_tags(self):
         self.page.set_content('''<div class="account-info_mallInfo__fixture">herefn</div>

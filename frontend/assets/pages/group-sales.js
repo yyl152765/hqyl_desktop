@@ -1,13 +1,12 @@
 (() => {
   const $ = HQYL.$;
-  let outputDir = "";
+  let resultOutputDir = "";
   let outputFile = "";
   let groups = [];
   let selectedIds = new Set();
   let loading = false;
   let running = false;
   let initialized = false;
-  let restoredSelection = false;
   let accountId = "";
   let loadSequence = 0;
   let loadError = "";
@@ -31,6 +30,8 @@
   function updateControls() {
     const unavailable = running || loading || !groups.length;
     $("groupRunBtn").disabled = unavailable;
+    $("groupOutputDir").disabled = running;
+    $("groupChooseOutputBtn").disabled = running;
     $("reloadGroupsBtn").disabled = running || loading;
     $("reloadGroupsBtn").textContent = loading ? "正在加载…" : "重新加载";
     $("salesGroupSearch").disabled = unavailable;
@@ -81,10 +82,8 @@
       if (sequence !== loadSequence) return;
       if (!response.ok) throw new Error(response.error || "自定义分类加载失败");
       groups = (response.groups || []).map((group) => ({ id: String(group.id), name: String(group.name) }));
-      const hadSavedSelection = selectedIds.size > 0;
+      // 进入报表或重新加载时都不自动勾选分类，也不恢复上次运行的选择；仅保留本次页面上仍存在的手动勾选。
       selectedIds = new Set(selectedGroupIds());
-      if (!restoredSelection && !hadSavedSelection && groups.length) selectedIds.add(groups[0].id);
-      restoredSelection = true;
       if (!groups.length) loadError = "当前账号没有可用的自定义分类，请确认权限后重新加载";
     } catch (error) {
       if (sequence !== loadSequence) return;
@@ -109,16 +108,34 @@
       HQYL.showToast("请选择至少一个自定义分类");
       return;
     }
-    await HQYL.startTask(() => {
+    const outputRoot = $("groupOutputDir").value.trim();
+    if (!outputRoot) {
+      HQYL.showToast("请输入输出目录");
+      $("groupOutputDir").focus();
+      return;
+    }
+    await HQYL.startTask(async () => {
       HQYL.appendLog("准备启动菲律宾各组商品销量报表导出");
-      return HQYL.api().start_group_sales_report({
+      const task = await HQYL.api().start_group_sales_report({
         account_id: account.id,
         start_date: $("groupStartDate").value,
         end_date: $("groupEndDate").value,
-        output_dir: outputDir,
+        output_dir: outputRoot,
         group_ids: selectedGroupIds(),
       });
+      if (task.ok && task.context?.output_root) $("groupOutputDir").value = task.context.output_root;
+      return task;
     });
+  }
+
+  async function chooseOutputDirectory() {
+    try {
+      const result = await HQYL.api().choose_output_dir($("groupOutputDir").value.trim());
+      if (result.ok) $("groupOutputDir").value = result.path;
+      else if (!result.cancelled) HQYL.showToast(result.error || "选择目录失败");
+    } catch (error) {
+      HQYL.showToast(error.message || String(error));
+    }
   }
 
   const page = {
@@ -128,10 +145,11 @@
     async init(info) {
       const settings = info.settings || {};
       const dates = info.date_range || {};
-      outputDir = settings.output_dir || "";
+      $("groupOutputDir").value = settings.output_dir || "D:\\报表\\";
       $("groupStartDate").value = dates.start_date || "";
       $("groupEndDate").value = dates.end_date || "";
-      selectedIds = new Set((settings.sales_group_ids || []).map(String));
+      // 每次进入报表都从空选择开始，不沿用配置文件里上一次运行保存的分类。
+      selectedIds = new Set();
       accountId = HQYL.activeAccount("mabang")?.id || "";
       initialized = true;
       $("groupSalesForm").addEventListener("submit", (event) => { event.preventDefault(); return runReport(); });
@@ -147,7 +165,8 @@
       $("reloadGroupsBtn").addEventListener("click", loadGroups);
       $("selectAllGroupsBtn").addEventListener("click", () => { visibleGroups().forEach((group) => selectedIds.add(group.id)); renderGroups(); });
       $("clearGroupsBtn").addEventListener("click", () => { selectedIds.clear(); renderGroups(); });
-      $("groupOpenOutputBtn").addEventListener("click", () => HQYL.openOutput(outputFile || outputDir));
+      $("groupChooseOutputBtn").addEventListener("click", chooseOutputDirectory);
+      $("groupOpenOutputBtn").addEventListener("click", () => HQYL.openOutput(outputFile || resultOutputDir));
       renderGroups();
       if (accountId) loadGroups();
     },
@@ -159,7 +178,6 @@
       loading = false;
       groups = [];
       selectedIds.clear();
-      restoredSelection = false;
       loadError = "";
       $("salesGroupSearch").value = "";
       renderGroups();
@@ -173,14 +191,16 @@
       updateGroupCount();
       $("groupOpenOutputBtn").disabled = true;
       outputFile = "";
+      resultOutputDir = "";
     },
     applyResult(result) {
       $("skuCount").textContent = String(result.group_count ?? selectedGroupIds().length);
       $("recordCount").textContent = String(result.record_count ?? 0);
       outputFile = result.output_file || "";
-      outputDir = result.output_dir || outputDir;
+      // Restored results must never replace the user's next export root.
+      resultOutputDir = result.output_dir || "";
       $("outputFile").textContent = outputFile || "未生成";
-      $("groupOpenOutputBtn").disabled = !outputFile && !outputDir;
+      $("groupOpenOutputBtn").disabled = !outputFile && !resultOutputDir;
     },
   };
 

@@ -5,6 +5,7 @@ cryptography>=42.0
 beautifulsoup4>=4.12
 pandas>=2.2
 openpyxl>=3.1
+xlsxwriter>=3.1
 Pillow>=10.0
 xlrd>=2.0.1
 PyYAML>=6.0

@@ -1,5 +1,5 @@
 #define MyAppName "寰球云联自动化平台"
-#define MyAppVersion "0.2.92"
+#define MyAppVersion "1.0.0"
 #define MyAppPublisher "HQYL"
 #define MyAppExeName "HQYLAutomation.exe"
 

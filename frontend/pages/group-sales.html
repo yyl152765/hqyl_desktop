@@ -31,6 +31,8 @@
             <div class="form-grid">
               <label><span>开始日期</span><input id="groupStartDate" type="date" /></label>
               <label><span>结束日期</span><input id="groupEndDate" type="date" /></label>
+              <label class="group-field"><span>输出目录</span><div class="input-action"><input id="groupOutputDir" type="text" placeholder="D:\报表\" autocomplete="off" /><button id="groupChooseOutputBtn" class="secondary" type="button">选择</button></div></label>
+              <small class="group-field form-note">支持手动输入，目录不存在时自动创建。每次导出会在此目录下创建独立的报表文件夹。</small>
               <div class="group-field developer-panel">
                 <div class="developer-panel-head">
                   <div><strong id="salesGroupLabel">自定义分类</strong><small id="groupSelectionSummary" role="status" aria-live="polite">准备加载分类</small></div>
@@ -43,7 +45,7 @@
                 </div>
                 <div id="salesGroupSelect" class="developer-checklist" role="group" aria-labelledby="salesGroupLabel"></div>
               </div>
-              <small class="group-field form-note">显示当前马帮账号可见的全部自定义分类，可直接勾选多个；搜索不会清除已选项。未保存过时默认选中第一个分类。</small>
+              <small class="group-field form-note">显示当前马帮账号可见的全部自定义分类，可直接勾选多个；搜索不会清除已选项。进入页面默认不勾选任何分类，也不会恢复上次运行的选择，请手动勾选后再导出。</small>
             </div>
             <div class="actions">
               <button id="groupRunBtn" class="primary" type="submit">导出销量报表</button>
@@ -63,7 +65,7 @@
       </main>
     </div>
     <div id="toast" class="toast hidden"></div>
-    <script src="../assets/common.js?v=20260921-group-categories"></script>
-    <script src="../assets/pages/group-sales.js?v=20260921-group-categories"></script>
+    <script src="../assets/common.js?v=20261109-group-default-none"></script>
+    <script src="../assets/pages/group-sales.js?v=20261110-output-root"></script>
   </body>
 </html>
