@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>菲律宾取消订单同步退款</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">马帮流程 / 菲律宾 Shopee</div><h1>菲律宾取消订单同步退款</h1></div>
+          <div id="taskBadge" class="status-pill idle">待查询</div>
+        </header>
+        <section class="overview-grid" aria-label="本次结果">
+          <article class="overview-card accent-green"><span>店铺覆盖</span><strong id="shopCount">—</strong></article>
+          <article class="overview-card"><span>预览订单</span><strong id="orderCount">—</strong></article>
+          <article class="overview-card"><span>马帮已受理</span><strong id="acceptedCount">—</strong></article>
+          <article class="overview-card"><span>复查仍在异常列表</span><strong id="remainingCount">—</strong></article>
+        </section>
+        <section class="layout-grid">
+          <form id="phRefundForm" class="surface form-surface">
+            <div class="section-head"><div><h2>查询与同步</h2><p>查询当前异常列表，核对预览后同步订单信息。</p></div></div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon">M</span>
+              <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="mabang">尚未绑定马帮账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=mabang">管理账号</a>
+            </div>
+            <div class="form-grid">
+              <label class="group-field"><span>输出目录</span><input id="phOutputDir" type="text" autocomplete="off" /></label>
+            </div>
+            <div class="actions">
+              <button id="phPreviewBtn" class="primary" type="submit">查询并预览</button>
+              <button id="phChooseDirBtn" class="secondary" type="button">选择目录</button>
+              <button id="phOpenResultBtn" class="secondary" type="button" disabled>打开结果</button>
+            </div>
+            <div class="actions" id="phConfirmation" hidden>
+              <label class="checkbox-field"><input id="phConfirm" type="checkbox" /><span id="phConfirmText">确认同步本次预览订单</span></label>
+              <button id="phSyncBtn" class="primary" type="button" disabled>同步订单</button>
+            </div>
+          </form>
+          <section class="surface log-surface">
+            <div class="section-head tight">
+              <div><h2>运行日志</h2><p id="statusText" role="status">等待查询</p></div>
+              <button id="copyLogBtn" class="secondary compact-btn" type="button" aria-label="复制全部运行日志">复制日志</button>
+            </div>
+            <pre id="logBox" class="log-box" tabindex="0"></pre>
+          </section>
+        </section>
+        <section class="surface form-surface" aria-labelledby="phResultsTitle">
+          <div class="section-head tight">
+            <div><h2 id="phResultsTitle">订单明细</h2><p id="phResultSummary" role="status">查询后显示订单</p></div>
+          </div>
+          <div class="collection-table-wrap">
+            <table>
+              <thead><tr><th scope="col">订单号</th><th scope="col">店铺</th><th scope="col" id="phStatusHeader">订单状态</th><th scope="col" id="phReasonHeader">异常说明</th></tr></thead>
+              <tbody id="phOrderRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20261120-ph-cancel-refund"></script>
+    <script src="../assets/pages/ph-cancel-refund-sync.js?v=20261120-ph-cancel-refund"></script>
+  </body>
+</html>

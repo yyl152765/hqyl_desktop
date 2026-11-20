@@ -13,6 +13,7 @@ from uuid import uuid4
 from backend.config_store import AppSettings, BoundAccount, ConfigStore, default_date_range, ensure_output_directory
 from backend.output_paths import directory_scope_key, resolve_output_directories
 from backend.sidebar_preferences import SidebarPreferencesStore
+from backend.services import ph_cancel_refund_sync
 from backend.services.kec_reconciliation import (
     inspect_kec_source_workbook,
     run_kec_reconciliation,
@@ -186,7 +187,7 @@ from backend.update_service import (
 )
 
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_NAME = "寰球云联自动化平台"
 
 
@@ -202,6 +203,8 @@ class AppBridge:
         self._mabang_permission_preview_lock = threading.RLock()
         self._mabang_developer_previews: dict[str, dict[str, Any]] = {}
         self._mabang_developer_preview_lock = threading.RLock()
+        self._cancel_refund_preview: dict[str, Any] | None = None
+        self._cancel_refund_lock = threading.Lock()
         self._temu_operation_lock = threading.Lock()
         self._temu_running_accounts: set[str] = set()
         self._temu_export_lock = threading.RLock()
@@ -241,6 +244,7 @@ class AppBridge:
             "date_range": default_date_range(),
             "settings": _settings_payload(settings),
             "account_state": _account_state_payload(settings),
+            "ph_cancel_refund_sync": resolve_output_directories(settings, ph_cancel_refund_sync.TOOL),
             "group_sales_report": {
                 "groups": get_group_options(),
             },
@@ -309,6 +313,13 @@ class AppBridge:
                     "key": "warehouse_sales_export",
                     "name": "商品仓库报表按月导出",
                     "description": "多选自定义分类与仓库，按月份导出商品仓库报表，每月一个工作表合并成一张表。",
+                    "status": "ready",
+                    "vendor": "mabang",
+                },
+                {
+                    "key": ph_cancel_refund_sync.TOOL,
+                    "name": ph_cancel_refund_sync.TITLE,
+                    "description": "预览菲律宾 Shopee 取消订单，确认后同步订单信息并复查。",
                     "status": "ready",
                     "vendor": "mabang",
                 },
@@ -1417,6 +1428,67 @@ class AppBridge:
             }
 
         return self.tasks.start("商品仓库报表按月导出", runner, tool="warehouse_sales_export")
+
+    def start_ph_cancel_refund_preview(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "取消订单查询参数无效"}
+        try:
+            account = self._payload_with_account({"account_id": payload.get("account_id")}, "mabang")
+            fallback = resolve_output_directories(self.config_store.load(), ph_cancel_refund_sync.TOOL)["output_dir"]
+            output = Path(str(payload.get("output_dir") or fallback).strip().strip('"')).expanduser()
+            if not output.is_absolute():
+                raise ValueError("请输入完整的输出目录")
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except (ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+        def runner(progress):
+            queue, result = ph_cancel_refund_sync.preview_queue(account["username"], account["password"], output, progress)
+            token = uuid4().hex if queue else ""
+            with self._cancel_refund_lock:
+                self._cancel_refund_preview = {
+                    "token": token, "created": time.monotonic(), "account_id": account["account_id"],
+                    "username": account["username"], "queue": queue, "output": output,
+                } if queue else None
+            return {**result, "preview_token": token}
+
+        # Keep preview creation and acceptance ordered even if separate pages
+        # ask to start a task at the same time.
+        with self._cancel_refund_lock:
+            task = self.tasks.start("菲律宾取消订单预览", runner, tool=ph_cancel_refund_sync.TOOL,
+                                    context={"account_id": account["account_id"], "mode": "preview"}, exclusive=True)
+            if task.get("ok"):
+                self._cancel_refund_preview = None
+        return task
+
+    def start_ph_cancel_refund_sync(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict) or payload.get("confirm_sync") is not True:
+            return {"ok": False, "error": "请核对预览后确认同步"}
+        try:
+            account = self._payload_with_account({"account_id": payload.get("account_id")}, "mabang")
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        token = str(payload.get("preview_token") or "")
+        if not token:
+            return {"ok": False, "error": "请先查询待同步订单"}
+
+        with self._cancel_refund_lock:
+            preview = self._cancel_refund_preview
+            if preview is None or preview["token"] != token or time.monotonic() - preview["created"] > 900:
+                return {"ok": False, "error": "预览已失效或已提交，请重新查询"}
+            if (preview["account_id"], preview["username"]) != (account["account_id"], account["username"]):
+                return {"ok": False, "error": "当前马帮账号与预览不一致，请重新查询"}
+
+            def runner(progress):
+                return ph_cancel_refund_sync.sync_queue(account["username"], account["password"],
+                                                       preview["output"], preview["queue"], progress)
+
+            task = self.tasks.start(ph_cancel_refund_sync.TITLE, runner, tool=ph_cancel_refund_sync.TOOL,
+                                    context={"account_id": account["account_id"], "mode": "sync"}, exclusive=True)
+            if task.get("ok"):
+                self._cancel_refund_preview = None
+        return task
 
     def start_mabang_income_expense_report(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:

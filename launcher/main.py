@@ -29,6 +29,7 @@ PAGE_ENTRIES = {
     "mabang-arrival-query": "mabang-arrival-query.html",
     "mabang-income-expense-report": "mabang-income-expense-report.html",
     "warehouse-sales-export": "warehouse-sales-export.html",
+    "ph-cancel-refund-sync": "ph-cancel-refund-sync.html",
     "mabang-order-sku-export": "mabang-order-sku-export.html",
     "temu-shipping-channel": "temu-shipping-channel.html",
     "mabang-warehouse-permission": "mabang-warehouse-permission.html",

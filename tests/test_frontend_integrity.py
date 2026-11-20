@@ -24,6 +24,8 @@ PAGE_SCRIPTS = {
     FRONTEND / "pages" / "mabang-arrival-query.html": FRONTEND / "assets" / "pages" / "mabang-arrival-query.js",
     FRONTEND / "pages" / "group-sales.html": FRONTEND / "assets" / "pages" / "group-sales.js",
     FRONTEND / "pages" / "warehouse-sales-export.html": FRONTEND / "assets" / "pages" / "warehouse-sales-export.js",
+    FRONTEND / "pages" / "ph-cancel-refund-sync.html": FRONTEND / "assets" / "pages" / "ph-cancel-refund-sync.js",
+    FRONTEND / "pages" / "tax-declaration.html": FRONTEND / "assets" / "pages" / "tax-declaration.js",
     FRONTEND / "pages" / "mabang-income-expense-report.html": FRONTEND / "assets" / "pages" / "mabang-income-expense-report.js",
     FRONTEND / "pages" / "mabang-order-sku-export.html": FRONTEND / "assets" / "pages" / "mabang-order-sku-export.js",
     FRONTEND / "pages" / "temu-shipping-channel.html": FRONTEND / "assets" / "pages" / "temu-shipping-channel.js",
