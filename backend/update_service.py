@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+
+from backend.update_sources import (
+    DEFAULT_UPDATE_MANIFEST_URL,
+    DOMAIN_UPDATE_MANIFEST_URL,
+    OFFICIAL_MANIFEST_URLS,
+    official_installer_url,
+)
 
 
 @dataclass(frozen=True)
@@ -24,26 +32,55 @@ class UpdateCheckResult:
     error: str = ""
 
 
+def _fetch_manifest(url: str) -> httpx.Response:
+    response = httpx.get(url, timeout=12, follow_redirects=True)
+    response.raise_for_status()
+    return response
+
+
+def _read_manifest(url: str) -> tuple[str, httpx.Response]:
+    try:
+        return url, _fetch_manifest(url)
+    except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+        if url not in OFFICIAL_MANIFEST_URLS:
+            raise
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code not in (502, 503, 504):
+            raise
+
+    alternate = DEFAULT_UPDATE_MANIFEST_URL if url == DOMAIN_UPDATE_MANIFEST_URL else DOMAIN_UPDATE_MANIFEST_URL
+    try:
+        return alternate, _fetch_manifest(alternate)
+    except httpx.RequestError as exc:
+        raise ValueError("两个官方更新地址均未能连接，请稍后再次检查更新。") from exc
+    except httpx.HTTPStatusError as exc:
+        raise ValueError(f"两个官方更新地址均不可用，备用地址返回 HTTP {exc.response.status_code}。") from exc
+
+
 def check_update_manifest(manifest_url: str, current_version: str) -> UpdateCheckResult:
     url = (manifest_url or "").strip()
     if not url:
         return UpdateCheckResult(configured=False, current_version=current_version)
     try:
-        response = httpx.get(url, timeout=12, follow_redirects=True)
-        response.raise_for_status()
+        source, response = _read_manifest(url)
         manifest = response.json()
         if not isinstance(manifest, dict):
             raise ValueError("更新清单必须是 JSON 对象")
         latest_version = str(manifest.get("version") or "").strip()
         if not latest_version:
             raise ValueError("更新清单缺少 version")
+        package_url = str(manifest.get("package_url") or "").strip()
+        if source in OFFICIAL_MANIFEST_URLS and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", latest_version):
+            # Older manifests hard-code the DNS name even when fetched via IIS by IP.
+            # Match only published HQYL installer URLs for this exact release.
+            if package_url in {official_installer_url(item, latest_version) for item in OFFICIAL_MANIFEST_URLS}:
+                package_url = official_installer_url(source, latest_version)
         return UpdateCheckResult(
             configured=True,
             current_version=current_version,
             latest_version=latest_version,
             update_available=_version_tuple(latest_version) > _version_tuple(current_version),
             notes=str(manifest.get("notes") or "").strip(),
-            package_url=str(manifest.get("package_url") or "").strip(),
+            package_url=package_url,
             sha256=str(manifest.get("sha256") or "").strip().upper(),
             frontend_url=str(manifest.get("frontend_url") or "").strip(),
             # Updates are always optional, including when an older release

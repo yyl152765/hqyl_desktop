@@ -6,6 +6,11 @@ import sys
 import zipfile
 from pathlib import Path
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, official_installer_url
+
 def _release_output_path(release_dir: Path, name: str) -> Path:
     """Keep generated files and recursive cleanup inside the release directory."""
     release_root = release_dir.resolve()
@@ -15,7 +20,7 @@ def _release_output_path(release_dir: Path, name: str) -> Path:
     return output_path
 
 
-def package_release(version: str = "1.0.1"):
+def package_release(version: str = "1.0.2"):
     if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("Release version must use the numeric major.minor.patch format")
 
@@ -49,9 +54,9 @@ def package_release(version: str = "1.0.1"):
     latest_json_data = {
         "version": version,
         "mandatory": False,
-        "notes": "新增菲律宾取消订单同步退款。先预览菲律宾 Shopee 取消订单，确认后通过马帮同步订单信息并导出复查结果。新增电子税务局申报入口和活动价相等时按折扣改价的选项。合入 TEMU 在售商品导出登录修复、商品仓库报表按月导出、BS 抓取链接和各组销量报表输出目录修复。",
+        "notes": "修复更新中心返回 502 和安装包下载失败。新版可直接连接发布服务器，保留菲律宾 Shopee 取消订单同步退款等功能。",
         "frontend_url": "",
-        "package_url": f"http://rpa.whhqyl.com.cn/hqyl/{installer_name}",
+        "package_url": official_installer_url(DEFAULT_UPDATE_MANIFEST_URL, version),
         "sha256": sha256_hash,
     }
 
@@ -138,7 +143,7 @@ if ($manifest.sha256 -ne $ExpectedSha256) {{
 Move-Item -LiteralPath $ManifestStagingPath -Destination $ManifestPath -Force
 
 Write-Host "Deployment files updated." -ForegroundColor Green
-Write-Host "Manifest URL: http://rpa.whhqyl.com.cn/hqyl/latest.json"
+Write-Host "Manifest URL: {DEFAULT_UPDATE_MANIFEST_URL}"
 """
     (server_dir / "deploy.ps1").write_text(deploy_ps1, encoding="utf-8")
 
@@ -164,5 +169,5 @@ pause
     print(f"Release packaging complete for version {version}.")
 
 if __name__ == "__main__":
-    ver = sys.argv[1] if len(sys.argv) > 1 else "1.0.1"
+    ver = sys.argv[1] if len(sys.argv) > 1 else "1.0.2"
     package_release(ver)

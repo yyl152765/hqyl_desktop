@@ -1,13 +1,16 @@
 from pathlib import Path
 import ast
 import importlib.util
+import json
 import re
 import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from zipfile import ZipFile
 
+from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL
 from scripts.package_release import _release_output_path, package_release
 
 
@@ -106,6 +109,21 @@ class PackagingContractTests(unittest.TestCase):
             with self.subTest(version=version):
                 with self.assertRaises(ValueError):
                     package_release(version)
+
+    def test_server_upload_uses_a_downloadable_url_for_existing_clients(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            release = root / "release"
+            release.mkdir()
+            installer = release / "HQYLAutomationSetup_1.0.2.exe"
+            installer.write_bytes(b"sample installer")
+            with patch("scripts.package_release.__file__", str(root / "scripts" / "package_release.py")):
+                package_release("1.0.2")
+            with ZipFile(release / "HQYLAutomation_ServerUpload_1.0.2.zip") as archive:
+                manifest = json.loads(archive.read("latest.json"))
+                self.assertEqual(manifest["package_url"], DEFAULT_UPDATE_MANIFEST_URL.replace("latest.json", installer.name))
+                self.assertEqual(archive.read(installer.name), installer.read_bytes())
+                self.assertIn(DEFAULT_UPDATE_MANIFEST_URL, archive.read("deploy.ps1").decode())
 
     def test_release_output_paths_cannot_escape_release_directory(self):
         with TemporaryDirectory() as temp_dir:

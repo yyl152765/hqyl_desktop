@@ -273,10 +273,13 @@ class GroupSalesReportServiceTests(unittest.TestCase):
     def test_config_store_migrates_legacy_update_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = ConfigStore(Path(temp_dir) / "settings.json")
-            saved = store.save(
-                {"update_manifest_url": "http://47.112.20.68/hqyl/latest.json"}
-            )
-        self.assertEqual(saved.update_manifest_url, DEFAULT_UPDATE_MANIFEST_URL)
+            for url in ("http://47.112.20.68/hqyl/latest.json", "http://rpa.whhqyl.com.cn/hqyl/latest.json"):
+                with self.subTest(url=url):
+                    store.config_path.write_text(json.dumps({"update_manifest_url": url}), encoding="utf-8")
+                    self.assertEqual(store.load().update_manifest_url, DEFAULT_UPDATE_MANIFEST_URL)
+                    self.assertEqual(store.save({"update_manifest_url": url}).update_manifest_url, DEFAULT_UPDATE_MANIFEST_URL)
+            custom_url = "https://mirror.example/latest.json"
+            self.assertEqual(store.save({"update_manifest_url": custom_url}).update_manifest_url, custom_url)
 
     def test_config_store_preserves_saved_captcha_password_on_partial_update(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

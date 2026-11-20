@@ -11,17 +11,15 @@ from datetime import date, timedelta
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
+from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, OFFICIAL_MANIFEST_URLS
+
 
 APP_NAME = "HQYLAutomation"
 DEFAULT_OUTPUT_DIR = "D:\\报表"
 _GROUP_SALES_RUN_DIR = re.compile(r"菲律宾各组商品销量报表_\d{8}_\d{8}_\d{6}(?:_\d+)?")
 DEFAULT_ROWS_PER_PAGE = 500
-DEFAULT_UPDATE_MANIFEST_URL = "http://rpa.whhqyl.com.cn/hqyl/latest.json"
 LEGACY_DINGTALK_CONFIG_ENV = "HQYL_LEGACY_DINGTALK_CONFIG"
 _SETTINGS_LOCK = threading.RLock()
-LEGACY_UPDATE_MANIFEST_URLS = {
-    "http://47.112.20.68/hqyl/latest.json",
-}
 
 
 @dataclass(frozen=True)
@@ -405,7 +403,7 @@ def _coerce_string_list(value: Any) -> list[str]:
 
 def _coerce_update_manifest_url(value: Any) -> str:
     url = str(value or "").strip()
-    if not url or url in LEGACY_UPDATE_MANIFEST_URLS:
+    if not url or url in OFFICIAL_MANIFEST_URLS:
         return DEFAULT_UPDATE_MANIFEST_URL
     return url
 

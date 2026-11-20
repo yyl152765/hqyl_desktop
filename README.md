@@ -40,7 +40,7 @@
 
 ## 当前版本
 
-当前源码版本为 **1.0.1**，包含菲律宾取消订单同步退款、电子税务局申报、活动改价选项及已合入的桌面修复。详见 [1.0.1 发布说明](docs/发布说明_1.0.1.md)。
+当前源码版本为 **1.0.2**，修复更新中心的 502 和安装包下载问题。菲律宾取消订单同步退款等功能已包含在内。详见 [1.0.2 发布说明](docs/发布说明_1.0.2.md)。
 
 ## 目录结构
 
@@ -127,7 +127,7 @@ D:\hqyl_project\hqyl_desktop\dist\HQYLAutomation
 如果本机安装了 Inno Setup，脚本会继续生成安装包：
 
 ```text
-D:\hqyl_project\hqyl_desktop\release\HQYLAutomationSetup_1.0.1.exe
+D:\hqyl_project\hqyl_desktop\release\HQYLAutomationSetup_1.0.2.exe
 ```
 
 ## 配置
