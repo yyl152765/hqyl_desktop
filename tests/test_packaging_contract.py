@@ -47,7 +47,7 @@ class PackagingContractTests(unittest.TestCase):
 
         self.assertIn('["desktop_entry.py"]', spec)
         self.assertNotIn('["launcher/main.py"]', spec)
-        self.assertIn("release_inputs_1.0.3/superbrowser_source", spec)
+        self.assertIn("release_inputs_1.0.4/superbrowser_source", spec)
         self.assertIn('str(superbrowser_process_root)', spec)
         self.assertIn('HQYL_SUPERBROWSER_SOURCE', spec)
         self.assertIn('HQYL_MABANG_UTIL_SOURCE', spec)
@@ -145,6 +145,18 @@ class PackagingContractTests(unittest.TestCase):
         spec.loader.exec_module(staging)
 
         source = b'import psycopg2\n\ndef get_pg_connection():\n    return psycopg2.connect(host="database-host", user="runtime-user", password="fixture-old-password")\n'
+        source += b"""
+def upsert_batch_to_pg(conn, table_name, data_list, conflict_keys):
+    return None
+def fetch_column_from_db(conn, table_name, column_name, where_clause=None, params=None):
+    return (table_name, column_name, where_clause, params)
+def query_auth_code(name):
+    conn = None
+    return fetch_column_from_db(conn, "shop_browsers", "browser_oauth", "")
+def query_shop_name(auth):
+    conn = None
+    return fetch_column_from_db(conn, "shop_browsers", "browser_name", "")
+"""
         sanitized, keys = staging.sanitize_source("util/db_helper.py", source)
         self.assertEqual(keys, ["password"])
         self.assertNotIn(b"fixture-old-password", sanitized)
@@ -153,6 +165,12 @@ class PackagingContractTests(unittest.TestCase):
         with patch("backend.ads_database.connect_runtime_database") as connect:
             self.assertIs(namespace["get_pg_connection"](), connect.return_value)
             connect.assert_called_once_with(guard=False)
+        with patch("backend.ads_database.sync_shop_browsers") as sync:
+            namespace["upsert_batch_to_pg"]("connection", "shop_browsers", [], ["browser_oauth"])
+            sync.assert_called_once_with("connection", [])
+        table, field, where, params = namespace["query_shop_name"]("shop-01")
+        self.assertEqual((table, field, params), ("tbl_fin_ads_shop_browser", "browser_name", ("%shop-01%",)))
+        self.assertIn("tenant_id = 1 AND NOT archived", where)
 
         source = b'APP_KEY = "fixture-key"\nAPP_SECRET = "fixture-secret"\nUSER_ID = "fixture-user"\ndef get_access_token(app_key, app_secret):\n    return app_key, app_secret\n'
         sanitized, keys = staging.sanitize_source("util/dingtalk_doc_api.py", source)
@@ -190,10 +208,15 @@ def _ensure_guard_tables_once(): pass
 def check_permission(site_code, recharge_mode): pass
 def send_over_limit_notification(): return OVER_LIMIT_RECIPIENTS.get("x", ["fixture-private"])
 '''
+        for name in ("get_today_quota", "reserve_quota", "confirm_quota", "release_quota",
+                     "create_run_log", "finish_run_log", "write_store_log"):
+            source += (f'def {name}(cursor):\n'
+                       '    cursor.execute("SELECT * FROM shopee_ads_recharge_site_quota WHERE site_code = %s")\n').encode()
         staged, _ = sanitize_source("main/shopee/ads_recharge_guard.py", source)
         for literal in (b"fixture-secret", b"fixture-retired-host", b"fixture-retired-ip", b"fixture-private"):
             self.assertNotIn(literal, staged)
         self.assertIn(b"connect_runtime_database(guard=True)", staged)
+        self.assertIn(b"FROM tbl_fin_ads_recharge_site_quota WHERE tenant_id = 1 AND NOT archived", staged)
         with self.assertRaisesRegex(RuntimeError, "locations changed"):
             sanitize_source("main/shopee/ads_recharge_guard.py", b'GUARD_DB_CONFIG = {}')
 

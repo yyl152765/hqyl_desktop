@@ -13,12 +13,11 @@ function Read-Setting([string]$Name, [string]$Prompt, [string]$Default = '') {
 }
 $adsHost = Read-Setting 'HQYL_GUARD_DB_HOST' 'Approved database or secure tunnel host'
 $adsPort = Read-Setting 'HQYL_GUARD_DB_PORT' 'Port' '5432'
-$adsDbName = Read-Setting 'HQYL_GUARD_DB_NAME' 'Database name' 'wh_rpa'
-$adsSchema = Read-Setting 'HQYL_GUARD_DB_SCHEMA' 'Schema' 'shopee_ads'
+$adsDbName = 'hrms'
+$adsSchema = 'shopee_ads'
 $adsUser = Read-Setting 'HQYL_GUARD_DB_USER' 'Database user'
 if (-not $adsHost -or $adsHost -match '[,\s/]' -or $adsHost.TrimEnd('.') -in @('47.112.20.68', 'rpa.whhqyl.com.cn') -or
-    $adsDbName -cne 'wh_rpa' -or -not $adsUser -or $adsPort -notmatch '^\d{1,5}$' -or [int]$adsPort -lt 1 -or [int]$adsPort -gt 65535 -or
-    $adsSchema -notmatch '^[a-z_][a-z0-9_]{0,62}$') { throw 'Invalid configuration for the new database.' }
+    -not $adsUser -or $adsPort -notmatch '^\d{1,5}$' -or [int]$adsPort -lt 1 -or [int]$adsPort -gt 65535) { throw 'Invalid configuration for the new database.' }
 $adsNetwork = Read-Setting 'HQYL_GUARD_DB_PRIVATE_NETWORK' 'Use approved private VPN or encrypted local tunnel? 1=yes, 0=use DB TLS' '0'
 if ($adsNetwork -notin @('0','1')) { throw 'Invalid transport choice.' }
 $adsSslMode = if ($adsNetwork -eq '1') { 'disable' } else { 'require' }

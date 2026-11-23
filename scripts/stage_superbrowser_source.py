@@ -16,7 +16,7 @@ from scripts.build_public_runtime_configs import PRIVATE_SITE_FIELDS
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 SOURCE = Path(os.environ.get("HQYL_SUPERBROWSER_INPUT", str(ROOT.parent / "superbrowser_process")))
 INPUTS = ROOT / f"build/release_inputs_{VERSION}"
 TARGET = INPUTS / "superbrowser_source"
@@ -76,6 +76,22 @@ def _stage_database(relative, payload):
             replace(permission, "def check_permission(site_code, recharge_mode):\n"
                     "    from backend.ads_database import authorized_machine\n"
                     "    return PermissionResult(**authorized_machine(current_machine_context(), site_code, recharge_mode))")
+            # Adapt the original reservation and accounting queries while retaining their
+            # locks, parameters, amount arithmetic, and transaction boundaries.
+            for name in ("get_today_quota", "reserve_quota", "confirm_quota", "release_quota",
+                         "create_run_log", "finish_run_log", "write_store_log"):
+                queries = [node.args[0] for node in ast.walk(funcs[name]) if isinstance(node, ast.Call)
+                           and isinstance(node.func, ast.Attribute) and node.func.attr == "execute"]
+                if not queries or any(not isinstance(q, ast.Constant) or "shopee_ads_recharge_" not in q.value for q in queries):
+                    raise ValueError(f"Unexpected accounting query in {name}")
+                for node in queries:
+                    query = node.value.replace("shopee_ads_recharge_", "tbl_fin_ads_recharge_")
+                    query = query.replace("updated_at = NOW()", "updated_on = NOW(), version = version + 1")
+                    if query.lstrip().startswith(("UPDATE", "SELECT")):
+                        if query.count("WHERE ") != 1:
+                            raise ValueError(f"Unexpected accounting filter in {name}")
+                        query = query.replace("WHERE ", "WHERE tenant_id = 1 AND NOT archived AND ")
+                    replace(node, repr(query))
             defaults = [n.args[1] for n in ast.walk(funcs["send_over_limit_notification"])
                         if isinstance(n, ast.Call) and ast.unparse(n.func) == "OVER_LIMIT_RECIPIENTS.get" and len(n.args) == 2]
             if len(defaults) != 1:
@@ -84,6 +100,29 @@ def _stage_database(relative, payload):
         else:
             function("get_pg_connection", ["from backend.ads_database import connect_runtime_database",
                                            "return connect_runtime_database(guard=False)"])
+            upsert = funcs["upsert_batch_to_pg"]
+            first = next(n for n in upsert.body if not isinstance(n, ast.Expr))
+            pos = offsets[first.lineno - 1]
+            changes.append((pos, pos, (
+                '    if table_name == "shop_browsers":\n'
+                '        from backend.ads_database import sync_shop_browsers\n'
+                '        return sync_shop_browsers(conn, data_list)\n'
+            ).encode()))
+            fetch = funcs["fetch_column_from_db"]
+            first = next(n for n in fetch.body if not isinstance(n, ast.Expr))
+            pos = offsets[first.lineno - 1]
+            changes.append((pos, pos, (
+                '    if table_name == "shop_browsers":\n'
+                '        table_name = "tbl_fin_ads_shop_browser"\n'
+                '        scope = "tenant_id = 1 AND NOT archived"\n'
+                '        where_clause = f"{scope} AND ({where_clause})" if where_clause else scope\n'
+            ).encode()))
+            for method, column, clause, varname in (
+                    ("query_auth_code", "browser_oauth", "browser_name LIKE %s AND length(browser_oauth) <> 32", "name"),
+                    ("query_shop_name", "browser_name", "browser_oauth LIKE %s", "auth")):
+                lookup = next(n for n in ast.walk(funcs[method]) if isinstance(n, ast.Call)
+                              and ast.unparse(n.func) == "fetch_column_from_db")
+                replace(lookup, f'fetch_column_from_db(conn, "shop_browsers", "{column}", "{clause}", (f"%{{{varname}}}%",))')
     except (KeyError, ValueError) as exc:
         raise RuntimeError(f"Reviewed credential locations changed in {relative}") from exc
     for start, end, value in sorted(changes, reverse=True):

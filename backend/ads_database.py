@@ -6,13 +6,15 @@ import re
 from contextlib import closing
 
 import psycopg2
+from psycopg2 import sql
+from psycopg2.extras import execute_values
 
 
 MISSING_PASSWORD = "广告充值数据库连接配置不完整，请联系管理员运行安装目录 tools 下的 configure_ads_database.cmd。"
 GUARD_TABLES = (
-    "shopee_ads_recharge_ip_whitelist", "shopee_ads_recharge_site_quota",
-    "shopee_ads_recharge_run_log", "shopee_ads_recharge_store_log", "shop_browsers",
-    "recharge_cutover", "recharge_site_settings",
+    "tbl_fin_ads_recharge_ip_whitelist", "tbl_fin_ads_recharge_site_quota",
+    "tbl_fin_ads_recharge_run_log", "tbl_fin_ads_recharge_store_log", "tbl_fin_ads_shop_browser",
+    "tbl_fin_ads_recharge_cutover", "tbl_fin_ads_recharge_site_settings",
 )
 RETIRED_HOSTS = {"rpa.whhqyl.com.cn", "47.112.20.68"}
 
@@ -26,21 +28,21 @@ def resolve_password(guard: bool = True) -> str:
 
 def connection_parameters(password: str) -> dict:
     host = os.getenv("HQYL_GUARD_DB_HOST", "").strip()
-    database = os.getenv("HQYL_GUARD_DB_NAME", "wh_rpa").strip()
+    database = os.getenv("HQYL_GUARD_DB_NAME", "hrms").strip()
     user = os.getenv("HQYL_GUARD_DB_USER", "").strip()
     if not all((host, database, user, password)):
         raise ValueError(MISSING_PASSWORD)
     if any(part.strip().casefold().rstrip(".") in RETIRED_HOSTS for part in host.split(",")):
         raise ValueError("广告充值仍配置为旧数据库，请联系管理员设置新库地址。")
-    if database != "wh_rpa":
-        raise ValueError("广告充值的目标数据库必须为 wh_rpa。")
+    if database != "hrms":
+        raise ValueError("广告充值的目标数据库必须为 hrms。")
     if not re.fullmatch(r"[A-Za-z0-9.:_-]+", host):
         raise ValueError("广告充值数据库主机名无效。")
     port = os.getenv("HQYL_GUARD_DB_PORT", "5432")
     if not re.fullmatch(r"[0-9]{1,5}", port) or not 1 <= int(port) <= 65535:
         raise ValueError("广告充值数据库端口无效。")
     schema = os.getenv("HQYL_GUARD_DB_SCHEMA", "shopee_ads").strip()
-    if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", schema):
+    if schema != "shopee_ads":
         raise ValueError("广告充值数据库 schema 无效。")
     mode = os.getenv("HQYL_GUARD_DB_SSLMODE", "require").lower()
     if mode not in {"require", "verify-ca", "verify-full"}:
@@ -49,7 +51,7 @@ def connection_parameters(password: str) -> dict:
     return {"host": host, "port": port,
             "dbname": database, "user": user, "password": password, "connect_timeout": 8,
             "sslmode": mode, "require_auth": "scram-sha-256",
-            "options": f"-c search_path={schema},pg_catalog"}
+            "options": f"-c search_path=pg_catalog,{schema} -c timezone=Asia/Shanghai"}
 
 
 def connect_runtime_database(guard: bool = True):
@@ -69,7 +71,7 @@ def validate_connection(password: str) -> None:
                            "FROM unnest(%s::text[]) AS names(t)", (list(GUARD_TABLES),))
             if cursor.fetchone() != (params["dbname"], True):
                 raise ValueError("新充值数据库缺少充值风控或店铺资料表，请先完成迁移。")
-            cursor.execute("SELECT active FROM recharge_cutover WHERE singleton")
+            cursor.execute("SELECT active FROM tbl_fin_ads_recharge_cutover WHERE tenant_id=1 AND singleton AND NOT archived")
             if cursor.fetchone() != (True,):
                 raise ValueError("充值数据尚未完成切换，请联系管理员。")
     except psycopg2.Error:
@@ -91,7 +93,7 @@ def prepare_runtime_database() -> None:
 def authorized_machine(context, site_code, mode):
     with closing(connect_runtime_database()) as conn, conn.cursor() as cur:
         cur.execute("SELECT allowed_sites, allow_dingtalk_recharge, allow_custom_recharge "
-                    "FROM shopee_ads_recharge_ip_whitelist WHERE ip=%s AND enabled", (context["ip"],))
+                    "FROM tbl_fin_ads_recharge_ip_whitelist WHERE tenant_id=1 AND NOT archived AND ip=%s AND enabled", (context["ip"],))
         row = cur.fetchone()
     if row:
         sites = {s.lower() for s in re.split(r"[,，;\s]+", row[0]) if s}
@@ -103,7 +105,7 @@ def authorized_machine(context, site_code, mode):
 
 def private_site_settings(site_code):
     with closing(connect_runtime_database()) as conn, conn.cursor() as cur:
-        cur.execute("SELECT settings FROM recharge_site_settings WHERE site_code=%s", (site_code,))
+        cur.execute("SELECT settings FROM tbl_fin_ads_recharge_site_settings WHERE tenant_id=1 AND NOT archived AND site_code=%s", (site_code,))
         row = cur.fetchone()
     return row[0] if row else {}
 
@@ -125,12 +127,35 @@ def ensure_daily_quotas(currencies, daily_limit) -> None:
     with closing(connect_runtime_database()) as conn, conn, conn.cursor() as cur:
         for site, currency in currencies.items():
             cur.execute(
-                "INSERT INTO shopee_ads_recharge_site_quota "
+                "INSERT INTO tbl_fin_ads_recharge_site_quota "
                 "(site_code, quota_date, currency, daily_limit, used_amount, reserved_amount, enabled, remark) "
                 "VALUES (%s, %s, %s, %s, 0, 0, TRUE, 'daily quota') "
-                "ON CONFLICT (site_code, quota_date) DO NOTHING",
+                "ON CONFLICT (tenant_id, site_code, quota_date) DO NOTHING",
                 (site, date.today(), currency, daily_limit(site)),
             )
+
+
+SHOP_FIELDS = frozenset((
+    "browser_oauth", "browser_ip", "browser_name", "is_dynamic", "is_expired", "platform_id",
+    "platform_name", "proxy_type", "site_id", "store_username", "tags",
+))
+
+
+def sync_shop_browsers(connection, rows):
+    if not rows:
+        return
+    columns = tuple(rows[0])
+    if "browser_oauth" not in columns or not set(columns) <= SHOP_FIELDS:
+        raise ValueError("店铺同步字段不匹配。")
+    updates = [sql.SQL("{0} = EXCLUDED.{0}").format(sql.Identifier(k)) for k in columns if k != "browser_oauth"]
+    updates.extend([sql.SQL("updated_on = CURRENT_TIMESTAMP"), sql.SQL("version = shop.version + 1")])
+    statement = sql.SQL(
+        "INSERT INTO tbl_fin_ads_shop_browser AS shop ({}) VALUES %s "
+        "ON CONFLICT (tenant_id, browser_oauth) DO UPDATE SET {} WHERE NOT shop.archived"
+    ).format(sql.SQL(", ").join(map(sql.Identifier, columns)), sql.SQL(", ").join(updates))
+    with connection.cursor() as cursor:
+        execute_values(cursor, statement, [[row.get(k) for k in columns] for row in rows])
+    connection.commit()
 
 
 def self_check() -> dict:
@@ -141,7 +166,7 @@ def self_check() -> dict:
     from main.shopee import ads_recharge_guard
     from util import db_helper
 
-    config = {"HQYL_GUARD_DB_HOST": "example.invalid", "HQYL_GUARD_DB_NAME": "wh_rpa",
+    config = {"HQYL_GUARD_DB_HOST": "example.invalid", "HQYL_GUARD_DB_NAME": "hrms",
               "HQYL_GUARD_DB_USER": "test_user", "HQYL_GUARD_DB_PASSWORD": "self-check-only",
               "PGPASSWORD": "", "HQYL_GUARD_DB_PORT": "5432", "HQYL_GUARD_DB_SCHEMA": "shopee_ads"}
     with patch.dict(os.environ, config), patch.object(psycopg2, "connect", return_value=Mock()) as connect:

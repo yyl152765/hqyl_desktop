@@ -16,7 +16,7 @@ class AdsDatabaseConfigurationTests(unittest.TestCase):
         self.addCleanup(env.stop)
 
     def test_requires_correct_target(self):
-        for key, value in (("HOST", "rpa.whhqyl.com.cn"), ("HOST", "47.112.20.68"), ("NAME", "rpa_db"),
+        for key, value in (("HOST", "rpa.whhqyl.com.cn"), ("HOST", "47.112.20.68"), ("NAME", "rpa_db"), ("NAME", "wh_rpa"),
                            ("PORT", "65536"), ("SCHEMA", "bad;syntax")):
             with self.subTest(key=key, value=value), patch.dict(os.environ, {"HQYL_GUARD_DB_" + key: value}):
                 with self.assertRaises(ValueError):
@@ -31,7 +31,7 @@ class AdsDatabaseConfigurationTests(unittest.TestCase):
     def test_validation_checks_target_tables_readonly_and_closes(self):
         connection = MagicMock()
         cursor = connection.cursor.return_value.__enter__.return_value
-        for row, valid in ((("wh_rpa", True), True), (("wh_rpa", False), False), (("other", True), False)):
+        for row, valid in ((("hrms", True), True), (("hrms", False), False), (("other", True), False)):
             cursor.fetchone.side_effect = [row, (True,)]
             with patch.object(psycopg2, "connect", return_value=connection) as connect:
                 if valid:
@@ -40,7 +40,7 @@ class AdsDatabaseConfigurationTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         database.validate_connection("configured")
             self.assertIn("default_transaction_read_only=on", connect.call_args.kwargs["options"])
-            self.assertTrue(any(len(c.args) == 2 and "shop_browsers" in c.args[1][0]
+            self.assertTrue(any(len(c.args) == 2 and "tbl_fin_ads_shop_browser" in c.args[1][0]
                                 for c in cursor.execute.call_args_list))
         self.assertEqual(connection.close.call_count, 3)
 

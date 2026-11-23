@@ -20,7 +20,7 @@ def _release_output_path(release_dir: Path, name: str) -> Path:
     return output_path
 
 
-def package_release(version: str = "1.0.3"):
+def package_release(version: str = "1.0.4"):
     if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("Release version must use the numeric major.minor.patch format")
 
@@ -54,7 +54,7 @@ def package_release(version: str = "1.0.3"):
     latest_json_data = {
         "version": version,
         "mandatory": False,
-        "notes": "所有用户共用中台更新地址。Shopee 广告充值使用管理员配置的业务数据库。",
+        "notes": "Shopee 广告充值改用中台主库，沿用已有店铺、白名单、额度和任务记录。",
         "frontend_url": "",
         "package_url": installer_object_url(version),
         "sha256": sha256_hash,
@@ -169,5 +169,5 @@ pause
     print(f"Release packaging complete for version {version}.")
 
 if __name__ == "__main__":
-    ver = sys.argv[1] if len(sys.argv) > 1 else "1.0.3"
+    ver = sys.argv[1] if len(sys.argv) > 1 else "1.0.4"
     package_release(ver)
