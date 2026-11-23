@@ -33,6 +33,15 @@ class AdsDatabaseConfigurationTests(unittest.TestCase):
                                  ("hrms", "secure.example", "5544", "worker", "p@ss"))
                 self.assertEqual(params["sslmode"], "verify-full")
 
+    def test_hrms_proxy_authentication_stays_on_an_approved_transport(self):
+        url = "postgresql://worker:dummy@finance.internal/hrms?sslmode=disable"
+        with patch.dict(os.environ, {"HQYL_GUARD_DATABASE_URL": url}):
+            with self.assertRaises(ValueError):
+                database.connection_parameters()
+            with patch.dict(os.environ, {"HQYL_GUARD_DB_PRIVATE_NETWORK": "1"}):
+                self.assertEqual(database.connection_parameters()["require_auth"], "scram-sha-256,md5")
+        self.assertEqual(database.connection_parameters()["require_auth"], "scram-sha-256")
+
     def test_private_url_rejects_old_targets_and_never_uses_another_password(self):
         for url in ("postgresql://worker:fixture@secure.example/rpa_db", "postgresql://worker:fixture@47.112.20.68/hrms",
                     "postgresql://worker:fixture@secure.example/hrms?options=bad", "postgresql://worker@secure.example/hrms",

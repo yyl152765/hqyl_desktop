@@ -73,7 +73,9 @@ def connection_parameters(password: str | None = None) -> dict:
             raise ValueError("请使用加密连接或管理员批准的专用网络。")
     params = {
         "host": host, "port": port, "dbname": database, "user": user, "password": password,
-        "connect_timeout": 8, "sslmode": mode, "require_auth": "scram-sha-256",
+        "connect_timeout": 8, "sslmode": mode,
+        # The HRMS proxy negotiates PostgreSQL MD5 on the approved private route.
+        "require_auth": "scram-sha-256,md5" if mode in {"disable", "verify-ca", "verify-full"} else "scram-sha-256",
         "options": f"-c search_path=pg_catalog,{schema} -c timezone=Asia/Shanghai",
     }
     if settings.get("sslrootcert"):
