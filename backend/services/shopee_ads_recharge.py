@@ -11,7 +11,7 @@ from types import ModuleType
 from typing import Any, Callable
 
 from backend.config_store import ConfigStore
-from backend.ads_database import prepare_runtime_database
+from backend.ads_database import prepare_runtime_database, private_site_settings
 
 ProgressCallback = Callable[[str], None]
 
@@ -70,6 +70,7 @@ def _ensure_superbrowser_path() -> None:
         Path(os.environ["SUPERBROWSER_PROCESS_ROOT"]).expanduser()
         if os.environ.get("SUPERBROWSER_PROCESS_ROOT")
         else None,
+        project_root / "build/release_inputs_1.0.3/superbrowser_source",
         project_root.parent / "superbrowser_process",
     ]
     candidate = next((path.resolve() for path in candidates if path and (path / "main").is_dir()), None)
@@ -355,6 +356,7 @@ def run_shopee_ads_recharge(
     setattr(settings, "payment_card_type", job.payment_card_type)
     setattr(settings, "sms_verification_required", job.sms_verification_required)
     setattr(settings, "dingtalk_doc_credentials", dingtalk_doc_credentials)
+    setattr(settings, "private_site_settings", private_site_settings(job.site_code))
 
     # 如果没有传入路径，尝试自动解析
     if not settings.client_path or not settings.webdriver_path:

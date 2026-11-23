@@ -16,7 +16,7 @@ from backend.update_service import (
     download_update_package,
     result_payload,
 )
-from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, DOMAIN_UPDATE_MANIFEST_URL
+from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, DOMAIN_UPDATE_MANIFEST_URL, LEGACY_MANIFEST_URLS, installer_object_url
 
 
 class UpdateServiceTests(unittest.TestCase):
@@ -64,41 +64,18 @@ class UpdateServiceTests(unittest.TestCase):
         self.assertEqual(payload["current_version"], "0.2.1")
         self.assertEqual(payload["error"], "offline")
 
-    def test_existing_official_manifest_downloads_from_the_server_that_answered(self) -> None:
-        version = "1.0.1"
-        installer = f"HQYLAutomationSetup_{version}.exe"
-        current_package = DEFAULT_UPDATE_MANIFEST_URL.replace("latest.json", installer)
-        old_package = DOMAIN_UPDATE_MANIFEST_URL.replace("latest.json", installer)
-        for primary, failed, expected_source, advertised, expected_url in (
-            (DEFAULT_UPDATE_MANIFEST_URL, None, DEFAULT_UPDATE_MANIFEST_URL, old_package, current_package),
-            (DOMAIN_UPDATE_MANIFEST_URL, 502, DEFAULT_UPDATE_MANIFEST_URL, old_package, current_package),
-            (DEFAULT_UPDATE_MANIFEST_URL, "offline", DOMAIN_UPDATE_MANIFEST_URL, current_package, old_package),
-        ):
-            with self.subTest(primary=primary, failure=failed):
-                seen = []
-
-                def get(url, **kwargs):
-                    seen.append(url)
-                    request = httpx.Request("GET", url)
-                    if url == primary and failed == "offline":
-                        raise httpx.ConnectError("offline", request=request)
-                    if len(seen) == 1 and isinstance(failed, int):
-                        return httpx.Response(failed, request=request)
-                    return httpx.Response(200, request=request, json={
-                        "version": version, "package_url": advertised, "sha256": "ab" * 32,
-                    })
-
-                with patch("backend.update_service.httpx.get", side_effect=get):
-                    result = check_update_manifest(primary, "1.0.0")
-                self.assertFalse(result.error)
-                expected_requests = [primary]
-                if failed == "offline":
-                    expected_requests.append(primary)
-                if failed:
-                    expected_requests.append(expected_source)
-                self.assertEqual(seen, expected_requests)
-                self.assertEqual(result.package_url, expected_url)
-                self.assertEqual(result.sha256, "AB" * 32)
+    def test_legacy_sources_use_shared_feed_and_preserve_signed_download(self):
+        signed = installer_object_url("1.0.3") + "?signature=fixture"
+        device = DEFAULT_UPDATE_MANIFEST_URL.replace("https://", "https://device:fixture@")
+        for source in (*LEGACY_MANIFEST_URLS, device, DEFAULT_UPDATE_MANIFEST_URL):
+            with self.subTest(source=source):
+                response = httpx.Response(200, request=httpx.Request("GET", DEFAULT_UPDATE_MANIFEST_URL),
+                    json={"version": "1.0.3", "package_url": signed, "sha256": "ab" * 32})
+                with patch("backend.update_service.httpx.get", return_value=response) as get:
+                    result = check_update_manifest(source, "1.0.2")
+                self.assertEqual(get.call_args.args, (DEFAULT_UPDATE_MANIFEST_URL,))
+                self.assertFalse(get.call_args.kwargs["trust_env"])
+                self.assertEqual(result.package_url, signed)
 
     def test_custom_sources_and_package_urls_stay_as_published(self) -> None:
         custom = "https://mirror.example/latest.json"
@@ -135,12 +112,12 @@ class UpdateServiceTests(unittest.TestCase):
     def test_both_official_sources_unavailable_return_optional_error(self) -> None:
         with patch("backend.update_service.httpx.get", side_effect=httpx.ConnectError("offline")) as get:
             result = check_update_manifest(DEFAULT_UPDATE_MANIFEST_URL, "1.0.1")
-        self.assertEqual([call.kwargs["trust_env"] for call in get.call_args_list], [False, True, True])
-        self.assertIn("两个官方更新地址", result.error)
+        self.assertEqual([call.kwargs["trust_env"] for call in get.call_args_list], [False, True])
+        self.assertEqual(result.error, "offline")
         self.assertFalse(result.mandatory)
 
     def test_origin_download_can_restart_through_system_proxy_after_interrupted_transfer(self) -> None:
-        url = DEFAULT_UPDATE_MANIFEST_URL.replace("latest.json", "HQYLAutomationSetup_1.0.1.exe")
+        url = installer_object_url("1.0.1") + "?signature=fixture"
         content = b"complete verified installer"
         request = httpx.Request("GET", url)
         routes = []
@@ -166,7 +143,7 @@ class UpdateServiceTests(unittest.TestCase):
         self.assertEqual(routes, [False, True])
 
     def test_origin_checksum_failure_does_not_retry_or_leave_an_installer(self) -> None:
-        url = DEFAULT_UPDATE_MANIFEST_URL.replace("latest.json", "HQYLAutomationSetup_1.0.1.exe")
+        url = installer_object_url("1.0.1") + "?signature=fixture"
         context = MagicMock()
         context.__enter__.return_value = httpx.Response(200, request=httpx.Request("GET", url), content=b"wrong")
         with TemporaryDirectory() as temp_dir, patch("backend.update_service.httpx.stream", return_value=context) as stream:

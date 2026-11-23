@@ -63,7 +63,8 @@ class PublicRuntimeConfigPackagingTests(unittest.TestCase):
         self.assertNotIn("agent", public["dingtalk"])
         self.assertNotIn("app_key", public["dingtalk"]["doc_config"])
         self.assertNotIn("app_secret", public["dingtalk"]["doc_config"])
-        self.assertEqual(public["dingtalk"]["doc_config"]["config_doc_id"], "doc-id")
+        self.assertNotIn("config_doc_id", public["dingtalk"]["doc_config"])
+        self.assertEqual(public["dingtalk"]["doc_config"]["config_sheet"], "Sheet1")
         self.assertEqual(public["task"], ["my_shopee_ads_recharge"])
         self.assertEqual(
             public["shopee"]["security_verify"],

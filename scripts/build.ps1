@@ -26,6 +26,10 @@ try {
         throw "public runtime config generation failed with exit code $LASTEXITCODE"
     }
 
+    & $Python scripts\stage_superbrowser_source.py
+    if ($LASTEXITCODE -ne 0) {
+        throw "Public runtime source staging failed with exit code $LASTEXITCODE"
+    }
     & $Python -m PyInstaller --clean --noconfirm HQYLAutomation.spec
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE"

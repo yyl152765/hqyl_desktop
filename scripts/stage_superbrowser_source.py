@@ -5,20 +5,29 @@ import ast
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.build_public_runtime_configs import PRIVATE_SITE_FIELDS
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.0.2"
-SOURCE = ROOT.parent / "superbrowser_process"
+VERSION = "1.0.3"
+SOURCE = Path(os.environ.get("HQYL_SUPERBROWSER_INPUT", str(ROOT.parent / "superbrowser_process")))
 INPUTS = ROOT / f"build/release_inputs_{VERSION}"
 TARGET = INPUTS / "superbrowser_source"
 MANIFEST = INPUTS / "superbrowser_staging_manifest.json"
 SOURCE_DIRECTORIES = ("config", "implement", "main", "util")
-AUTHORIZED_EMBEDDED_CREDENTIALS = {"main/shopee/ads_recharge_guard.py": ["BUILTIN_DB_PASSWORD"]}
+GUARD = "main/shopee/ads_recharge_guard.py"
 
 SANITIZED_FIELDS = {
+    GUARD: ["BUILTIN_DB_PASSWORD", "GUARD_DB_CONFIG", "GUARD_DB_FALLBACK_HOST", "OVER_LIMIT_RECIPIENTS"],
     "util/db_helper.py": ["password"],
+    "main/shopee/ads_recharge_success_log.py": ["SUCCESS_LOG_DOC_ID", "SUCCESS_LOG_DOC_URL"],
     "util/dingtalk_doc_api.py": ["APP_KEY", "APP_SECRET", "USER_ID"],
     "util/email_util.py": ["username", "auth_code", "get_email_name"],
 }
@@ -28,20 +37,102 @@ def digest(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _stage_database(relative, payload):
+    raw = payload.decode("utf-8-sig").encode("utf-8")
+    tree = ast.parse(raw)
+    offsets = [0]
+    for line in raw.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    changes = []
+
+    def replace(node, value):
+        changes.append((offsets[node.lineno - 1] + node.col_offset,
+                        offsets[node.end_lineno - 1] + node.end_col_offset, value.encode("utf-8")))
+
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    variables = {t.id: n.value for n in tree.body if isinstance(n, ast.Assign)
+                 for t in n.targets if isinstance(t, ast.Name)}
+
+    def function(name, body):
+        original = funcs[name]
+        if original.args.args or original.decorator_list:
+            raise ValueError("signature changed")
+        replace(original, f"def {name}():\n    " + "\n    ".join(body))
+
+    try:
+        if relative == GUARD:
+            if not isinstance(variables["BUILTIN_DB_PASSWORD"], ast.Constant) or not isinstance(variables["GUARD_DB_CONFIG"], ast.Dict):
+                raise ValueError("configuration shape changed")
+            for key, expr in (("BUILTIN_DB_PASSWORD", '""'), ("GUARD_DB_CONFIG", "{}"),
+                              ("GUARD_DB_FALLBACK_HOST", '""'), ("OVER_LIMIT_RECIPIENTS", "{}")):
+                replace(variables[key], expr)
+            function("get_guard_connection", ["from backend.ads_database import connect_runtime_database",
+                                              "return connect_runtime_database(guard=True)"])
+            function("_ensure_guard_tables_once", ["from backend.ads_database import ensure_daily_quotas",
+                                                   "ensure_daily_quotas(SITE_CURRENCIES, get_site_daily_limit)"])
+            permission = funcs["check_permission"]
+            if [a.arg for a in permission.args.args] != ["site_code", "recharge_mode"]:
+                raise ValueError("permission signature changed")
+            replace(permission, "def check_permission(site_code, recharge_mode):\n"
+                    "    from backend.ads_database import authorized_machine\n"
+                    "    return PermissionResult(**authorized_machine(current_machine_context(), site_code, recharge_mode))")
+            defaults = [n.args[1] for n in ast.walk(funcs["send_over_limit_notification"])
+                        if isinstance(n, ast.Call) and ast.unparse(n.func) == "OVER_LIMIT_RECIPIENTS.get" and len(n.args) == 2]
+            if len(defaults) != 1:
+                raise ValueError("notification shape changed")
+            replace(defaults[0], '["站点负责人"]')
+        else:
+            function("get_pg_connection", ["from backend.ads_database import connect_runtime_database",
+                                           "return connect_runtime_database(guard=False)"])
+    except (KeyError, ValueError) as exc:
+        raise RuntimeError(f"Reviewed credential locations changed in {relative}") from exc
+    for start, end, value in sorted(changes, reverse=True):
+        raw = raw[:start] + value + raw[end:]
+    result = (b"\xef\xbb\xbf" if payload.startswith(b"\xef\xbb\xbf") else b"") + raw
+    compile(result, relative, "exec")
+    return result, list(SANITIZED_FIELDS[relative])
+
+
 def sanitize_source(relative: str, payload: bytes) -> tuple[bytes, list[str]]:
-    if relative in AUTHORIZED_EMBEDDED_CREDENTIALS:
-        tree = ast.parse(payload)
-        fields = {target.id: node.value for node in tree.body if isinstance(node, ast.Assign)
-                  for target in node.targets if isinstance(target, ast.Name)}
-        value = fields.get("BUILTIN_DB_PASSWORD")
-        if not isinstance(value, ast.Constant) or not isinstance(value.value, str) or not value.value:
-            raise RuntimeError(f"Reviewed credential locations changed in {relative}; inspect before staging")
-        config = fields.get("GUARD_DB_CONFIG")
-        passwords = [value for key, value in zip(config.keys, config.values)
-                     if isinstance(key, ast.Constant) and key.value == "password"] if isinstance(config, ast.Dict) else []
-        if len(passwords) != 1 or ast.unparse(passwords[0]) != "os.environ.get('HQYL_GUARD_DB_PASSWORD') or BUILTIN_DB_PASSWORD":
-            raise RuntimeError(f"Reviewed credential locations changed in {relative}; inspect before staging")
-        return payload, []
+    if relative in (GUARD, "util/db_helper.py"):
+        return _stage_database(relative, payload)
+    if re.fullmatch(r"(main/shopee/(id|my|ph|th|vn)_shopee_ads_recharge_operator_service|implement/shopee/(th|my)_shopee_ads_recharge)\.py", relative):
+        raw = payload.decode("utf-8-sig").encode("utf-8")
+        tree = ast.parse(raw)
+        private = {v.value for n in ast.walk(tree) if isinstance(n, ast.Dict)
+                   for k, v in zip(n.keys, n.values) if isinstance(k, ast.Constant)
+                   and k.value in PRIVATE_SITE_FIELDS and isinstance(v, ast.Constant)
+                   and isinstance(v.value, str) and v.value}
+        private.update(n.value.value for n in tree.body if isinstance(n, ast.Assign)
+                       and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
+                       and any(isinstance(t, ast.Name) and t.id.endswith(("_DOC_ID", "_DOC_URL")) for t in n.targets)
+                       and n.value.value)
+        nodes = [n for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                 and (n.value in private or re.fullmatch(r"1[3-9][0-9]{9}", n.value))]
+        offsets = [0]
+        for line in raw.splitlines(keepends=True):
+            offsets.append(offsets[-1] + len(line))
+        for n in sorted(nodes, key=lambda node: (node.lineno, node.col_offset), reverse=True):
+            start = offsets[n.lineno - 1] + n.col_offset
+            end = offsets[n.end_lineno - 1] + n.end_col_offset
+            raw = raw[:start] + b'""' + raw[end:]
+        if relative.startswith("main/"):
+            updated = ast.parse(raw)
+            run = next(n for n in updated.body if isinstance(n, ast.FunctionDef) and n.name == "run_ads_recharge")
+            setting = next(n for n in run.body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+                           and ast.unparse(n.value.func) == "load_runtime_configs")
+            lines = raw.splitlines(keepends=True)
+            lines.insert(setting.end_lineno, b'    pcfg = _deep_merge_dict(pcfg, getattr(settings, "private_site_settings", {}))\n')
+            raw = b"".join(lines)
+        else:
+            updated = ast.parse(raw)
+            method = next(n for n in updated.body if isinstance(n, ast.FunctionDef) and n.name == "_wait_world_card_sms_code")
+            assignment = next(n for n in method.body if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == "sim_number")
+            lines = raw.splitlines(keepends=True)
+            lines.insert(assignment.end_lineno, '    if not sim_number:\n        raise ValueError("请先配置此站点的 WORLD 卡验证手机号。")\n'.encode())
+            raw = b"".join(lines)
+        compile(raw, relative, "exec")
+        return raw, ["private_site_settings"] if nodes else []
     expected = SANITIZED_FIELDS.get(relative, [])
     if not expected:
         return payload, []
@@ -54,39 +145,22 @@ def sanitize_source(relative: str, payload: bytes) -> tuple[bytes, list[str]]:
     for line in utf8.splitlines(keepends=True):
         offsets.append(offsets[-1] + len(line))
     nodes: dict[str, ast.Constant] = {}
-    if relative == "util/db_helper.py":
-        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "get_pg_connection"]
-        for function in functions:
-            for node in ast.walk(function):
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == "psycopg2" and node.func.attr == "connect":
-                    for keyword in node.keywords:
-                        if keyword.arg == "password":
-                            value = keyword.value
-                            if isinstance(value, ast.Call) and ast.unparse(value.func) == "database_credentials.resolve_password" and len(value.args) == 1 and not value.keywords:
-                                value = value.args[0]
-                            if isinstance(value, ast.Constant):
-                                nodes["password"] = value
-    else:
-        statements = tree.body
-        if relative == "util/email_util.py":
-            guards = [node for node in tree.body if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name) and node.test.left.id == "__name__" and any(isinstance(value, ast.Constant) and value.value == "__main__" for value in node.test.comparators)]
-            statements = [statement for guard in guards for statement in guard.body]
-        for node in statements:
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id in expected:
-                        nodes[target.id] = node.value
+    statements = tree.body
+    if relative == "util/email_util.py":
+        guards = [node for node in tree.body if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name) and node.test.left.id == "__name__" and any(isinstance(value, ast.Constant) and value.value == "__main__" for value in node.test.comparators)]
+        statements = [statement for guard in guards for statement in guard.body]
+    for node in statements:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in expected:
+                    nodes[target.id] = node.value
     if set(nodes) != set(expected) or any(not isinstance(node.value, str) for node in nodes.values()):
         raise RuntimeError(f"Reviewed credential locations changed in {relative}; inspect before staging")
     replacements = []
     for key, node in nodes.items():
         start = offsets[node.lineno - 1] + node.col_offset
         end = offsets[node.end_lineno - 1] + node.end_col_offset
-        value = b'os.environ.get("PGPASSWORD", "")' if (relative == "util/db_helper.py" and key == "password") else b'""'
-        replacements.append((start, end, value))
-    if relative == "util/db_helper.py" and not any(isinstance(node, ast.Import) and any(alias.name == "os" and alias.asname in (None, "os") for alias in node.names) for node in tree.body):
-        location = offsets[functions[0].lineno - 1]
-        replacements.append((location, location, b"import os\n\n"))
+        replacements.append((start, end, b'""'))
     for start, end, value in sorted(replacements, reverse=True):
         utf8 = utf8[:start] + value + utf8[end:]
     staged = (b"\xef\xbb\xbf" if payload.startswith(b"\xef\xbb\xbf") else b"") + utf8
@@ -109,7 +183,7 @@ def source_files() -> dict[str, bytes]:
             if any(item.is_symlink() for item in (path, *path.parents)):
                 raise RuntimeError("Refuse symbolic source path: " + relative.as_posix())
             found[relative.as_posix()] = path.read_bytes()
-    if not (set(SANITIZED_FIELDS) | set(AUTHORIZED_EMBEDDED_CREDENTIALS)).issubset(found):
+    if not set(SANITIZED_FIELDS).issubset(found):
         raise RuntimeError("Reviewed credential-bearing modules are missing")
     return found
 
@@ -135,7 +209,7 @@ def main() -> None:
         if staged_hashes() != expected or not MANIFEST.is_file():
             raise RuntimeError("Existing staging differs or lacks provenance; preserve and inspect it")
         report = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        if report.get("version") != VERSION or report.get("files") != expected or report.get("source_files") != source_hashes or report.get("sanitized_fields") != SANITIZED_FIELDS or report.get("authorized_embedded_credentials") != AUTHORIZED_EMBEDDED_CREDENTIALS:
+        if report.get("version") != VERSION or report.get("files") != expected or report.get("source_files") != source_hashes or report.get("sanitized_fields") != SANITIZED_FIELDS:
             raise RuntimeError("Existing staging manifest differs; preserve and inspect it")
         action = "existing_staging_verified"
     else:
@@ -151,12 +225,12 @@ def main() -> None:
             raise RuntimeError("Source or staging changed while copying")
         report = {"version": VERSION, "status": "sanitized_and_verified", "created_at": datetime.now(timezone.utc).isoformat(),
                   "source": str(SOURCE.resolve()), "destination": str(TARGET.resolve()), "python_sources_only": True,
-                  "file_count": len(expected), "source_files": source_hashes, "files": expected, "sanitized_fields": SANITIZED_FIELDS, "authorized_embedded_credentials": AUTHORIZED_EMBEDDED_CREDENTIALS,
-                  "configuration_inputs": {"util/db_helper.py": ["desktop built-in credential provider", "PGPASSWORD"], "main/shopee/ads_recharge_guard.py": ["HQYL_GUARD_DB_PASSWORD", "PGPASSWORD", "user-authorized BUILTIN_DB_PASSWORD"]}}
+                  "file_count": len(expected), "source_files": source_hashes, "files": expected, "sanitized_fields": SANITIZED_FIELDS,
+                  "configuration_inputs": {"util/db_helper.py": ["HQYL_GUARD_DB_*", "PGPASSWORD"], "main/shopee/ads_recharge_guard.py": ["HQYL_GUARD_DB_*", "PGPASSWORD"]}}
         with MANIFEST.open("x", encoding="utf-8") as stream:
             stream.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
         action = "sanitized_and_verified"
-    print(json.dumps({"action": action, "version": VERSION, "file_count": len(expected), "sanitized_fields": SANITIZED_FIELDS, "authorized_embedded_credentials": AUTHORIZED_EMBEDDED_CREDENTIALS,
+    print(json.dumps({"action": action, "version": VERSION, "file_count": len(expected), "sanitized_fields": SANITIZED_FIELDS,
                       "staging": str(TARGET), "manifest": str(MANIFEST)}, ensure_ascii=True))
 
 

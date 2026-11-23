@@ -12,10 +12,8 @@ import httpx
 
 from backend.update_sources import (
     DEFAULT_UPDATE_MANIFEST_URL,
-    DOMAIN_UPDATE_MANIFEST_URL,
-    OFFICIAL_MANIFEST_URLS,
-    ORIGIN_MANIFEST_URLS,
-    official_installer_url,
+    normalize_manifest_url,
+    official_oss_package,
 )
 
 _Result = TypeVar("_Result")
@@ -40,8 +38,6 @@ def _unavailable(exc: httpx.TransportError | httpx.HTTPStatusError) -> bool:
 
 
 def _using_update_network(request: Callable[[bool], _Result], *, direct_first: bool) -> _Result:
-    # Only the documented HTTP origin is eligible for a direct connection.
-    # A network that requires a proxy can still use the system route.
     if direct_first:
         try:
             return request(False)
@@ -57,23 +53,7 @@ def _fetch_manifest(url: str) -> httpx.Response:
         response.raise_for_status()
         return response
 
-    return _using_update_network(fetch, direct_first=url in ORIGIN_MANIFEST_URLS)
-
-
-def _read_manifest(url: str) -> tuple[str, httpx.Response]:
-    try:
-        return url, _fetch_manifest(url)
-    except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-        if url not in OFFICIAL_MANIFEST_URLS or not _unavailable(exc):
-            raise
-
-    alternate = DEFAULT_UPDATE_MANIFEST_URL if url == DOMAIN_UPDATE_MANIFEST_URL else DOMAIN_UPDATE_MANIFEST_URL
-    try:
-        return alternate, _fetch_manifest(alternate)
-    except httpx.RequestError as exc:
-        raise ValueError("两个官方更新地址均未能连接，请稍后再次检查更新。") from exc
-    except httpx.HTTPStatusError as exc:
-        raise ValueError(f"两个官方更新地址均不可用，备用地址返回 HTTP {exc.response.status_code}。") from exc
+    return _using_update_network(fetch, direct_first=url == DEFAULT_UPDATE_MANIFEST_URL)
 
 
 def check_update_manifest(manifest_url: str, current_version: str) -> UpdateCheckResult:
@@ -81,7 +61,7 @@ def check_update_manifest(manifest_url: str, current_version: str) -> UpdateChec
     if not url:
         return UpdateCheckResult(configured=False, current_version=current_version)
     try:
-        source, response = _read_manifest(url)
+        response = _fetch_manifest(normalize_manifest_url(url))
         manifest = response.json()
         if not isinstance(manifest, dict):
             raise ValueError("更新清单必须是 JSON 对象")
@@ -89,11 +69,6 @@ def check_update_manifest(manifest_url: str, current_version: str) -> UpdateChec
         if not latest_version:
             raise ValueError("更新清单缺少 version")
         package_url = str(manifest.get("package_url") or "").strip()
-        if source in OFFICIAL_MANIFEST_URLS and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", latest_version):
-            # Older manifests hard-code the DNS name even when fetched via IIS by IP.
-            # Match only published HQYL installer URLs for this exact release.
-            if package_url in {official_installer_url(item, latest_version) for item in OFFICIAL_MANIFEST_URLS}:
-                package_url = official_installer_url(source, latest_version)
         return UpdateCheckResult(
             configured=True,
             current_version=current_version,
@@ -182,12 +157,15 @@ def download_update_package(
     try:
         direct_first = (
             re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", str(version)) is not None
-            and package_url in {official_installer_url(item, version) for item in ORIGIN_MANIFEST_URLS}
+            and official_oss_package(package_url, version)
         )
         _using_update_network(download, direct_first=direct_first)
         os.replace(partial_path, installer_path)
         progress("安装包校验通过")
         return installer_path
+    except httpx.HTTPStatusError as exc:
+        partial_path.unlink(missing_ok=True)
+        raise ValueError(f"更新包下载失败（HTTP {exc.response.status_code}），请重新检查更新。") from None
     except Exception:
         partial_path.unlink(missing_ok=True)
         raise

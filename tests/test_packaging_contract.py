@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL
+from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, installer_object_url
 from scripts.package_release import _release_output_path, package_release
 
 
@@ -47,11 +47,12 @@ class PackagingContractTests(unittest.TestCase):
 
         self.assertIn('["desktop_entry.py"]', spec)
         self.assertNotIn('["launcher/main.py"]', spec)
-        self.assertIn('project_root.parent / "superbrowser_process"', spec)
+        self.assertIn("release_inputs_1.0.3/superbrowser_source", spec)
         self.assertIn('str(superbrowser_process_root)', spec)
         self.assertIn('HQYL_SUPERBROWSER_SOURCE', spec)
         self.assertIn('HQYL_MABANG_UTIL_SOURCE', spec)
-        self.assertIn('(str(mabang_util_root), "mabang_process/util")', spec)
+        self.assertIn("public_mabang_inputs.json", spec)
+        self.assertIn('mabang_data.append((str(source), "mabang_process/util"))', spec)
         self.assertIn('"main/shopee/config"', spec)
         self.assertIn('public_runtime_config', spec)
         self.assertNotIn('superbrowser_process_root / "config" / "config.yaml"', spec)
@@ -121,7 +122,7 @@ class PackagingContractTests(unittest.TestCase):
                 package_release("1.0.2")
             with ZipFile(release / "HQYLAutomation_ServerUpload_1.0.2.zip") as archive:
                 manifest = json.loads(archive.read("latest.json"))
-                self.assertEqual(manifest["package_url"], DEFAULT_UPDATE_MANIFEST_URL.replace("latest.json", installer.name))
+                self.assertEqual(manifest["package_url"], installer_object_url("1.0.2"))
                 self.assertEqual(archive.read(installer.name), installer.read_bytes())
                 self.assertIn(DEFAULT_UPDATE_MANIFEST_URL, archive.read("deploy.ps1").decode())
 
@@ -147,17 +148,11 @@ class PackagingContractTests(unittest.TestCase):
         sanitized, keys = staging.sanitize_source("util/db_helper.py", source)
         self.assertEqual(keys, ["password"])
         self.assertNotIn(b"fixture-old-password", sanitized)
-        captured = []
-        driver = SimpleNamespace(connect=lambda **kwargs: captured.append(kwargs))
-        with patch.dict(sys.modules, {"psycopg2": driver}):
-            namespace = {}
-            exec(compile(sanitized, "staged-db-helper", "exec"), namespace)
-            with patch.dict("os.environ", {"PGPASSWORD": "fixture-runtime-password"}, clear=True):
-                namespace["get_pg_connection"]()
-            with patch.dict("os.environ", {}, clear=True):
-                namespace["get_pg_connection"]()
-        self.assertEqual(captured[0], {"host": "database-host", "user": "runtime-user", "password": "fixture-runtime-password"})
-        self.assertEqual(captured[1]["password"], "")
+        namespace = {}
+        exec(compile(sanitized, "staged-db-helper", "exec"), namespace)
+        with patch("backend.ads_database.connect_runtime_database") as connect:
+            self.assertIs(namespace["get_pg_connection"](), connect.return_value)
+            connect.assert_called_once_with(guard=False)
 
         source = b'APP_KEY = "fixture-key"\nAPP_SECRET = "fixture-secret"\nUSER_ID = "fixture-user"\ndef get_access_token(app_key, app_secret):\n    return app_key, app_secret\n'
         sanitized, keys = staging.sanitize_source("util/dingtalk_doc_api.py", source)
@@ -184,30 +179,23 @@ class PackagingContractTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "locations changed"):
             staging.sanitize_source("util/dingtalk_doc_api.py", b'APP_KEY = "fixture"\n')
 
-    def test_guard_release_staging_preserves_only_reviewed_builtin_credential(self):
-        from scripts.stage_superbrowser_source import sanitize_source, AUTHORIZED_EMBEDDED_CREDENTIALS
-        source = b'import os\nBUILTIN_DB_PASSWORD = "fixture-builtin"\nGUARD_DB_CONFIG = {"host": "runtime-host", "password": os.environ.get("HQYL_GUARD_DB_PASSWORD") or BUILTIN_DB_PASSWORD}\n'
-        staged, keys = sanitize_source("main/shopee/ads_recharge_guard.py", source)
-        self.assertEqual(staged, source)
-        self.assertEqual(keys, [])
-        self.assertEqual(AUTHORIZED_EMBEDDED_CREDENTIALS, {"main/shopee/ads_recharge_guard.py": ["BUILTIN_DB_PASSWORD"]})
-        for source in (b'GUARD_DB_CONFIG = {"password": "unexpected"}\n', b'BUILTIN_DB_PASSWORD = ""\n', b'BUILTIN_DB_PASSWORD = "fixture"\nGUARD_DB_CONFIG = {"password": "unexpected"}\n'):
-            with self.assertRaisesRegex(RuntimeError, "locations changed"):
-                sanitize_source("main/shopee/ads_recharge_guard.py", source)
-
-    def test_shared_database_staging_preserves_desktop_provider_and_removes_default(self):
+    def test_guard_release_staging_removes_secret_and_requires_known_layout(self):
         from scripts.stage_superbrowser_source import sanitize_source
-        source = b'import psycopg2\nfrom util import database_credentials\ndef get_pg_connection():\n    return psycopg2.connect(password=database_credentials.resolve_password("fixture-old-password"))\n'
-        sanitized, keys = sanitize_source("util/db_helper.py", source)
-        self.assertNotIn(b"fixture-old-password", sanitized)
-        provider = SimpleNamespace(resolve_password=lambda fallback: "fixture-desktop-password")
-        captured = []
-        with patch.dict(sys.modules, {"psycopg2": SimpleNamespace(connect=lambda **kw: captured.append(kw)), "util": SimpleNamespace(database_credentials=provider)}):
-            namespace = {}
-            exec(compile(sanitized, "staged-db-provider", "exec"), namespace)
-            namespace["get_pg_connection"]()
-        self.assertEqual(captured[0]["password"], "fixture-desktop-password")
-
+        source = b'''BUILTIN_DB_PASSWORD = "fixture-secret"
+GUARD_DB_CONFIG = {"host": "fixture-retired-host"}
+GUARD_DB_FALLBACK_HOST = "fixture-retired-ip"
+OVER_LIMIT_RECIPIENTS = {"x": "fixture-private"}
+def get_guard_connection(): pass
+def _ensure_guard_tables_once(): pass
+def check_permission(site_code, recharge_mode): pass
+def send_over_limit_notification(): return OVER_LIMIT_RECIPIENTS.get("x", ["fixture-private"])
+'''
+        staged, _ = sanitize_source("main/shopee/ads_recharge_guard.py", source)
+        for literal in (b"fixture-secret", b"fixture-retired-host", b"fixture-retired-ip", b"fixture-private"):
+            self.assertNotIn(literal, staged)
+        self.assertIn(b"connect_runtime_database(guard=True)", staged)
+        with self.assertRaisesRegex(RuntimeError, "locations changed"):
+            sanitize_source("main/shopee/ads_recharge_guard.py", b'GUARD_DB_CONFIG = {}')
 
 
 if __name__ == "__main__":

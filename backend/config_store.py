@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, OFFICIAL_MANIFEST_URLS
+from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, normalize_manifest_url
 
 
 APP_NAME = "HQYLAutomation"
@@ -402,10 +402,7 @@ def _coerce_string_list(value: Any) -> list[str]:
 
 
 def _coerce_update_manifest_url(value: Any) -> str:
-    url = str(value or "").strip()
-    if not url or url in OFFICIAL_MANIFEST_URLS:
-        return DEFAULT_UPDATE_MANIFEST_URL
-    return url
+    return normalize_manifest_url(str(value or ""))
 
 
 def _coerce_accounts(value: Any) -> list[BoundAccount]:

@@ -50,36 +50,10 @@ if _INSERTED_SUPERBROWSER_PATH:
 
 
 class ShopeeAdsRechargeGuardTests(unittest.TestCase):
-    def test_guard_connection_falls_back_to_ip_only_for_dns_failure(self):
-        calls = []
-        connection = object()
-
-        def connect(**config):
-            calls.append(config)
-            if len(calls) == 1:
-                raise ads_recharge_guard.psycopg2.OperationalError(
-                    'could not translate host name "rpa.whhqyl.com.cn" to address: Name or service not known'
-                )
-            return connection
-
-        with patch.object(ads_recharge_guard.psycopg2, "connect", side_effect=connect):
-            result = ads_recharge_guard.get_guard_connection()
-
-        self.assertIs(result, connection)
-        self.assertEqual(calls[0]["host"], "rpa.whhqyl.com.cn")
-        self.assertEqual(calls[1]["host"], "47.112.20.68")
-        self.assertEqual(calls[1]["connect_timeout"], 8)
-
-    def test_guard_connection_does_not_bypass_non_dns_database_errors(self):
-        with patch.object(
-            ads_recharge_guard.psycopg2,
-            "connect",
-            side_effect=ads_recharge_guard.psycopg2.OperationalError("password authentication failed"),
-        ) as connect:
-            with self.assertRaisesRegex(ads_recharge_guard.psycopg2.OperationalError, "authentication"):
-                ads_recharge_guard.get_guard_connection()
-
-        connect.assert_called_once()
+    def test_guard_uses_only_the_new_database_connector(self):
+        with patch("backend.ads_database.connect_runtime_database") as connect:
+            self.assertIs(ads_recharge_guard.get_guard_connection(), connect.return_value)
+            connect.assert_called_once_with(guard=True)
 
     def test_page_success_becomes_failed_when_balance_not_confirmed(self):
         with patch.object(ads_recharge_guard, "query_ads_credit_with_reopened_store", return_value=Decimal("100")):

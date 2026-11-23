@@ -9,7 +9,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, official_installer_url
+from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, installer_object_url
 
 def _release_output_path(release_dir: Path, name: str) -> Path:
     """Keep generated files and recursive cleanup inside the release directory."""
@@ -20,7 +20,7 @@ def _release_output_path(release_dir: Path, name: str) -> Path:
     return output_path
 
 
-def package_release(version: str = "1.0.2"):
+def package_release(version: str = "1.0.3"):
     if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("Release version must use the numeric major.minor.patch format")
 
@@ -54,9 +54,9 @@ def package_release(version: str = "1.0.2"):
     latest_json_data = {
         "version": version,
         "mandatory": False,
-        "notes": "修复更新中心返回 502 和安装包下载失败。新版可直接连接发布服务器，保留菲律宾 Shopee 取消订单同步退款等功能。",
+        "notes": "所有用户共用中台更新地址。Shopee 广告充值使用管理员配置的业务数据库。",
         "frontend_url": "",
-        "package_url": official_installer_url(DEFAULT_UPDATE_MANIFEST_URL, version),
+        "package_url": installer_object_url(version),
         "sha256": sha256_hash,
     }
 
@@ -67,7 +67,7 @@ def package_release(version: str = "1.0.2"):
     shutil.copy2(installer, upload_dir / installer_name)
     (upload_dir / "SHA256.txt").write_text(sha256_txt, encoding="utf-8")
     (upload_dir / "latest.json").write_text(
-        json.dumps(latest_json_data, indent=2, ensure_ascii=False) + "\n",
+        json.dumps(latest_json_data, indent=2, ensure_ascii=True) + "\n",
         encoding="utf-8",
     )
     if build_manifest.is_file():
@@ -80,7 +80,7 @@ def package_release(version: str = "1.0.2"):
     shutil.copy2(installer, server_dir / installer_name)
     (server_dir / "SHA256.txt").write_text(sha256_txt, encoding="utf-8")
     (server_dir / "latest.json").write_text(
-        json.dumps(latest_json_data, indent=2, ensure_ascii=False) + "\n",
+        json.dumps(latest_json_data, indent=2, ensure_ascii=True) + "\n",
         encoding="utf-8",
     )
     if build_manifest.is_file():
@@ -133,7 +133,7 @@ Set-Content -LiteralPath (Join-Path $SiteRoot "web.config") -Value $webConfig -E
 
 # Publish latest.json last so clients never see a manifest before its installer is ready.
 Copy-Item -LiteralPath (Join-Path $SourceDir "latest.json") -Destination $ManifestStagingPath -Force
-$manifest = Get-Content -LiteralPath $ManifestStagingPath -Raw | ConvertFrom-Json
+$manifest = Get-Content -LiteralPath $ManifestStagingPath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($manifest.version -ne $ExpectedVersion) {{
     throw "Manifest version verification failed."
 }}
@@ -169,5 +169,5 @@ pause
     print(f"Release packaging complete for version {version}.")
 
 if __name__ == "__main__":
-    ver = sys.argv[1] if len(sys.argv) > 1 else "1.0.2"
+    ver = sys.argv[1] if len(sys.argv) > 1 else "1.0.3"
     package_release(ver)

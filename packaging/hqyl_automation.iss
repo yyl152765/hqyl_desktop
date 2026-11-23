@@ -1,5 +1,5 @@
 #define MyAppName "寰球云联自动化平台"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.0.3"
 #define MyAppPublisher "HQYL"
 #define MyAppExeName "HQYLAutomation.exe"
 
@@ -25,6 +25,8 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Files]
 Source: "..\dist\HQYLAutomation\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs notimestamp
+Source: "..\scripts\configure_ads_database.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion notimestamp
+Source: "..\scripts\configure_ads_database.cmd"; DestDir: "{app}\tools"; Flags: ignoreversion notimestamp
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

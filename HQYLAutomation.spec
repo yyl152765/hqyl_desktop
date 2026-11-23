@@ -1,6 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import json
+import hashlib
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
@@ -11,7 +13,7 @@ mabang_util_root = Path(
     os.environ.get("HQYL_MABANG_UTIL_SOURCE", str(mabang_process_root / "util"))
 ).resolve()
 superbrowser_process_root = Path(
-    os.environ.get("HQYL_SUPERBROWSER_SOURCE", str(project_root.parent / "superbrowser_process"))
+    os.environ.get("HQYL_SUPERBROWSER_SOURCE", str(project_root / "build/release_inputs_1.0.3/superbrowser_source"))
 ).resolve()
 public_runtime_config_root = project_root / "build" / "public_runtime_config"
 public_shopee_config_root = public_runtime_config_root / "main" / "shopee" / "config"
@@ -27,6 +29,26 @@ if not public_shopee_config_root.is_dir() or not public_bigseller_config.is_file
     raise FileNotFoundError(
         "Public runtime configs are missing. Run scripts/build_public_runtime_configs.py before PyInstaller."
     )
+
+public_mabang_inputs = json.loads((project_root / "scripts/public_mabang_inputs.json").read_text("utf-8"))
+mabang_data = []
+for relative, expected in public_mabang_inputs.items():
+    source = mabang_util_root / relative
+    if source.is_symlink() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+        raise ValueError(f"Mabang input differs from the reviewed public version: {relative}")
+    mabang_data.append((str(source), "mabang_process/util"))
+
+import ast
+guard_tree = ast.parse((superbrowser_process_root / "main/shopee/ads_recharge_guard.py").read_bytes())
+if not any(isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "BUILTIN_DB_PASSWORD"
+           for t in n.targets) and isinstance(n.value, ast.Constant) and n.value.value == ""
+           for n in guard_tree.body):
+    raise ValueError("The public build requires a sanitized recharge runtime")
+for relative, name in (("main/shopee/ads_recharge_guard.py", "get_guard_connection"), ("util/db_helper.py", "get_pg_connection")):
+    tree = ast.parse((superbrowser_process_root / relative).read_bytes())
+    body = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
+    if not any(isinstance(node, ast.ImportFrom) and node.module == "backend.ads_database" for node in body.body):
+        raise ValueError("Public recharge runtime must use the configured database")
 
 shopee_ads_site_modules = [
     "main.shopee.id_shopee_ads_recharge_operator_service",
@@ -71,7 +93,7 @@ a = Analysis(
         ("frontend", "frontend"),
         (str(project_root / "packaging" / "HQYLAutomation.ico"), "."),
         (str(project_root / "backend" / "resources" / "user_map.yaml"), "backend/resources"),
-        (str(mabang_util_root), "mabang_process/util"),
+        *mabang_data,
         (str(public_bigseller_config), "mabang_process/vietnam/config"),
         (str(project_root / "backend" / "resources" / "user_map.yaml"), "config"),
         (str(public_shopee_config_root), "main/shopee/config"),

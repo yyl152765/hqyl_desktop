@@ -3,7 +3,25 @@ $ErrorActionPreference = 'Stop'
 # Run on the recharge PC as the Windows user who runs HQYLAutomation.
 # No password is embedded, accepted on the command line, or printed.
 Write-Host 'Configure the Shopee recharge guard database password for this Windows user.'
-Write-Host 'Use the database password provided by your administrator, not the shop login password.'
+Write-Host 'Enter the approved new PostgreSQL connection from your administrator.'
+function Read-Setting([string]$Name, [string]$Prompt, [string]$Default = '') {
+    $value = [Environment]::GetEnvironmentVariable($Name, 'User')
+    if (-not $value) { $value = $Default }
+    $typed = Read-Host "$Prompt [$value]"
+    if ($typed) { return $typed.Trim() }
+    return $value
+}
+$adsHost = Read-Setting 'HQYL_GUARD_DB_HOST' 'Approved database or secure tunnel host'
+$adsPort = Read-Setting 'HQYL_GUARD_DB_PORT' 'Port' '5432'
+$adsDbName = Read-Setting 'HQYL_GUARD_DB_NAME' 'Database name' 'wh_rpa'
+$adsSchema = Read-Setting 'HQYL_GUARD_DB_SCHEMA' 'Schema' 'shopee_ads'
+$adsUser = Read-Setting 'HQYL_GUARD_DB_USER' 'Database user'
+if (-not $adsHost -or $adsHost -match '[,\s/]' -or $adsHost.TrimEnd('.') -in @('47.112.20.68', 'rpa.whhqyl.com.cn') -or
+    $adsDbName -cne 'wh_rpa' -or -not $adsUser -or $adsPort -notmatch '^\d{1,5}$' -or [int]$adsPort -lt 1 -or [int]$adsPort -gt 65535 -or
+    $adsSchema -notmatch '^[a-z_][a-z0-9_]{0,62}$') { throw 'Invalid configuration for the new database.' }
+$adsNetwork = Read-Setting 'HQYL_GUARD_DB_PRIVATE_NETWORK' 'Use approved private VPN or encrypted local tunnel? 1=yes, 0=use DB TLS' '0'
+if ($adsNetwork -notin @('0','1')) { throw 'Invalid transport choice.' }
+$adsSslMode = if ($adsNetwork -eq '1') { 'disable' } else { 'require' }
 $adsSecurePassword = Read-Host 'Database password (hidden)' -AsSecureString
 if ($adsSecurePassword.Length -eq 0) {
     throw 'Password is empty. No configuration was changed.'
@@ -12,6 +30,9 @@ if ($adsSecurePassword.Length -eq 0) {
 $adsPasswordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($adsSecurePassword)
 try {
     $adsPasswordText = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($adsPasswordPointer)
+    foreach ($entry in @{HQYL_GUARD_DB_HOST=$adsHost; HQYL_GUARD_DB_PORT=$adsPort; HQYL_GUARD_DB_NAME=$adsDbName; HQYL_GUARD_DB_USER=$adsUser; HQYL_GUARD_DB_SCHEMA=$adsSchema; HQYL_GUARD_DB_SSLMODE=$adsSslMode; HQYL_GUARD_DB_PRIVATE_NETWORK=$adsNetwork}.GetEnumerator()) {
+        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'User')
+    }
     [Environment]::SetEnvironmentVariable('HQYL_GUARD_DB_PASSWORD', $adsPasswordText, 'User')
     $env:HQYL_GUARD_DB_PASSWORD = $adsPasswordText
     if ([Environment]::GetEnvironmentVariable('HQYL_GUARD_DB_PASSWORD', 'User') -cne $adsPasswordText) {

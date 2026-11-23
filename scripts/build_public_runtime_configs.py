@@ -17,6 +17,8 @@ SITE_CONFIG_NAMES = (
     "Shopee马来广告充值.yaml",
 )
 BIGSELLER_CONFIG_NAME = "BigSeller库存同步.yaml"
+PRIVATE_SITE_FIELDS = {"sim_number", "recipient_names", "completion_recipient_names",
+                       "app_userid", "custom_recharge_status_doc_id", "config_doc_id", "config_doc_url", "success_log_doc_id", "success_log_doc_url"}
 
 
 def build_public_process_config(payload: dict[str, Any]) -> dict[str, Any]:
@@ -33,13 +35,16 @@ def build_public_process_config(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(security_verify, dict):
         for key in ("phone", "user_id", "user_name", "requester", "token", "secret"):
             security_verify.pop(key, None)
+    sms = shopee.get("world_card_sms", {}) if isinstance(shopee, dict) else {}
+    if isinstance(sms, dict):
+        sms.pop("sim_number", None)
 
     doc_config = payload.get("dingtalk", {}).get("doc_config", {})
     if isinstance(doc_config, dict):
         safe_doc_config = {
             key: copy.deepcopy(value)
             for key, value in doc_config.items()
-            if str(key).casefold() not in {"app_key", "app_secret", "access_token", "secret"}
+            if str(key).casefold() not in PRIVATE_SITE_FIELDS | {"app_key", "app_secret", "access_token", "secret"}
         }
         if safe_doc_config:
             public["dingtalk"] = {"doc_config": safe_doc_config}
