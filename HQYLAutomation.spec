@@ -13,7 +13,7 @@ mabang_util_root = Path(
     os.environ.get("HQYL_MABANG_UTIL_SOURCE", str(mabang_process_root / "util"))
 ).resolve()
 superbrowser_process_root = Path(
-    os.environ.get("HQYL_SUPERBROWSER_SOURCE", str(project_root / "build/release_inputs_1.0.4/superbrowser_source"))
+    os.environ.get("HQYL_SUPERBROWSER_SOURCE", str(project_root / "build/release_inputs_1.0.5/superbrowser_source"))
 ).resolve()
 public_runtime_config_root = project_root / "build" / "public_runtime_config"
 public_shopee_config_root = public_runtime_config_root / "main" / "shopee" / "config"

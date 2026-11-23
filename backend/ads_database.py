@@ -19,6 +19,20 @@ GUARD_TABLES = (
 RETIRED_HOSTS = {"rpa.whhqyl.com.cn", "47.112.20.68"}
 
 
+def direct_connection_settings() -> dict[str, str]:
+    value = os.getenv("HQYL_GUARD_DATABASE_URL", "").strip()
+    if not value:
+        return {}
+    try:
+        settings = psycopg2.extensions.parse_dsn(value)
+    except psycopg2.Error:
+        raise ValueError("广告充值数据库连接地址格式无效，请检查本机连接设置。") from None
+    allowed = {"host", "port", "dbname", "user", "password", "sslmode", "sslrootcert"}
+    if set(settings) - allowed or not all(settings.get(k) for k in ("host", "user", "password")):
+        raise ValueError("广告充值数据库连接须包含主机、充值账号和密码。")
+    return settings
+
+
 def resolve_password(guard: bool = True) -> str:
     for name in ("HQYL_GUARD_DB_PASSWORD", "PGPASSWORD"):
         if os.getenv(name):
@@ -26,10 +40,19 @@ def resolve_password(guard: bool = True) -> str:
     raise ValueError(MISSING_PASSWORD)
 
 
-def connection_parameters(password: str) -> dict:
-    host = os.getenv("HQYL_GUARD_DB_HOST", "").strip()
-    database = os.getenv("HQYL_GUARD_DB_NAME", "hrms").strip()
-    user = os.getenv("HQYL_GUARD_DB_USER", "").strip()
+def connection_parameters(password: str | None = None) -> dict:
+    settings = direct_connection_settings()
+    if settings:
+        host = settings["host"].strip()
+        database = settings.get("dbname", "hrms").strip()
+        user = settings["user"].strip()
+        password = settings["password"]
+    else:
+        host = os.getenv("HQYL_GUARD_DB_HOST", "").strip()
+        database = os.getenv("HQYL_GUARD_DB_NAME", "hrms").strip()
+        user = os.getenv("HQYL_GUARD_DB_USER", "").strip()
+        if password is None:
+            password = resolve_password()
     if not all((host, database, user, password)):
         raise ValueError(MISSING_PASSWORD)
     if any(part.strip().casefold().rstrip(".") in RETIRED_HOSTS for part in host.split(",")):
@@ -38,27 +61,31 @@ def connection_parameters(password: str) -> dict:
         raise ValueError("广告充值的目标数据库必须为 hrms。")
     if not re.fullmatch(r"[A-Za-z0-9.:_-]+", host):
         raise ValueError("广告充值数据库主机名无效。")
-    port = os.getenv("HQYL_GUARD_DB_PORT", "5432")
+    port = settings.get("port", "5432") if settings else os.getenv("HQYL_GUARD_DB_PORT", "5432")
     if not re.fullmatch(r"[0-9]{1,5}", port) or not 1 <= int(port) <= 65535:
         raise ValueError("广告充值数据库端口无效。")
-    schema = os.getenv("HQYL_GUARD_DB_SCHEMA", "shopee_ads").strip()
+    schema = "shopee_ads" if settings else os.getenv("HQYL_GUARD_DB_SCHEMA", "shopee_ads").strip()
     if schema != "shopee_ads":
         raise ValueError("广告充值数据库 schema 无效。")
-    mode = os.getenv("HQYL_GUARD_DB_SSLMODE", "require").lower()
+    mode = (settings.get("sslmode", "require") if settings else os.getenv("HQYL_GUARD_DB_SSLMODE", "require")).lower()
     if mode not in {"require", "verify-ca", "verify-full"}:
         if mode != "disable" or os.getenv("HQYL_GUARD_DB_PRIVATE_NETWORK") != "1":
             raise ValueError("请使用加密连接或管理员批准的专用网络。")
-    return {"host": host, "port": port,
-            "dbname": database, "user": user, "password": password, "connect_timeout": 8,
-            "sslmode": mode, "require_auth": "scram-sha-256",
-            "options": f"-c search_path=pg_catalog,{schema} -c timezone=Asia/Shanghai"}
+    params = {
+        "host": host, "port": port, "dbname": database, "user": user, "password": password,
+        "connect_timeout": 8, "sslmode": mode, "require_auth": "scram-sha-256",
+        "options": f"-c search_path=pg_catalog,{schema} -c timezone=Asia/Shanghai",
+    }
+    if settings.get("sslrootcert"):
+        params["sslrootcert"] = settings["sslrootcert"]
+    return params
 
 
 def connect_runtime_database(guard: bool = True):
-    return psycopg2.connect(**connection_parameters(resolve_password(guard)))
+    return psycopg2.connect(**connection_parameters())
 
 
-def validate_connection(password: str) -> None:
+def validate_connection(password: str | None = None) -> None:
     params = connection_parameters(password)
     params["options"] += " -c default_transaction_read_only=on -c statement_timeout=5000"
     connection = None
@@ -82,7 +109,7 @@ def validate_connection(password: str) -> None:
 
 
 def prepare_runtime_database() -> None:
-    validate_connection(resolve_password())
+    validate_connection()
     from backend.services.shopee_ads_recharge import _ensure_superbrowser_path
     _ensure_superbrowser_path()
     from main.shopee import ads_recharge_guard
@@ -166,7 +193,7 @@ def self_check() -> dict:
     from main.shopee import ads_recharge_guard
     from util import db_helper
 
-    config = {"HQYL_GUARD_DB_HOST": "example.invalid", "HQYL_GUARD_DB_NAME": "hrms",
+    config = {"HQYL_GUARD_DATABASE_URL": "", "HQYL_GUARD_DB_HOST": "example.invalid", "HQYL_GUARD_DB_NAME": "hrms",
               "HQYL_GUARD_DB_USER": "test_user", "HQYL_GUARD_DB_PASSWORD": "self-check-only",
               "PGPASSWORD": "", "HQYL_GUARD_DB_PORT": "5432", "HQYL_GUARD_DB_SCHEMA": "shopee_ads"}
     with patch.dict(os.environ, config), patch.object(psycopg2, "connect", return_value=Mock()) as connect:

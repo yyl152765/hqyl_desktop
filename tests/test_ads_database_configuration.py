@@ -22,6 +22,26 @@ class AdsDatabaseConfigurationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     database.connection_parameters("configured")
 
+    def test_one_private_url_is_used_for_both_connections(self):
+        env = {"HQYL_GUARD_DATABASE_URL": "postgresql://worker:p%40ss@secure.example:5544/hrms?sslmode=verify-full",
+               "HQYL_GUARD_DB_NAME": "rpa_db", "HQYL_GUARD_DB_PORT": "9999"}
+        with patch.dict(os.environ, env), patch.object(psycopg2, "connect") as connect:
+            for guard in (True, False):
+                database.connect_runtime_database(guard)
+                params = connect.call_args.kwargs
+                self.assertEqual((params["dbname"], params["host"], params["port"], params["user"], params["password"]),
+                                 ("hrms", "secure.example", "5544", "worker", "p@ss"))
+                self.assertEqual(params["sslmode"], "verify-full")
+
+    def test_private_url_rejects_old_targets_and_never_uses_another_password(self):
+        for url in ("postgresql://worker:fixture@secure.example/rpa_db", "postgresql://worker:fixture@47.112.20.68/hrms",
+                    "postgresql://worker:fixture@secure.example/hrms?options=bad", "postgresql://worker@secure.example/hrms",
+                    "invalid-private-fixture"):
+            with patch.dict(os.environ, {"HQYL_GUARD_DATABASE_URL": url}):
+                with self.assertRaises(ValueError) as err:
+                    database.connection_parameters()
+                self.assertNotIn("private-fixture", str(err.exception))
+
     def test_absent_password_stops_before_stores(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(service, "get_site_module") as load:
             with self.assertRaisesRegex(ValueError, "连接配置不完整"):
