@@ -11,7 +11,7 @@ from types import ModuleType
 from typing import Any, Callable
 
 from backend.config_store import ConfigStore
-from backend.ads_database import prepare_runtime_database, private_site_settings
+from backend.ads_database import prepare_runtime_database, private_site_settings, verify_card_channel
 
 ProgressCallback = Callable[[str], None]
 
@@ -356,7 +356,12 @@ def run_shopee_ads_recharge(
     setattr(settings, "payment_card_type", job.payment_card_type)
     setattr(settings, "sms_verification_required", job.sms_verification_required)
     setattr(settings, "dingtalk_doc_credentials", dingtalk_doc_credentials)
-    setattr(settings, "private_site_settings", private_site_settings(job.site_code))
+    business_settings = private_site_settings(job.site_code)
+    setattr(settings, "private_site_settings", business_settings)
+    if job.site_code in {"th", "my"} and job.payment_card_type == "world" and job.sms_verification_required:
+        if verify_card_channel(business_settings):
+            settings.browser_window_mode = "normal"
+            _emit(progress, "遇到短信验证时，请在银行页面输入并提交验证码。")
 
     # 如果没有传入路径，尝试自动解析
     if not settings.client_path or not settings.webdriver_path:

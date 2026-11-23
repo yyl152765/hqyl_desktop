@@ -37,7 +37,8 @@ def build_public_process_config(payload: dict[str, Any]) -> dict[str, Any]:
             security_verify.pop(key, None)
     sms = shopee.get("world_card_sms", {}) if isinstance(shopee, dict) else {}
     if isinstance(sms, dict):
-        sms.pop("sim_number", None)
+        for field in ("sim_number", "db", "database", "db_config", "verification_mode"):
+            sms.pop(field, None)
 
     doc_config = payload.get("dingtalk", {}).get("doc_config", {})
     if isinstance(doc_config, dict):

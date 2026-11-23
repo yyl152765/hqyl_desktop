@@ -50,6 +50,11 @@ for relative, name in (("main/shopee/ads_recharge_guard.py", "get_guard_connecti
     if not any(isinstance(node, ast.ImportFrom) and node.module == "backend.ads_database" for node in body.body):
         raise ValueError("Public recharge runtime must use the configured database")
 
+for site in ("th", "my"):
+    payment = (superbrowser_process_root / f"implement/shopee/{site}_shopee_ads_recharge.py").read_bytes()
+    if b"public.sms_receiver_message" in payment or b"shopee_ads.world_card_payment_messages" not in payment:
+        raise ValueError("Public release requires the migrated card verification module")
+
 shopee_ads_site_modules = [
     "main.shopee.id_shopee_ads_recharge_operator_service",
     "main.shopee.th_shopee_ads_recharge_operator_service",

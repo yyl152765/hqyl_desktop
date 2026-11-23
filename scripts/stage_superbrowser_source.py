@@ -127,6 +127,32 @@ def sanitize_source(relative: str, payload: bytes) -> tuple[bytes, list[str]]:
         else:
             updated = ast.parse(raw)
             method = next(n for n in updated.body if isinstance(n, ast.FunctionDef) and n.name == "_wait_world_card_sms_code")
+            assignments = {n.targets[0].id: n for n in method.body if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)}
+            connection = next(n for n in ast.walk(method) if isinstance(n, ast.Call) and ast.unparse(n.func) == "psycopg2.connect")
+            if len(connection.keywords) != 1 or ast.unparse(connection.keywords[0].value) != "db_config":
+                raise ValueError("Unexpected WORLD card database connection")
+            query = assignments["sql"].value
+            if not isinstance(query, ast.Constant) or "public.sms_receiver_message" not in query.value:
+                raise ValueError("Unexpected WORLD card receiver source")
+            handler = next(n for n in updated.body if isinstance(n, ast.FunctionDef) and n.name == "_handle_worldfirst_id_check")
+            handoff = next(n for n in ast.walk(handler) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+                           and ast.unparse(n.value.func) == "_wait_world_card_sms_code")
+            lines = raw.splitlines(keepends=True)
+            edits = [(assignments["db_config"].lineno-1, assignments["db_config"].end_lineno,
+                      b"    from backend.ads_database import connect_runtime_database\n")]
+            original = lines[connection.lineno - 1]
+            if b"psycopg2.connect(**db_config)" not in original:
+                raise ValueError("Unexpected WORLD card database call")
+            edits.append((connection.lineno - 1, connection.lineno, original.replace(b"psycopg2.connect(**db_config)", b"connect_runtime_database()")))
+            query_lines = b"".join(lines[query.lineno-1:query.end_lineno]).replace(b"public.sms_receiver_message", b"shopee_ads.world_card_payment_messages")
+            edits.append((query.lineno-1, query.end_lineno, query_lines))
+            edits.append((handoff.lineno-1, handoff.lineno-1,
+                          ('        if cfg.get("verification_mode") == "bank_page":\n'
+                           '            return True, "请在银行页面输入短信验证码并提交，随后会核对支付结果。"\n').encode()))
+            for start, end, replacement in sorted(edits, reverse=True):
+                lines[start:end] = [replacement]
+            raw = b"".join(lines)
+            method = next(n for n in ast.parse(raw).body if isinstance(n, ast.FunctionDef) and n.name == "_wait_world_card_sms_code")
             assignment = next(n for n in method.body if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == "sim_number")
             lines = raw.splitlines(keepends=True)
             lines.insert(assignment.end_lineno, '    if not sim_number:\n        raise ValueError("请先配置此站点的 WORLD 卡验证手机号。")\n'.encode())
@@ -165,6 +191,14 @@ def sanitize_source(relative: str, payload: bytes) -> tuple[bytes, list[str]]:
         utf8 = utf8[:start] + value + utf8[end:]
     staged = (b"\xef\xbb\xbf" if payload.startswith(b"\xef\xbb\xbf") else b"") + utf8
     compile(staged, relative, "exec")
+    if relative == "main/shopee/ads_recharge_success_log.py":
+        tree = ast.parse(staged)
+        method = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "completion_recipients")
+        fallback = next(n for n in method.body if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == "fallback_names")
+        lines = staged.splitlines(keepends=True)
+        lines[fallback.lineno - 1:method.end_lineno] = [b"    return list(fallback_names or [])\n"]
+        staged = b"".join(lines)
+        compile(staged, relative, "exec")
     return staged, list(expected)
 
 

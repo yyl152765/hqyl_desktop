@@ -304,6 +304,21 @@ class ShopeeAdsRechargeWorldRuntimeTests(unittest.TestCase):
             self.assertEqual(click_sms.call_count, 2)
             fill_otp.assert_called_once_with(ANY, "123456")
 
+    def test_bank_page_mode_hands_verification_to_cardholder(self):
+        for module in (my_recharge, th_recharge):
+            with (
+                patch.object(module, "world_card_sms_config", {"auth_button_timeout": 30, "verification_mode": "bank_page"}),
+                patch.object(module, "_wait_worldfirst_element", return_value=_FakeElement()),
+                patch.object(module, "_worldfirst_otp_delivery_context", return_value={"channel": "sms"}),
+                patch.object(module, "_wait_world_card_sms_code") as read_sms,
+                patch.object(module, "_fill_worldfirst_otp_code") as fill,
+            ):
+                active, message = module._handle_worldfirst_id_check(_WebdriverUtilStub(), "测试店铺", 100, "108")
+            self.assertTrue(active)
+            self.assertIn("银行页面", message)
+            read_sms.assert_not_called()
+            fill.assert_not_called()
+
     def test_worldfirst_confirm_button_supports_traditional_chinese(self):
         for module in (my_recharge, th_recharge):
             selectors = " ".join(module.WORLDFIRST_CONFIRM_BUTTON_XPATHS)

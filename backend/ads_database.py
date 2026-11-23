@@ -108,6 +108,17 @@ def private_site_settings(site_code):
     return row[0] if row else {}
 
 
+def verify_card_channel(site_settings):
+    sms = site_settings.get("shopee", {}).get("world_card_sms", {})
+    if sms.get("verification_mode") == "bank_page":
+        return True
+    with closing(connect_runtime_database()) as conn, conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('shopee_ads.world_card_payment_messages') IS NOT NULL")
+        if not cur.fetchone()[0] or not str(sms.get("sim_number") or "").strip():
+            raise ValueError("本站点尚未配置新的 WORLD 卡验证服务。请联系管理员选择银行页面验证或接入已授权的接收服务。")
+    return False
+
+
 def ensure_daily_quotas(currencies, daily_limit) -> None:
     from datetime import date
 
