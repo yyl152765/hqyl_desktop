@@ -39,6 +39,7 @@ settings.json
 *cookie*.json
 *.pem
 *.key
+backend/resources/ads_database.json
 !frontend/assets/logo.png
 docs/requirements/**/*.xlsx
 docs/requirements/**/*.xls

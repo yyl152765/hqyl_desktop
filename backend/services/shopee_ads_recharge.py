@@ -70,7 +70,7 @@ def _ensure_superbrowser_path() -> None:
         Path(os.environ["SUPERBROWSER_PROCESS_ROOT"]).expanduser()
         if os.environ.get("SUPERBROWSER_PROCESS_ROOT")
         else None,
-        project_root / "build/release_inputs_1.0.5/superbrowser_source",
+        project_root / "build/release_inputs_1.0.6/superbrowser_source",
         project_root.parent / "superbrowser_process",
     ]
     candidate = next((path.resolve() for path in candidates if path and (path / "main").is_dir()), None)

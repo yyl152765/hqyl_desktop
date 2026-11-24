@@ -16,7 +16,7 @@ from scripts.build_public_runtime_configs import PRIVATE_SITE_FIELDS
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 SOURCE = Path(os.environ.get("HQYL_SUPERBROWSER_INPUT", str(ROOT.parent / "superbrowser_process")))
 INPUTS = ROOT / f"build/release_inputs_{VERSION}"
 TARGET = INPUTS / "superbrowser_source"

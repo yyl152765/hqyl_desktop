@@ -3,17 +3,24 @@
 import os
 import json
 import hashlib
+import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 
 project_root = Path(SPECPATH)
+sys.path.insert(0, str(project_root))
+from scripts.builtin_ads_database import release_connection_data
+
+# Private builds receive the authorized connection from an explicit, untracked
+# file outside this source export. The public source contains no connection value.
+ads_database_data = release_connection_data(os.environ.get("HQYL_ADS_DATABASE_RESOURCE", ""), project_root)
 mabang_process_root = project_root.parent / "mabang_process"
 mabang_util_root = Path(
     os.environ.get("HQYL_MABANG_UTIL_SOURCE", str(mabang_process_root / "util"))
 ).resolve()
 superbrowser_process_root = Path(
-    os.environ.get("HQYL_SUPERBROWSER_SOURCE", str(project_root / "build/release_inputs_1.0.5/superbrowser_source"))
+    os.environ.get("HQYL_SUPERBROWSER_SOURCE", str(project_root / "build/release_inputs_1.0.6/superbrowser_source"))
 ).resolve()
 public_runtime_config_root = project_root / "build" / "public_runtime_config"
 public_shopee_config_root = public_runtime_config_root / "main" / "shopee" / "config"
@@ -94,6 +101,7 @@ a = Analysis(
     ],
     binaries=[*playwright_binaries],
     datas=[
+        *ads_database_data,
         *playwright_datas,
         ("frontend", "frontend"),
         (str(project_root / "packaging" / "HQYLAutomation.ico"), "."),

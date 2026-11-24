@@ -1,9 +1,11 @@
 """Connection settings shared by Shopee recharge controls and store synchronization."""
 from __future__ import annotations
 
+import json
 import os
 import re
 from contextlib import closing
+from pathlib import Path
 
 import psycopg2
 from psycopg2 import sql
@@ -17,6 +19,26 @@ GUARD_TABLES = (
     "tbl_fin_ads_recharge_cutover", "tbl_fin_ads_recharge_site_settings",
 )
 RETIRED_HOSTS = {"rpa.whhqyl.com.cn", "47.112.20.68"}
+BUILTIN_CONNECTION_PATH = Path(__file__).with_name("resources") / "ads_database.json"
+CONNECTION_FIELDS = {"host", "port", "dbname", "user", "password", "sslmode", "sslrootcert"}
+
+
+def builtin_connection_settings(path: Path | None = None) -> dict:
+    """Read the connection injected into an authorized release at build time."""
+    source = path if path is not None else BUILTIN_CONNECTION_PATH
+    try:
+        settings = json.loads(source.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeError, ValueError):
+        raise ValueError("安装包内置的广告充值连接配置无效，请重新安装已校验的版本。") from None
+    if (not isinstance(settings, dict) or set(settings) - CONNECTION_FIELDS - {"private_network"}
+            or any(not isinstance(value, str) for key, value in settings.items() if key != "private_network")
+            or not all(settings.get(key, "").strip() for key in ("host", "dbname", "user", "password"))
+            or settings["dbname"] != "hrms"
+            or ("private_network" in settings and type(settings["private_network"]) is not bool)):
+        raise ValueError("安装包内置的广告充值连接配置无效，请重新安装已校验的版本。")
+    return settings
 
 
 def direct_connection_settings() -> dict[str, str]:
@@ -27,8 +49,7 @@ def direct_connection_settings() -> dict[str, str]:
         settings = psycopg2.extensions.parse_dsn(value)
     except psycopg2.Error:
         raise ValueError("广告充值数据库连接地址格式无效，请检查本机连接设置。") from None
-    allowed = {"host", "port", "dbname", "user", "password", "sslmode", "sslrootcert"}
-    if set(settings) - allowed or not all(settings.get(k) for k in ("host", "user", "password")):
+    if set(settings) - CONNECTION_FIELDS or not all(settings.get(k) for k in ("host", "user", "password")):
         raise ValueError("广告充值数据库连接须包含主机、充值账号和密码。")
     return settings
 
@@ -42,6 +63,14 @@ def resolve_password(guard: bool = True) -> str:
 
 def connection_parameters(password: str | None = None) -> dict:
     settings = direct_connection_settings()
+    builtin = False
+    explicit_environment = any(
+        value for key, value in os.environ.items()
+        if key.startswith("HQYL_GUARD_DB_") or key == "PGPASSWORD"
+    )
+    if not settings and not explicit_environment and password is None:
+        settings = builtin_connection_settings()
+        builtin = bool(settings)
     if settings:
         host = settings["host"].strip()
         database = settings.get("dbname", "hrms").strip()
@@ -68,14 +97,15 @@ def connection_parameters(password: str | None = None) -> dict:
     if schema != "shopee_ads":
         raise ValueError("广告充值数据库 schema 无效。")
     mode = (settings.get("sslmode", "require") if settings else os.getenv("HQYL_GUARD_DB_SSLMODE", "require")).lower()
-    if mode not in {"require", "verify-ca", "verify-full"}:
-        if mode != "disable" or os.getenv("HQYL_GUARD_DB_PRIVATE_NETWORK") != "1":
+    if mode not in {"require", "verify-ca", "verify-full"} and not (builtin and mode == "prefer"):
+        private_network = settings.get("private_network", False) or os.getenv("HQYL_GUARD_DB_PRIVATE_NETWORK") == "1"
+        if mode != "disable" or not private_network:
             raise ValueError("请使用加密连接或管理员批准的专用网络。")
     params = {
         "host": host, "port": port, "dbname": database, "user": user, "password": password,
         "connect_timeout": 8, "sslmode": mode,
-        # The HRMS proxy negotiates PostgreSQL MD5 on the approved private route.
-        "require_auth": "scram-sha-256,md5" if mode in {"disable", "verify-ca", "verify-full"} else "scram-sha-256",
+        # The normal HRMS proxy also negotiates PostgreSQL MD5 authentication.
+        "require_auth": "scram-sha-256,md5" if builtin or mode in {"disable", "verify-ca", "verify-full"} else "scram-sha-256",
         "options": f"-c search_path=pg_catalog,{schema} -c timezone=Asia/Shanghai",
     }
     if settings.get("sslrootcert"):
@@ -198,7 +228,7 @@ def self_check() -> dict:
     config = {"HQYL_GUARD_DATABASE_URL": "", "HQYL_GUARD_DB_HOST": "example.invalid", "HQYL_GUARD_DB_NAME": "hrms",
               "HQYL_GUARD_DB_USER": "test_user", "HQYL_GUARD_DB_PASSWORD": "self-check-only",
               "PGPASSWORD": "", "HQYL_GUARD_DB_PORT": "5432", "HQYL_GUARD_DB_SCHEMA": "shopee_ads"}
-    with patch.dict(os.environ, config), patch.object(psycopg2, "connect", return_value=Mock()) as connect:
+    with patch.dict(os.environ, config, clear=True), patch.object(psycopg2, "connect", return_value=Mock()) as connect:
         ads_recharge_guard.get_guard_connection().close()
         db_helper.get_pg_connection().close()
         if len(connect.call_args_list) != 2 or any(
@@ -206,5 +236,16 @@ def self_check() -> dict:
             for c in connect.call_args_list
         ):
             raise RuntimeError("充值或店铺同步未使用配置的新库")
-    return {"status": "passed", "builtin_credential": False, "guard_and_sync_injection": True,
+    fixture = {"host": "builtin.example.invalid", "dbname": "hrms", "user": "fixture",
+               "password": "builtin-self-check", "sslmode": "require"}
+    with patch.dict(os.environ, {}, clear=True), patch.object(Path, "read_text", return_value=json.dumps(fixture)), \
+            patch.object(psycopg2, "connect", return_value=Mock()) as connect:
+        ads_recharge_guard.get_guard_connection().close()
+        db_helper.get_pg_connection().close()
+        if len(connect.call_args_list) != 2 or any(
+            call.kwargs.get("host") != fixture["host"] or call.kwargs.get("password") != fixture["password"]
+            for call in connect.call_args_list
+        ):
+            raise RuntimeError("充值或店铺同步未使用内置连接配置")
+    return {"status": "passed", "builtin_configuration_supported": True, "guard_and_sync_injection": True,
             "real_database_connections": 0}

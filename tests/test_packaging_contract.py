@@ -47,7 +47,7 @@ class PackagingContractTests(unittest.TestCase):
 
         self.assertIn('["desktop_entry.py"]', spec)
         self.assertNotIn('["launcher/main.py"]', spec)
-        self.assertIn("release_inputs_1.0.5/superbrowser_source", spec)
+        self.assertIn("release_inputs_1.0.6/superbrowser_source", spec)
         self.assertIn('str(superbrowser_process_root)', spec)
         self.assertIn('HQYL_SUPERBROWSER_SOURCE', spec)
         self.assertIn('HQYL_MABANG_UTIL_SOURCE', spec)

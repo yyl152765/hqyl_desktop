@@ -1,5 +1,8 @@
 """Offline tests for migration and the recharge startup gate."""
+import json
 import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
@@ -52,7 +55,8 @@ class AdsDatabaseConfigurationTests(unittest.TestCase):
                 self.assertNotIn("private-fixture", str(err.exception))
 
     def test_absent_password_stops_before_stores(self):
-        with patch.dict(os.environ, {}, clear=True), patch.object(service, "get_site_module") as load:
+        with patch.dict(os.environ, {}, clear=True), patch.object(database, "builtin_connection_settings", return_value={}), \
+                patch.object(service, "get_site_module") as load:
             with self.assertRaisesRegex(ValueError, "连接配置不完整"):
                 service.run_shopee_ads_recharge(SimpleNamespace(site_code="id"))
         load.assert_not_called()
@@ -82,6 +86,50 @@ class AdsDatabaseConfigurationTests(unittest.TestCase):
 
     def test_both_recharge_and_shop_sync_use_provisioned_database(self):
         report = database.self_check()
-        self.assertFalse(report["builtin_credential"])
+        self.assertTrue(report["builtin_configuration_supported"])
         self.assertTrue(report["guard_and_sync_injection"])
         self.assertEqual(report["real_database_connections"], 0)
+
+    def test_clean_install_loads_built_in_hrms_connection_for_both_consumers(self):
+        fixture = {"host": "builtin.example.invalid", "port": "5432", "dbname": "hrms",
+                   "user": "build-fixture", "password": "synthetic-secret", "sslmode": "prefer"}
+        with TemporaryDirectory() as folder:
+            resource = Path(folder) / "ads_database.json"
+            resource.write_text(json.dumps(fixture), encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=True), patch.object(database, "BUILTIN_CONNECTION_PATH", resource), \
+                    patch.object(psycopg2, "connect") as connect:
+                for guard in (True, False):
+                    database.connect_runtime_database(guard)
+                    params = connect.call_args.kwargs
+                    self.assertEqual({key: params[key] for key in fixture}, fixture)
+                    self.assertEqual(params["require_auth"], "scram-sha-256,md5")
+                    self.assertIn("search_path=pg_catalog,shopee_ads", params["options"])
+
+    def test_invalid_built_in_resource_never_reaches_database(self):
+        fixture = {"host": "builtin.example.invalid", "dbname": "hrms", "user": "build-fixture",
+                   "password": "synthetic-secret"}
+        invalid = ["broken-synthetic-secret", json.dumps([]), json.dumps(dict(fixture, dbname="rpa_db")),
+                   json.dumps(dict(fixture, options="private-synthetic-secret")),
+                   json.dumps(dict(fixture, port=5432)), json.dumps(dict(fixture, private_network="true"))]
+        with TemporaryDirectory() as folder:
+            resource = Path(folder) / "ads_database.json"
+            with patch.dict(os.environ, {}, clear=True), patch.object(database, "BUILTIN_CONNECTION_PATH", resource), \
+                    patch.object(psycopg2, "connect") as connect:
+                for payload in invalid:
+                    with self.subTest(payload_type=type(payload).__name__):
+                        resource.write_text(payload, encoding="utf-8")
+                        with self.assertRaisesRegex(ValueError, "内置.*无效") as error:
+                            database.connect_runtime_database()
+                        self.assertNotIn("synthetic-secret", str(error.exception))
+                connect.assert_not_called()
+
+    def test_explicit_environment_overrides_built_in_without_mixing_credentials(self):
+        with patch.object(database, "builtin_connection_settings") as builtin:
+            self.assertEqual(database.connection_parameters()["password"], "configured")
+            with patch.dict(os.environ, {"HQYL_GUARD_DATABASE_URL": "postgresql://url-user:url-secret@url.example/hrms"}):
+                params = database.connection_parameters()
+                self.assertEqual((params["user"], params["password"]), ("url-user", "url-secret"))
+            with patch.dict(os.environ, {"HQYL_GUARD_DB_HOST": "partial.example"}, clear=True):
+                with self.assertRaisesRegex(ValueError, "连接配置不完整"):
+                    database.connection_parameters()
+            builtin.assert_not_called()
