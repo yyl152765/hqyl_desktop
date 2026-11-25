@@ -89,6 +89,7 @@ class ShopeeIdMonthlyBridgeTests(TestCase):
         for rel in (
             "backend/services/shopee_id_monthly_invoice.py",
             "backend/services/shopee_id_invoice_gateway.py",
+            "backend/services/shopee_id_income_report.py",
         ):
             source = (ROOT / rel).read_text(encoding="utf-8")
             tree = ast.parse(source)
@@ -337,15 +338,19 @@ vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
     manifest_path: 'D:/m/manifest.json', profile: 'p1', month: '2026-10',
     run_id: 'run-1', status: 'incomplete', is_complete: false, can_retry: true,
     store_count: 2, completed_count: 1, no_data_count: 1, failed_count: 1,
-    file_count: 2, master_invoice_count: 1, tax_invoice_count: 1,
+    file_count: 3, income_report_count: 2, master_invoice_count: 1, tax_invoice_count: 0,
     output_dir: 'D:/m',
     stores: [
-      { store_id: '101', store_name: '甲-SP印尼046', requested_name: '印尼046', status: 'no_data', row_count: 0, master_invoice_count: 0, tax_invoice_count: 0 },
-      { store_id: '102', store_name: '乙-SP印尼047', requested_name: '印尼047', status: 'failed', error: 'Verify 弹窗未关闭', master_invoice_count: 1, tax_invoice_count: 0 }
+      { store_id: '101', store_name: '甲-SP印尼046', requested_name: '印尼046', status: 'success', row_count: 0, income_report_count: 1, master_invoice_count: 0, tax_invoice_count: 0, evidence: { empty_text: 'No receipt found' } },
+      { store_id: '102', store_name: '乙-SP印尼047', requested_name: '印尼047', status: 'failed', error: 'Verify 弹窗未关闭', income_report_count: 1, master_invoice_count: 1, tax_invoice_count: 0 }
     ]
   });
   assert.equal(e('retryBtn').disabled, false);
   assert.equal(e('storeResults').childNodes.length, 2);
+  assert.equal(e('recordCount').textContent, '3');
+  assert.equal(e('invoiceBreakdown').textContent, '收入 Excel 2 · Master 1 · Tax 0');
+  assert.equal(e('storeResults').childNodes[0].childNodes.length, 8);
+  assert.match(e('storeResults').childNodes[0].childNodes[7].textContent, /当月无税票/);
 })().catch(err => { console.error(err); process.exitCode = 1; });
 """
         proc = subprocess.run(

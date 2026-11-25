@@ -9,6 +9,8 @@ import unittest
 
 from backend.services.shopee_id_invoice_gateway import InvoiceExportError, validate_pdf
 from backend.services import shopee_id_monthly_invoice as service
+from tests.shopee_id_fixtures import income_file
+from backend.services.shopee_id_income_report import validate_income_xlsx
 
 
 def make_valid_pdf(path: Path, label: str = "sample-invoice") -> dict:
@@ -51,6 +53,63 @@ class FakeInvoiceGateway:
 
 
 class ShopeeIdMonthlyInvoiceServiceTests(unittest.TestCase):
+    def income_only_batch(self):
+        store = {"store_id": "synthetic", "store_name": "测试-SP印尼001", "platform_name": "Shopee"}
+        manifest = service.create_batch(self.root, "fixture", "2026-10", [store])
+        def exported(_store, month, attempt):
+            return {"no_data": True, "row_count": 0, "files": [income_file(attempt / "Income_Report", month)],
+                    "evidence": {"empty_text": "No receipt found"}}
+        return manifest, exported
+
+    def test_income_file_hash_and_internal_period_rechecked_on_retry(self):
+        manifest, exported = self.income_only_batch()
+        first = service.run_batch(manifest, FakeInvoiceGateway("fixture", {"synthetic": exported}))
+        self.assertTrue(first["is_complete"])
+        self.assertEqual(first["file_count"], 1)
+        first_file = Path(first["output_files"][0])
+        first_file.write_bytes(b"corrupt XLSX")
+        gateway = FakeInvoiceGateway("fixture", {"synthetic": exported})
+        second = service.run_batch(manifest, gateway)
+        self.assertTrue(second["is_complete"])
+        self.assertEqual(gateway.exported_stores, ["synthetic"])
+        self.assertTrue(first_file.exists())
+        self.assertNotEqual(second["output_files"][0], str(first_file))
+
+    def test_legacy_empty_tax_batch_requires_income_and_preserves_old_manifest(self):
+        manifest, exported = self.income_only_batch()
+        old = json.loads(manifest.read_text(encoding="utf-8"))
+        old.update(schema=service.LEGACY_SCHEMA, status="complete")
+        old["stores"][0].update(status="no_data", row_count=0, evidence={"empty_text": "No receipt found"})
+        manifest.write_text(json.dumps(old), encoding="utf-8")
+        preview = service.public_result(manifest)
+        self.assertFalse(preview["is_complete"])
+        self.assertTrue(preview["can_retry"])
+        gateway = FakeInvoiceGateway("fixture", {"synthetic": exported})
+        result = service.run_batch(manifest, gateway)
+        self.assertTrue(result["is_complete"])
+        self.assertEqual(gateway.exported_stores, ["synthetic"])
+        backup = json.loads(manifest.with_name("manifest.tax_only_v1.json").read_text(encoding="utf-8"))
+        self.assertEqual(backup, old)
+
+    def test_tax_empty_without_income_does_not_complete(self):
+        manifest, _ = self.income_only_batch()
+        gateway = FakeInvoiceGateway("fixture", {"synthetic": {"no_data": True, "row_count": 0,
+                                      "files": [], "evidence": {"empty_text": "No receipt found"}}})
+        result = service.run_batch(manifest, gateway)
+        self.assertFalse(result["is_complete"])
+        self.assertEqual(result["income_report_count"], 0)
+
+    def test_income_retained_when_later_pdf_fails(self):
+        manifest, _ = self.income_only_batch()
+        def partial(_store, month, attempt):
+            report = income_file(attempt / "Income_Report", month)
+            raise InvoiceExportError("Tax PDF failed", partial_files=[report])
+        result = service.run_batch(manifest, FakeInvoiceGateway("fixture", {"synthetic": partial}))
+        self.assertFalse(result["is_complete"])
+        self.assertEqual(result["income_report_count"], 1)
+        self.assertEqual(result["pdf_count"], 0)
+        self.assertTrue(Path(result["output_files"][0]).is_file())
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -147,7 +206,7 @@ class ShopeeIdMonthlyInvoiceServiceTests(unittest.TestCase):
 
         def export_store_1(_store: dict, _month: str, attempt_dir: Path) -> dict:
             descriptions = ("Affiliate M.S.", "Shopee invoices", "SVS invoices")
-            files = []
+            files = [income_file(attempt_dir / "Income_Report")]
             rows = []
             for idx, desc in enumerate(descriptions, 1):
                 m_path = attempt_dir / "Master_Invoice" / f"row_{idx:02d}" / f"{desc} - Master (2026-10).pdf"
@@ -189,7 +248,7 @@ class ShopeeIdMonthlyInvoiceServiceTests(unittest.TestCase):
                 "no_data": True,
                 "row_count": 0,
                 "file_count": 0,
-                "files": [],
+                "files": [income_file(_attempt_dir / "Income_Report")],
                 "rows": [],
                 "evidence": {"selected_month": "October 2026", "empty_text": "No receipt found"},
             }
@@ -202,17 +261,18 @@ class ShopeeIdMonthlyInvoiceServiceTests(unittest.TestCase):
         self.assertFalse(result["can_retry"])
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["store_count"], 2)
-        self.assertEqual(result["success_count"], 1)
+        self.assertEqual(result["success_count"], 2)
         self.assertEqual(result["no_data_count"], 1)
         self.assertEqual(result["failed_count"], 0)
         self.assertEqual(result["row_count"], 3)
-        self.assertEqual(result["file_count"], 6)
+        self.assertEqual(result["file_count"], 8)
         self.assertEqual(result["master_invoice_count"], 3)
         self.assertEqual(result["tax_invoice_count"], 3)
-        self.assertEqual(len(result["output_files"]), 6)
+        self.assertEqual(len(result["output_files"]), 8)
         for file_path in result["output_files"]:
-            verified = validate_pdf(file_path)
-            self.assertTrue(verified["filename"].endswith(".pdf"))
+            verified = (validate_income_xlsx(file_path, "2026-10") if file_path.endswith(".xlsx") else validate_pdf(file_path))
+            self.assertTrue(verified["sha256"])
+        self.assertEqual(result["income_report_count"], 2)
 
     def test_partial_download_failure_preserves_valid_pdfs_and_retry_reuses_completed_stores(self) -> None:
         stores = [
@@ -231,6 +291,7 @@ class ShopeeIdMonthlyInvoiceServiceTests(unittest.TestCase):
                 "master_invoice_count": 1,
                 "tax_invoice_count": 1,
                 "files": [
+                    income_file(attempt_dir / "Income_Report"),
                     {"row_index": 1, "description": "Shopee invoices October 2026", "date": "October 2026", "invoice_type": "master_invoice", "invoice_label": "Master Invoice", **m_info},
                     {"row_index": 1, "description": "Shopee invoices October 2026", "date": "October 2026", "invoice_type": "tax_invoice", "invoice_label": "Tax Invoice", **t_info},
                 ],
@@ -279,7 +340,7 @@ class ShopeeIdMonthlyInvoiceServiceTests(unittest.TestCase):
         self.assertTrue(second_run["is_complete"])
         self.assertEqual(gateway_2.exported_stores, ["2"])
         self.assertEqual(second_run["success_count"], 2)
-        self.assertEqual(second_run["file_count"], 4)
+        self.assertEqual(second_run["file_count"], 6)
 
 
 if __name__ == "__main__":

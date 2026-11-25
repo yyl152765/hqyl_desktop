@@ -10,6 +10,16 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from backend.core.ziniao_browser import ZiniaoBrowserError
+from backend.services.shopee_id_income_report import (
+    INCOME_REPORT_FOLDER,
+    INCOME_REPORT_LABEL,
+    INCOME_REPORT_TYPE,
+    MAX_HISTORY_PAGES,
+    GENERATION_TIMEOUT,
+    MY_REPORTS_INCOME_URL,
+    export_monthly_income_report,
+    _navigate_url,
+)
 
 
 INCOME_URL = "https://seller.shopee.co.id/portal/finance/income"
@@ -459,6 +469,9 @@ class ShopeeIdInvoiceGateway:
         browser: Any,
         timeout: float = 45.0,
         download_timeout: float = 120.0,
+        income_generation_timeout: float | None = None,
+        max_history_pages: int = MAX_HISTORY_PAGES,
+        progress: Any = None,
         autofill_timeout: float = 5.0,
         verify_wait_timeout: float = 8.0,
         max_verify_attempts: int = 3,
@@ -470,6 +483,13 @@ class ShopeeIdInvoiceGateway:
         self.profile = profile
         self.timeout = timeout
         self.download_timeout = download_timeout
+        self.income_generation_timeout = (
+            float(income_generation_timeout)
+            if income_generation_timeout is not None
+            else GENERATION_TIMEOUT
+        )
+        self.progress = progress
+        self.max_history_pages = max(int(max_history_pages), 1)
         self.autofill_timeout = autofill_timeout
         self.verify_wait_timeout = verify_wait_timeout
         self.max_verify_attempts = max(int(max_verify_attempts), 1)
@@ -498,10 +518,14 @@ class ShopeeIdInvoiceGateway:
             store["store_id"]: store for store in self.browser.list_stores()
         }
 
-    def _raw_state(self, store_id: str) -> dict[str, Any]:
+    def _raw_state(self, store_id: str, *, require_invoice_fields: bool = True) -> dict[str, Any]:
         result = self.browser.evaluate(store_id, PAGE_STATE)
-        if not isinstance(result, dict) or "month_selector" not in result or "rows" not in result:
+        if not isinstance(result, dict):
             raise ValueError("无法识别 Shopee 印尼税票页面结构")
+        if require_invoice_fields and ("month_selector" not in result or "rows" not in result):
+            raise ValueError("无法识别 Shopee 印尼税票页面结构")
+        if not require_invoice_fields and "password_dialog" not in result:
+            raise ValueError("无法识别 Shopee 印尼密码验证弹窗结构")
         hostname = (urlsplit(str(result.get("url") or "")).hostname or "").casefold()
         if hostname != SHOPEE_ID_HOST:
             raise ValueError("当前页面不是 Shopee 印尼卖家中心（seller.shopee.co.id），已拒绝操作")
@@ -512,7 +536,7 @@ class ShopeeIdInvoiceGateway:
         return result
 
     def _complete_password_verification(self, store_id: str) -> bool:
-        state = self._raw_state(store_id)
+        state = self._raw_state(store_id, require_invoice_fields=False)
         dialog = state.get("password_dialog") or {}
         if not dialog.get("password_visible"):
             return False
@@ -525,13 +549,13 @@ class ShopeeIdInvoiceGateway:
             if time.monotonic() >= autofill_deadline:
                 raise ValueError("Shopee 密码验证弹窗未检测到紫鸟自动填充密码，请检查账号自动填充或手动验证后重试")
             time.sleep(min(self.poll_interval, max(0.0, autofill_deadline - time.monotonic())))
-            state = self._raw_state(store_id)
+            state = self._raw_state(store_id, require_invoice_fields=False)
             dialog = state.get("password_dialog") or {}
             if not dialog.get("password_visible"):
                 return True
 
         for _attempt in range(self.max_verify_attempts):
-            state = self._raw_state(store_id)
+            state = self._raw_state(store_id, require_invoice_fields=False)
             dialog = state.get("password_dialog") or {}
             if not dialog.get("password_visible"):
                 return True
@@ -546,7 +570,7 @@ class ShopeeIdInvoiceGateway:
             self.browser.click(store_id, dialog["verify_selector"])
             wait_deadline = time.monotonic() + max(self.verify_wait_timeout, 0.0)
             while True:
-                state = self._raw_state(store_id)
+                state = self._raw_state(store_id, require_invoice_fields=False)
                 dialog = state.get("password_dialog") or {}
                 if not dialog.get("password_visible"):
                     return True
@@ -825,6 +849,9 @@ class ShopeeIdInvoiceGateway:
             raise failure
         return result
 
+    def _navigate_to_invoice_page(self, store_id: str) -> None:
+        _navigate_url(self.browser, store_id, INVOICE_URL)
+
     def _export(self, store: dict[str, Any], month: str, store_dir: Path) -> dict[str, Any]:
         store_id = str(store.get("store_id") or "").strip()
         actual = self.current_stores.get(store_id)
@@ -839,41 +866,88 @@ class ShopeeIdInvoiceGateway:
         ):
             raise ValueError("该店的紫鸟权限、名称或 Shopee 平台信息发生变化，请重新匹配")
 
-        self.browser.open_store(store, url=INVOICE_URL)
-        settled_state, chosen_option = self._select_month(store_id, month)
-        selected_text = (settled_state.get("month_selector") or {}).get("selected_text", "")
-
-        if settled_state.get("no_receipt_found") and not settled_state.get("rows"):
-            return {
-                "no_data": True,
-                "month": month,
-                "selected_month_text": selected_text,
-                "row_count": 0,
-                "file_count": 0,
-                "master_invoice_count": 0,
-                "tax_invoice_count": 0,
-                "files": [],
-                "rows": [],
-                "evidence": {
-                    "selected_month": selected_text,
-                    "empty_text": "No receipt found",
-                    "is_empty_month_option": bool(chosen_option.get("is_empty_month")),
-                },
-            }
-
-        rows = settled_state.get("rows") or []
-        if not rows:
-            raise ValueError("税票页面未显示数据行且未确认 No receipt found 空状态")
-
-        # Validate all rows up front so missing Master/Tax Invoice actions fail before downloading.
-        for row in rows:
-            self._validate_row_actions_and_month(row, month)
+        self.browser.open_store(store, url=MY_REPORTS_INCOME_URL)
 
         downloaded_files: list[dict[str, Any]] = []
         row_records: list[dict[str, Any]] = []
-        expected_row_count = len(rows)
 
         try:
+            income_dir = store_dir / INCOME_REPORT_FOLDER
+            income_info = export_monthly_income_report(
+                self.browser,
+                store_id,
+                month,
+                income_dir,
+                timeout=self.timeout,
+                generation_timeout=self.income_generation_timeout,
+                download_timeout=self.download_timeout,
+                poll_interval=self.poll_interval,
+                max_history_pages=self.max_history_pages,
+                verify_password=lambda: self._complete_password_verification(store_id),
+                progress=self.progress,
+            )
+            income_entry = {
+                "row_index": 0,
+                "description": f"Income Report ({income_info['period_start']} to {income_info['period_end']})",
+                "amount": "",
+                "date": month,
+                "invoice_type": INCOME_REPORT_TYPE,
+                "invoice_label": INCOME_REPORT_LABEL,
+                "report_period": f"{income_info['period_start']}_{income_info['period_end']}",
+                "period_start": income_info["period_start"],
+                "period_end": income_info["period_end"],
+                "currency": income_info.get("currency", "Rp"),
+                "report_source": income_info["source"],
+                "filename": income_info["filename"],
+                "path": income_info["path"],
+                "size": income_info["size"],
+                "sha256": income_info["sha256"],
+            }
+            downloaded_files.append(income_entry)
+
+            self._navigate_to_invoice_page(store_id)
+            settled_state, chosen_option = self._select_month(store_id, month)
+            selected_text = (settled_state.get("month_selector") or {}).get("selected_text", "")
+
+            if settled_state.get("no_receipt_found") and not settled_state.get("rows"):
+                return {
+                    "no_data": True,
+                    "month": month,
+                    "selected_month_text": selected_text,
+                    "row_count": 0,
+                    "file_count": len(downloaded_files),
+                    "income_report_count": 1,
+                    "master_invoice_count": 0,
+                    "tax_invoice_count": 0,
+                    "files": downloaded_files,
+                    "rows": [],
+                    "income_report": {
+                        "filename": income_info["filename"],
+                        "period_start": income_info["period_start"],
+                        "period_end": income_info["period_end"],
+                        "currency": income_info.get("currency", "Rp"),
+                        "source": income_info["source"],
+                        "history_page": income_info.get("history_page"),
+                    },
+                    "evidence": {
+                        "selected_month": selected_text,
+                        "empty_text": "No receipt found",
+                        "is_empty_month_option": bool(chosen_option.get("is_empty_month")),
+                        "income_report_count": 1,
+                        "income_report_source": income_info["source"],
+                        "income_report_period": f"{income_info['period_start']}_{income_info['period_end']}",
+                    },
+                }
+
+            rows = settled_state.get("rows") or []
+            if not rows:
+                raise ValueError("税票页面未显示数据行且未确认 No receipt found 空状态")
+
+            # Validate all rows up front so missing Master/Tax Invoice actions fail before downloading.
+            for row in rows:
+                self._validate_row_actions_and_month(row, month)
+
+            expected_row_count = len(rows)
             for row in rows:
                 row_index = int(row["row_index"])
                 row_files: dict[str, str] = {}
@@ -930,11 +1004,12 @@ class ShopeeIdInvoiceGateway:
                 partial_rows=row_records,
             ) from exc
 
+        income_count = sum(1 for item in downloaded_files if item["invoice_type"] == INCOME_REPORT_TYPE)
         master_count = sum(1 for item in downloaded_files if item["invoice_type"] == "master_invoice")
         tax_count = sum(1 for item in downloaded_files if item["invoice_type"] == "tax_invoice")
-        if master_count != expected_row_count or tax_count != expected_row_count:
+        if income_count != 1 or master_count != expected_row_count or tax_count != expected_row_count:
             raise InvoiceExportError(
-                f"税票下载数量不完整：共 {expected_row_count} 行，Master Invoice {master_count} 份，Tax Invoice {tax_count} 份",
+                f"下载数量不完整：收入报表 {income_count} 份，税票共 {expected_row_count} 行（Master Invoice {master_count} 份，Tax Invoice {tax_count} 份）",
                 partial_files=downloaded_files,
                 partial_rows=row_records,
             )
@@ -945,13 +1020,25 @@ class ShopeeIdInvoiceGateway:
             "selected_month_text": selected_text,
             "row_count": expected_row_count,
             "file_count": len(downloaded_files),
+            "income_report_count": income_count,
             "master_invoice_count": master_count,
             "tax_invoice_count": tax_count,
             "files": downloaded_files,
             "rows": row_records,
+            "income_report": {
+                "filename": income_info["filename"],
+                "period_start": income_info["period_start"],
+                "period_end": income_info["period_end"],
+                "currency": income_info.get("currency", "Rp"),
+                "source": income_info["source"],
+                "history_page": income_info.get("history_page"),
+            },
             "evidence": {
                 "selected_month": selected_text,
                 "row_count": expected_row_count,
+                "income_report_count": income_count,
+                "income_report_source": income_info["source"],
+                "income_report_period": f"{income_info['period_start']}_{income_info['period_end']}",
                 "master_invoice_count": master_count,
                 "tax_invoice_count": tax_count,
             },

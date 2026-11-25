@@ -118,20 +118,20 @@
     $("completedCount").textContent = String(result.completed_count || 0);
     $("noDataCount").textContent = `无税票 ${result.no_data_count || 0} · 失败 ${result.failed_count || 0}`;
     $("recordCount").textContent = Number(result.file_count || 0).toLocaleString();
-    $("invoiceBreakdown").textContent = `Master ${result.master_invoice_count || 0} · Tax ${result.tax_invoice_count || 0}`;
+    $("invoiceBreakdown").textContent = `收入 Excel ${result.income_report_count || 0} · Master ${result.master_invoice_count || 0} · Tax ${result.tax_invoice_count || 0}`;
     $("outputFile").textContent = result.is_complete ? "下载已完成" : (result.file_count ? "部分已保存" : "未完成");
     $("batchLabel").textContent = result.run_id || "尚无批次";
     $("resultMessage").textContent =
       result.status === "running"
-        ? "正在逐店下载税票 PDF，下方展示各店铺最新状态。"
+        ? "正在逐店下载收入 Excel、账单和税票 PDF，下方展示各店铺最新状态。"
         : result.status === "interrupted"
-          ? "上次批次已中断，已下载的 PDF 已保留，可点击重试继续未完成店铺。"
+          ? "上次批次已中断，已下载的文件已保留，可点击重试继续未完成店铺。"
           : (result.completion_message || "批次已结束");
 
     if (!running && result.status !== "running") {
       $("taskBadge").className = `status-pill ${result.is_complete ? "success" : "failed"}`;
       $("taskBadge").textContent = result.is_complete ? "已完成" : "结果不完整";
-      $("statusText").textContent = result.is_complete ? "全部税票已校验保存" : "可处理失败项后重试";
+      $("statusText").textContent = result.is_complete ? "账单与税票已校验保存" : "可处理失败项后重试";
     }
 
     const labels = {
@@ -156,6 +156,10 @@
       const statusCell = document.createElement("td");
       statusCell.textContent = labels[store.status] || store.status || "—";
       row.appendChild(statusCell);
+
+      const incomeCell = document.createElement("td");
+      incomeCell.textContent = `${store.income_report_count || 0} 份`;
+      row.appendChild(incomeCell);
 
       const rowCountCell = document.createElement("td");
       rowCountCell.textContent = store.row_count == null ? "—" : String(store.row_count);
@@ -188,7 +192,7 @@
       } else if (store.status === "no_data") {
         noteCell.textContent = `${result.month || ""} 页面确认 No receipt found`;
       } else if (store.status === "success") {
-        noteCell.textContent = `已校验 ${store.file_count || 0} 份 PDF (SHA-256)`;
+        noteCell.textContent = `已校验 ${store.income_report_count || 0} 份收入 Excel、${(store.master_invoice_count || 0) + (store.tax_invoice_count || 0)} 份 PDF${store.evidence?.empty_text === "No receipt found" ? "（当月无税票）" : ""} (SHA-256)`;
       } else {
         noteCell.textContent = "—";
       }
@@ -199,7 +203,7 @@
     if (!body.childNodes.length) {
       const row = document.createElement("tr");
       const cell = document.createElement("td");
-      cell.colSpan = 7;
+      cell.colSpan = 8;
       cell.textContent = "尚未运行";
       row.appendChild(cell);
       body.appendChild(row);

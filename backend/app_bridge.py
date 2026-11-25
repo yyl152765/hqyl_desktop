@@ -191,7 +191,7 @@ from backend.update_service import (
 )
 
 
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.0.8"
 APP_NAME = "寰球云联自动化平台"
 
 
@@ -340,8 +340,8 @@ class AppBridge:
                 },
                 {
                     "key": "shopee_id_monthly_invoice",
-                    "name": "Shopee 印尼月度税票下载",
-                    "description": "按月批量下载 Shopee 印尼站点 Master Invoice 与 Tax Invoice PDF。",
+                    "name": "Shopee 印尼月度账单与税票下载",
+                    "description": "按月下载 Released 收入 Excel 与全部服务费账单、税票 PDF，优先复用导出历史。",
                     "status": "ready",
                     "vendor": "ziniao",
                 },
@@ -2441,7 +2441,7 @@ class AppBridge:
         with self._shopee_id_invoice_lock:
             try:
                 if self._shopee_id_invoice_active:
-                    raise ValueError("已有 Shopee 印尼月度税票下载任务正在运行，请完成后再匹配")
+                    raise ValueError("已有 Shopee 印尼月度账单与税票下载任务正在运行，请完成后再匹配")
                 data = dict(payload or {})
                 raw_month = data.get("month")
                 month = (
@@ -2563,7 +2563,7 @@ class AppBridge:
                 release()
 
         try:
-            title = "Shopee 印尼月度税票下载重试" if retry else "Shopee 印尼月度税票下载"
+            title = "Shopee 印尼月度账单与税票下载重试" if retry else "Shopee 印尼月度账单与税票下载"
             task = self.tasks.start(
                 title,
                 runner,
@@ -2583,7 +2583,7 @@ class AppBridge:
         with self._shopee_id_invoice_lock:
             try:
                 if self._shopee_id_invoice_active:
-                    raise ValueError("已有 Shopee 印尼月度税票下载任务正在运行，请等待完成")
+                    raise ValueError("已有 Shopee 印尼月度账单与税票下载任务正在运行，请等待完成")
                 request = self._payload_with_account(payload, "ziniao")
                 directories = resolve_output_directories(self.config_store.load(), "shopee_id_monthly_invoice")
                 validated = shopee_id_monthly_invoice.validate_request(
@@ -2610,7 +2610,7 @@ class AppBridge:
         with self._shopee_id_invoice_lock:
             try:
                 if self._shopee_id_invoice_active:
-                    raise ValueError("已有 Shopee 印尼月度税票下载任务正在运行，请等待完成")
+                    raise ValueError("已有 Shopee 印尼月度账单与税票下载任务正在运行，请等待完成")
                 path = Path(str((payload or {}).get("manifest_path") or "")).resolve()
                 request = self._payload_with_account(payload, "ziniao")
                 record = shopee_id_monthly_invoice.load_batch(path, ziniao_account_profile(request))

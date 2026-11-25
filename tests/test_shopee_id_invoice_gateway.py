@@ -5,7 +5,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+from tests.shopee_id_fixtures import income_file
+from backend.services.shopee_id_income_report import validate_income_xlsx
 
 from backend.services.shopee_id_invoice_gateway import (
     INVOICE_URL,
@@ -247,7 +249,7 @@ class ShopeeIdInvoiceGatewayTests(unittest.TestCase):
         gateway.preflight([self.store])
         result = gateway.export(self.store, "2026-10", self.root / "slow")
         self.assertFalse(result["no_data"])
-        self.assertEqual(result["file_count"], 6)
+        self.assertEqual(result["file_count"], 7)
 
     def test_close_failure_keeps_completed_files_in_error(self) -> None:
         browser = FakeWebDriverBrowser(self.store)
@@ -259,7 +261,7 @@ class ShopeeIdInvoiceGatewayTests(unittest.TestCase):
         gateway.preflight([self.store])
         with self.assertRaises(InvoiceExportError) as failed:
             gateway.export(self.store, "2026-10", self.root / "close-failure")
-        self.assertEqual(len(failed.exception.partial_files), 6)
+        self.assertEqual(len(failed.exception.partial_files), 7)
         self.assertTrue(all(Path(f["path"]).is_file() for f in failed.exception.partial_files))
 
     def test_default_archive_with_long_original_filename_fits_windows_limit(self) -> None:
@@ -277,6 +279,12 @@ class ShopeeIdInvoiceGatewayTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        # Isolate the already-covered PDF DOM behavior from income history navigation.
+        # The real income helper has its own DOM/download tests; combined output is checked here.
+        income_patch = patch("backend.services.shopee_id_invoice_gateway.export_monthly_income_report",
+                             side_effect=lambda browser, store_id, month, directory, **kw: income_file(directory, month))
+        income_patch.start()
+        self.addCleanup(income_patch.stop)
         self.store = {
             "store_id": "101",
             "store_name": "运营甲-SP印尼046-本土",
@@ -333,7 +341,7 @@ class ShopeeIdInvoiceGatewayTests(unittest.TestCase):
 
         self.assertFalse(result["no_data"])
         self.assertEqual(result["row_count"], 3)
-        self.assertEqual(result["file_count"], 6)
+        self.assertEqual(result["file_count"], 7)
         self.assertEqual(result["master_invoice_count"], 3)
         self.assertEqual(result["tax_invoice_count"], 3)
         self.assertEqual(browser.verify_clicks, 1)
@@ -357,7 +365,8 @@ class ShopeeIdInvoiceGatewayTests(unittest.TestCase):
                 download_clicks,
             )
         for file_entry in result["files"]:
-            verified = validate_pdf(file_entry["path"])
+            verified = (validate_income_xlsx(file_entry["path"], "2026-10") if file_entry["invoice_type"] == "income_report"
+                        else validate_pdf(file_entry["path"]))
             self.assertEqual(verified["sha256"], file_entry["sha256"])
 
     def test_indonesian_month_option_and_explicit_no_receipt_found_return_no_data(self) -> None:
@@ -378,7 +387,7 @@ class ShopeeIdInvoiceGatewayTests(unittest.TestCase):
 
         self.assertTrue(result["no_data"])
         self.assertEqual(result["row_count"], 0)
-        self.assertEqual(result["file_count"], 0)
+        self.assertEqual(result["file_count"], 1)
         self.assertEqual(result["evidence"]["empty_text"], "No receipt found")
         self.assertEqual(browser.download_call_count, 0)
 
@@ -500,10 +509,13 @@ class ShopeeIdInvoiceGatewayTests(unittest.TestCase):
         with self.assertRaises(InvoiceExportError) as caught:
             gateway.export(self.store, "2026-10", self.root / "partial_store")
         self.assertIn("%%EOF", str(caught.exception))
-        self.assertEqual(len(caught.exception.partial_files), 3)
+        self.assertEqual(len(caught.exception.partial_files), 4)
         for item in caught.exception.partial_files:
             self.assertTrue(Path(item["path"]).is_file())
-            validate_pdf(item["path"])
+            if item["invoice_type"] == "income_report":
+                validate_income_xlsx(item["path"], "2026-10")
+            else:
+                validate_pdf(item["path"])
         # Verify CDP download behavior was reset to default in finally.
         self.assertEqual(browser.cdp_calls[-1][1], {"behavior": "default"})
 

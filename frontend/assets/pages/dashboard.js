@@ -68,7 +68,7 @@
     { key: "purchase_log", name: "SKU 采购日志查询", description: "按 SKU 查询马帮采购日志并导出 Excel。", vendor: "mabang" },
     { key: "sample_registration", name: "网红寄样登记", description: "查询样品订单、导出 Excel、同步钉钉在线表格。", vendor: "mabang" },
     { key: "shopee_ads", name: "Shopee 广告充值", description: "多站点店铺广告充值，支持印尼、泰国、菲律宾、越南、马来。", vendor: "ziniao" },
-    { key: "shopee_id_monthly_invoice", name: "Shopee 印尼月度税票下载", description: "按月批量下载 Shopee 印尼站点 Master Invoice 与 Tax Invoice PDF。", vendor: "ziniao" },
+    { key: "shopee_id_monthly_invoice", name: "Shopee 印尼月度账单与税票下载", description: "按月下载 Released 收入 Excel 与全部服务费账单、税票 PDF，优先复用导出历史。", vendor: "ziniao" },
     { key: "lazada_withdrawal_statistics", name: "Lazada 提现统计", description: "菲律宾、马来提现流水 Excel 及泰国收入账单归档。", vendor: "ziniao" },
     { key: "lazada_ads_monthly", name: "Lazada 广告月报", description: "采集完整自然月的广告、联盟及优惠券金额，导出金额与原始截图。", vendor: "ziniao" },
     { key: "lazada_monthly_report", name: "Lazada 月度账单下载", description: "按国家、月份和店铺批量下载月度报告，并以店铺名称保存。", vendor: "ziniao" },
