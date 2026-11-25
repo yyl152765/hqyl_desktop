@@ -15,6 +15,8 @@ from typing import Any, Callable
 import pandas as pd
 import yaml
 
+from backend.runtime_paths import mabang_root
+
 
 ProgressCallback = Callable[[str], None]
 
@@ -145,24 +147,14 @@ def validate_bigseller_sync_payload(payload: dict[str, Any]) -> BigSellerSyncJob
     )
 
 
-def workspace_root() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
 def mabang_process_root() -> Path:
-    env_root = safe_text(os.getenv("HQYL_MABANG_PROCESS_ROOT"))
-    if env_root:
-        return Path(env_root).expanduser()
-    frozen_root = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "frozen", False) else None
-    if frozen_root and (frozen_root / "mabang_process").exists():
-        return frozen_root / "mabang_process"
-    return workspace_root() / "mabang_process"
+    return mabang_root()
 
 
 def load_bigseller_request_util():
     root = mabang_process_root()
     if not root.exists():
-        raise RuntimeError(f"未找到 mabang_process，无法加载 BigSeller 登录组件: {root}")
+        raise RuntimeError(f"缺少桌面内置 BigSeller 组件，请检查本项目 runtime/mabang_process: {root}")
 
     module_path = root / "util" / "bigseller_request_util.py"
     if not module_path.is_file():
@@ -197,17 +189,11 @@ def load_bigseller_request_util():
 
 
 def load_reference_bigseller_config() -> dict[str, Any]:
-    explicit = safe_text(os.getenv("HQYL_BIGSELLER_CONFIG"))
-    candidates = []
-    if explicit:
-        candidates.append(Path(explicit).expanduser())
     root = mabang_process_root()
-    candidates.extend(
-        [
-            root / "vietnam" / "config" / "BigSeller库存同步.yaml",
-            root / "philippines" / "config" / "BigSeller同步产品.yaml",
-        ]
-    )
+    candidates = [
+        root / "vietnam" / "config" / "BigSeller库存同步.yaml",
+        root / "philippines" / "config" / "BigSeller同步产品.yaml",
+    ]
     for path in candidates:
         if not path.exists():
             continue

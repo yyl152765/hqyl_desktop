@@ -10,7 +10,7 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "superbrowser_process"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtime" / "superbrowser_process"))
 from implement.shopee import th_shopee_ads_recharge as recharge
 
 

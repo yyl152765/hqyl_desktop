@@ -62,7 +62,7 @@ class WithdrawalDriveIntegrationTests(unittest.TestCase):
                 legacy.get_union_id = Mock(return_value="fixture-union")
                 package = ModuleType("util")
                 package.__path__ = []
-                source_path = ROOT.parent / "superbrowser_process/util/dingtalk_drive_util.py"
+                source_path = ROOT / "runtime/superbrowser_process/util/dingtalk_drive_util.py"
                 spec = importlib.util.spec_from_file_location("util.dingtalk_drive_util", source_path)
                 drive = importlib.util.module_from_spec(spec)
                 with (

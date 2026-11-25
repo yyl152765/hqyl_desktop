@@ -1,8 +1,8 @@
 # 寰球云联自动化平台
 
-`hqyl_desktop` 是寰球云联内部自动化桌面平台。目标是把 `mabang_process` 等现有 Python 自动化脚本逐步迁移成统一的 H5 风格桌面客户端，并为后续紫鸟 WebDriver 相关流程预留接入边界。
+`hqyl_desktop` 是寰球云联内部自动化桌面平台。界面为 H5 风格桌面客户端，所需马帮、紫鸟业务运行时已迁入本仓库的 `runtime/`，可独立运行和构建。
 
-**最新代码固定从 [yyl152765/hqyl_desktop](https://github.com/yyl152765/hqyl_desktop.git) 的 `main` 分支获取。** 当前目录位于父仓库 `D:\hqyl_project` 内；父仓库 `hqyl_project` 的 `origin` 拉取结果不能代表本桌面项目已同步最新代码。更新约定见 [AGENTS.md](AGENTS.md)。
+**最新代码固定从 [yyl152765/hqyl_desktop](https://github.com/yyl152765/hqyl_desktop.git) 的 `main` 分支获取。** 本机原工作区 `D:\hqyl_project\hqyl_desktop` 位于父仓库 `D:\hqyl_project` 内；父仓库 `hqyl_project` 的 `origin` 拉取结果不能代表本桌面项目已同步最新代码。更新约定见 [AGENTS.md](AGENTS.md)。
 
 当前样例已接入：
 
@@ -40,7 +40,7 @@
 
 ## 当前版本
 
-当前源码版本为 **1.0.2**，修复更新中心的 502 和安装包下载问题。菲律宾取消订单同步退款等功能已包含在内。详见 [1.0.2 发布说明](docs/发布说明_1.0.2.md)。
+当前已发布版本为 **1.0.6**，内置中台广告充值连接，公开更新源使用中台 OSS。本仓库已将所需业务运行时迁入 `runtime/`，可以独立构建；源码隔离改造的提交不代表已自动发布新安装包。正式发版以程序版本、构建清单及线上更新清单为准。
 
 ## 目录结构
 
@@ -56,6 +56,7 @@ hqyl_desktop/
   launcher/                # 桌面入口
   docs/                    # 设计与迁移文档
   packaging/               # 安装包脚本
+  runtime/                 # 本项目维护的业务运行时与公共配置模板
   scripts/                 # 开发、构建脚本
   tests/                   # 单元测试
 ```
@@ -94,41 +95,122 @@ python -m venv .venv
 
 如果 PowerShell 限制脚本执行，可以直接运行 `.\.venv\Scripts\python.exe desktop_entry.py`。
 
-### 完整业务功能所需依赖
+### 项目内的业务运行时
 
-本仓库可以加载桌面界面，部分业务仍会延迟加载内部项目。需要完整业务功能或构建 EXE 时，请向项目维护者获取**匹配当前桌面版本**的内部源码和配置，并保持以下同级结构：
+桌面端所需依赖已经迁入本仓库，**运行和打包都不再读取同级的 `mabang_process` 或 `superbrowser_process` 项目**。无需启动其他项目，也无需另行克隆它们。
 
 ```text
-workspace/
-  hqyl_desktop/           # 本仓库
-  mabang_process/         # 内部依赖，不在本公开仓库中
-  superbrowser_process/   # 内部依赖，不在本公开仓库中
+hqyl_desktop/
+  runtime/
+    mabang_process/
+      util/                         # BigSeller 等功能使用的工具代码
+      vietnam/config/               # BigSeller 公共配置模板
+    superbrowser_process/
+      config/ implement/ main/ util/ # 五国充值、紫鸟等业务运行时
+      main/shopee/config/             # 五国充值公共配置模板
 ```
 
-- BigSeller 相关功能依赖 `mabang_process/util/bigseller_request_util.py`；基础参数配置位于 `mabang_process/vietnam/config/BigSeller库存同步.yaml`。
-- Shopee 广告充值、紫鸟账号通道的 TEMU 导出和余额统计、Lazada 相关紫鸟流程依赖 `superbrowser_process`，并需要在本机安装、配置紫鸟客户端和驱动。
-- EXE 构建依赖 `mabang_process/util/`、上述 BigSeller YAML，以及 `superbrowser_process/main/shopee/config/` 中印尼、泰国、菲律宾、越南、马来五个站点的广告充值 YAML。`scripts/build_public_runtime_configs.py` 会从同级目录读取它们。
+这些代码来自已验收的桌面安装包构建输入，现由本仓库维护。`runtime` 中的文件必须随 Git 提交，不能当作缓存删除。旧的 `HQYL_MABANG_*`、`HQYL_SUPERBROWSER_*`、`SUPERBROWSER_PROCESS_ROOT` 路径设置不再用于加载外部源码。马帮/钉钉账号、紫鸟客户端和网络访问等业务运行条件仍然需要；源码隔离不代表业务可以离线运行。
 
-内部依赖和真实配置请通过公司授权渠道获取，不要上传到本公开仓库。只拉取本仓库无法完成全部业务流程或 EXE 构建；`desktop_entry.py --self-check` 同样需要这些依赖。
+源码中只保留公共配置模板。用户账号仍从桌面「设置」读取；充值站点的内部表格配置从中台读取。真实数据库连接、Cookie、人员映射不提交到公开 Git。
 
-## 构建 EXE
+## 构建 EXE 和安装包
+
+### 1. 准备独立桌面仓库和环境
+
+请使用上文核对过 `origin` 的独立桌面仓库；本机已有检出位于 `D:\hqyl_worktrees\desktop-release-20261120`。不要直接在包含其他并行修改的父仓库里执行整仓提交或覆盖源码。
+
+构建需要 Windows、Python 3.12、Git；生成安装器还需要 Inno Setup 6。在桌面仓库根目录执行一次：
 
 ```powershell
-cd D:\hqyl_project\hqyl_desktop
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+普通安装用户只需要最终安装包，不需要 Python、Git、这些源码目录或 Inno Setup。
+
+### 2. 准备安装包内置的充值连接
+
+要得到“安装后直接充值、无需用户填写数据库”的包，构建时必须提供已授权的连接文件：
+
+```powershell
+# 本机已有的连接文件；其他构建电脑需通过公司内部渠道取得自己的授权副本。
+$env:HQYL_ADS_DATABASE_RESOURCE = Join-Path $env:LOCALAPPDATA 'HQYL\private-releases\1.0.6\ads_database.json'
+if (-not (Test-Path -LiteralPath $env:HQYL_ADS_DATABASE_RESOURCE -PathType Leaf)) {
+    throw '缺少安装包内置充值连接文件，请先准备授权配置。'
+}
+```
+
+文件名必须是 `ads_database.json`，使用绝对路径，放在源码目录之外且不能被 Git 跟踪。JSON 需包含 `host`、`port`（字符串）、`dbname`（`hrms`）、`user`、`password`，并沿用已验收的 `sslmode`。这里不记录真实连接值。
+
+`HQYL_ADS_DATABASE_RESOURCE` 仅在打包时使用；安装用户不需要设置它。没有提供该文件也能构建程序，但安装包不会带数据库连接，不能当成“免配置充值版”交付。单独设置这台电脑的充值环境变量，不等于把配置放进了安装包。
+
+### 3. 一键构建
+
+在同一个 PowerShell 窗口、仓库根目录执行：
+
+```powershell
 .\scripts\build.ps1
 ```
 
-构建成功后，EXE 目录位于：
+若 PowerShell 的执行策略阻止运行，可用：
 
-```text
-D:\hqyl_project\hqyl_desktop\dist\HQYLAutomation
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
 ```
 
-如果本机安装了 Inno Setup，脚本会继续生成安装包：
+脚本依次安装 Python 依赖、从本项目 `runtime` 生成公共配置、暂存本项目运行时代码、执行 PyInstaller，并在找到 Inno Setup 时制作安装器。不会访问其他业务项目的源码；不会执行充值，也不会上传 OSS。
+
+输出位置：
+
+| 输出 | 路径 |
+|---|---|
+| 可运行程序及全部配套文件 | `dist/HQYLAutomation/` |
+| 安装包 | `release/HQYLAutomationSetup_<版本>.exe` |
+| 自动生成的公共配置 | `build/public_runtime_config/` |
+| 自动生成的运行时代码副本 | `build/runtime/superbrowser_source/` |
+
+必须保留整个 `dist/HQYLAutomation` 目录，不能只复制其中的 EXE。脚本会查找 PATH、当前用户安装目录和 Program Files 下的 `ISCC.exe`；找不到时只生成程序目录，不会有安装包。
+
+更新业务代码时修改 `backend` 或 `runtime` 的受控源码，不要改 `build` 下的生成副本。`scripts/public_mabang_inputs.json` 是马帮工具代码的校验清单，修改这些工具文件时需在审查后同步校验值，不能直接关闭校验。
+
+### 4. 验收与正式发版
+
+```powershell
+& .\dist\HQYLAutomation\HQYLAutomation.exe --self-check
+& .\dist\HQYLAutomation\HQYLAutomation.exe --check-ads-database
+Get-FileHash -LiteralPath .\release\HQYLAutomationSetup_1.0.6.exe -Algorithm SHA256
+```
+
+最后一行的版本号应与本次源码版本一致。`--self-check` 检查打包运行时；`--check-ads-database` 实际连接并只读检查中台表和切换状态，不执行充值。验收“内置连接”时，应在没有预设 `HQYL_GUARD_*` 或 `PGPASSWORD` 的新进程/测试电脑上运行，避免误用构建机现有配置。
+
+正式发新版本前，统一更新 `backend/app_bridge.py`、`frontend/assets/common.js`、`packaging/hqyl_automation.iss`、`scripts/package_release.py` 和 `scripts/stage_superbrowser_source.py` 中的版本号，再构建并验证安装包。已公开发布的版本不覆盖为另一个二进制文件。
+
+正式发版另需生成 `release/HQYLAutomation_<版本>_BUILD_MANIFEST.json`，记录桌面源码提交、依赖校验、测试结果、安装包大小及 SHA-256，并如实说明是否内置数据库连接。`build.ps1` 不会自动生成这份验收清单；只生成 EXE 不代表已经完成发布。
+
+准备好安装包和构建清单后，可整理上传文件（示例版本为 1.0.6，新发版必须换新版本号）：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\package_release.py 1.0.6
+```
+
+该命令会重建同版本的 `release/upload_<版本>` 等输出目录，执行前先保留旧发布产物。构建清单不存在时它只生成三个文件，不能直接作为完整正式发布交付。完整上传目录必须包含：
 
 ```text
-D:\hqyl_project\hqyl_desktop\release\HQYLAutomationSetup_1.0.2.exe
+HQYLAutomationSetup_<版本>.exe
+HQYLAutomation_<版本>_BUILD_MANIFEST.json
+SHA256.txt
+latest.json
 ```
+
+通过中台现有上传授权发布到 `oss://hq-middleground/自动化平台/`：先上传安装包和构建清单并读回核对，再更新 `SHA256.txt`，最后更新 `latest.json`。从免登录更新入口重新下载整包并比对 SHA-256 后才算发布完成。`package_release.py` 只整理文件，不会自动上传；生成的旧 IIS 部署脚本不用于当前 OSS 更新流程。
+
+内置数据库连接的包必须如实记录凭据包含情况，沿用该版本明确授权的发布流程；不能把校验报告改成“不含凭据”来绕过发布检查。公开 Git 仍不提交连接文件或安装包。
+
+- 更新源：<https://hrms.whhqyl.com.cn/desktop-updates/latest.json>
+- 同事直接下载：<https://hrms.whhqyl.com.cn/desktop-updates/latest.json?download=1>
+
+`.git/release-work/` 下的历史验收、上传脚本只存在于维护机，不属于公开仓库，也不是新克隆项目的打包前提。
 
 ## 配置
 

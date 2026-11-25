@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT.parent / "superbrowser_process"))
+sys.path.insert(0, str(ROOT / "runtime" / "superbrowser_process"))
 from implement.shopee import ads_verified_collection as collection
 from implement.shopee import id_shopee_ads_recharge as id_site
 from implement.shopee import vn_shopee_ads_recharge as vn_site

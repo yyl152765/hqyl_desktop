@@ -16,7 +16,7 @@ import sys
 import time
 
 PROJECT = Path(__file__).resolve().parents[1]
-SUPERBROWSER = PROJECT.parent / "superbrowser_process"
+SUPERBROWSER = PROJECT / "runtime" / "superbrowser_process"
 sys.path.insert(0, str(PROJECT))
 from backend.config_store import ConfigStore
 from scripts.repair_vn_id_ads_sheet import apply_patch_batch, build_patch_plan

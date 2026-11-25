@@ -9,7 +9,7 @@ from typing import Callable
 from unittest.mock import patch
 
 
-SUPERBROWSER_ROOT = Path(__file__).resolve().parents[2] / "superbrowser_process"
+SUPERBROWSER_ROOT = Path(__file__).resolve().parents[1] / "runtime" / "superbrowser_process"
 if str(SUPERBROWSER_ROOT) not in sys.path:
     sys.path.insert(0, str(SUPERBROWSER_ROOT))
 

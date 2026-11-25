@@ -8,7 +8,7 @@ import types
 from PyInstaller.archive.readers import CArchiveReader
 
 PROJECT = Path(__file__).resolve().parents[1]
-SOURCE = PROJECT.parent / "superbrowser_process"
+SOURCE = PROJECT / "runtime" / "superbrowser_process"
 MODULES = (
     "util.shopee_ads_money",
     "implement.shopee.ads_expense_date_range",

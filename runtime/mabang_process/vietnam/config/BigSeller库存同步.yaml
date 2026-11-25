@@ -1,0 +1,41 @@
+process_config:
+  process_name: BigSeller库存同步
+  user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+    like Gecko) Chrome/109.0.0.0 Safari/537.36
+  browser:
+    no_head: false
+    block_images: true
+    page_load_timeout_seconds: 75
+    script_timeout_seconds: 45
+    target_page_timeout_seconds: 75
+    webdriver_command_timeout_seconds: 90
+  sync:
+    sync_mode: api
+    browser_engine: playwright
+    platform: shopee
+    page_url: https://www.bigseller.pro/web/listing/shopee/active/index.htm?bsStatus=4
+    bs_status_name: active
+    listing_statuses:
+    - live
+    - soldOut
+    order_by: update_time
+    desc: false
+    page_size: 300
+    use_count_api: true
+    max_pages: 0
+    api_max_workers: 2
+    browser_max_workers: 1
+    dry_run: false
+    task_timeout_seconds: 7200
+    shutdown_margin_seconds: 180
+    per_page_timeout_seconds: 900
+    modal_timeout_seconds: 900
+    max_browser_restarts: 5
+    poll_interval_seconds: 2
+    between_round_sleep_seconds: 2
+  captcha_service:
+    provider: ttshitu
+    url: http://api.ttshitu.com/predict
+    type_name: 数英混合识别-增强
+    typeid: 1003
+    max_attempts: 8

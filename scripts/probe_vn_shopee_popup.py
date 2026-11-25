@@ -17,7 +17,7 @@ from selenium.webdriver.common.by import By
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SUPERBROWSER_ROOT = PROJECT_ROOT.parent / "superbrowser_process"
+SUPERBROWSER_ROOT = PROJECT_ROOT / "runtime" / "superbrowser_process"
 for candidate in (PROJECT_ROOT, SUPERBROWSER_ROOT):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))

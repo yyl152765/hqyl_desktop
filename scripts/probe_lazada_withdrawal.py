@@ -20,7 +20,7 @@ from selenium.webdriver.common.by import By
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
-SUPERBROWSER_ROOT = WORKSPACE_ROOT.parent / "superbrowser_process"
+SUPERBROWSER_ROOT = WORKSPACE_ROOT / "runtime" / "superbrowser_process"
 if str(SUPERBROWSER_ROOT) not in sys.path:
     sys.path.insert(0, str(SUPERBROWSER_ROOT))
 

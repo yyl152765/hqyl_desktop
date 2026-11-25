@@ -12,7 +12,7 @@ import threading
 from types import SimpleNamespace
 
 
-SOURCE = Path(__file__).resolve().parents[2] / "superbrowser_process/implement/shopee/vn_shopee_ads_recharge.py"
+SOURCE = Path(__file__).resolve().parents[1] / "runtime" / "superbrowser_process/implement/shopee/vn_shopee_ads_recharge.py"
 FUNCTIONS = {
     "_find_visible_elements", "_click_payment_ok_if_present",
     "_wait_payment_popup_closed", "_confirm_payment_success",

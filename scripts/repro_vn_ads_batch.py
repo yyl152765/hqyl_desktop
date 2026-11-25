@@ -21,7 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-ROOT = Path(__file__).resolve().parents[2] / "superbrowser_process"
+ROOT = Path(__file__).resolve().parents[1] / "runtime" / "superbrowser_process"
 LOADER_SOURCE = ROOT / "main" / "super_browser_desktop.py"
 VN_SOURCE = ROOT / "main" / "shopee" / "vn_shopee_ads_recharge_operator_service.py"
 

@@ -1,4 +1,4 @@
-"""Stage Python runtime sources, replacing reviewed embedded credential literals only."""
+"""Stage this project's reviewed runtime sources. Legacy sanitizers remain for audit tests."""
 from __future__ import annotations
 
 import ast
@@ -17,8 +17,8 @@ from scripts.build_public_runtime_configs import PRIVATE_SITE_FIELDS
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "1.0.6"
-SOURCE = Path(os.environ.get("HQYL_SUPERBROWSER_INPUT", str(ROOT.parent / "superbrowser_process")))
-INPUTS = ROOT / f"build/release_inputs_{VERSION}"
+SOURCE = ROOT / "runtime" / "superbrowser_process"
+INPUTS = ROOT / "build/runtime"
 TARGET = INPUTS / "superbrowser_source"
 MANIFEST = INPUTS / "superbrowser_staging_manifest.json"
 SOURCE_DIRECTORIES = ("config", "implement", "main", "util")
@@ -275,36 +275,28 @@ def staged_hashes() -> dict[str, str]:
 
 def main() -> None:
     source = source_files()
-    staged = {name: sanitize_source(name, content)[0] for name, content in source.items()}
-    source_hashes = {name: digest(content) for name, content in source.items()}
-    expected = {name: digest(content) for name, content in staged.items()}
-    if TARGET.exists():
-        if staged_hashes() != expected or not MANIFEST.is_file():
-            raise RuntimeError("Existing staging differs or lacks provenance; preserve and inspect it")
-        report = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        if report.get("version") != VERSION or report.get("files") != expected or report.get("source_files") != source_hashes or report.get("sanitized_fields") != SANITIZED_FIELDS:
-            raise RuntimeError("Existing staging manifest differs; preserve and inspect it")
-        action = "existing_staging_verified"
-    else:
-        if MANIFEST.exists():
-            raise RuntimeError("Manifest exists without staging; preserve and inspect it")
-        TARGET.mkdir(parents=True)
-        for name, payload in staged.items():
-            destination = TARGET / name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with destination.open("xb") as stream:
-                stream.write(payload)
-        if staged_hashes() != expected or {name: digest(content) for name, content in source_files().items()} != source_hashes:
-            raise RuntimeError("Source or staging changed while copying")
-        report = {"version": VERSION, "status": "sanitized_and_verified", "created_at": datetime.now(timezone.utc).isoformat(),
-                  "source": str(SOURCE.resolve()), "destination": str(TARGET.resolve()), "python_sources_only": True,
-                  "file_count": len(expected), "source_files": source_hashes, "files": expected, "sanitized_fields": SANITIZED_FIELDS,
-                  "configuration_inputs": {"util/db_helper.py": ["HQYL_GUARD_DB_*", "PGPASSWORD"], "main/shopee/ads_recharge_guard.py": ["HQYL_GUARD_DB_*", "PGPASSWORD"]}}
-        with MANIFEST.open("x", encoding="utf-8") as stream:
-            stream.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-        action = "sanitized_and_verified"
-    print(json.dumps({"action": action, "version": VERSION, "file_count": len(expected), "sanitized_fields": SANITIZED_FIELDS,
-                      "staging": str(TARGET), "manifest": str(MANIFEST)}, ensure_ascii=True))
+    expected = {name: digest(content) for name, content in source.items()}
+    if TARGET.is_symlink() or not TARGET.resolve().is_relative_to((ROOT / "build").resolve()):
+        raise RuntimeError("Runtime staging must remain inside this project's build directory")
+    TARGET.mkdir(parents=True, exist_ok=True)
+    existing = staged_hashes()
+    # Refresh generated files only; never mutate the tracked runtime or another project.
+    for name in existing.keys() - expected.keys():
+        (TARGET / name).unlink()
+    for name, payload in source.items():
+        destination = TARGET / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
+    if staged_hashes() != expected:
+        raise RuntimeError("Runtime staging differs from this project's source")
+    report = {"version": VERSION, "status": "project_runtime_verified",
+              "created_at": datetime.now(timezone.utc).isoformat(),
+              "source": "runtime/superbrowser_process", "file_count": len(expected),
+              "source_files": expected, "files": expected,
+              "sanitized_at_import": True}
+    MANIFEST.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"action": report["status"], "file_count": len(expected),
+                      "staging": str(TARGET), "manifest": str(MANIFEST)}))
 
 
 if __name__ == "__main__":

@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import importlib
-import os
-import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
 from backend.config_store import ConfigStore
 from backend.ads_database import prepare_runtime_database, private_site_settings, verify_card_channel
+from backend.runtime_paths import ensure_superbrowser_import_path
 
 ProgressCallback = Callable[[str], None]
 
@@ -47,40 +45,17 @@ DEFAULT_PAYMENT_WAIT_SECONDS = 150
 DEFAULT_PAYMENT_CARD_TYPE = "payoneer"
 PAYMENT_CARD_TYPES = {"payoneer", "world"}
 
-# superbrowser_process 项目根目录（相对于本项目的上一级）
+# 桌面项目内置运行组件；安装包使用冻结模块。
 _SUPERBROWSER_ROOT: str | None = None
 
 
 def _ensure_superbrowser_path() -> None:
-    """将 superbrowser_process 加入 sys.path 以便动态 import。"""
+    """加载本项目随附的运行组件，不查找相邻项目或外部路径。"""
     global _SUPERBROWSER_ROOT
     if _SUPERBROWSER_ROOT is not None:
         return
 
-    # PyInstaller 会将这些模块放进自己的模块归档，不需要外部源码目录。
-    # 不要用 find_spec("main.shopee") 探测：开发环境直接运行 launcher/main.py
-    # 时，它会先把启动文件误导入成非包模块 "main"，污染 sys.modules。
-    if getattr(sys, "frozen", False):
-        _SUPERBROWSER_ROOT = "<bundled>"
-        return
-
-    # 开发环境允许显式配置路径，默认仍使用相邻项目目录。
-    project_root = Path(__file__).resolve().parents[2]
-    candidates = [
-        Path(os.environ["SUPERBROWSER_PROCESS_ROOT"]).expanduser()
-        if os.environ.get("SUPERBROWSER_PROCESS_ROOT")
-        else None,
-        project_root / "build/release_inputs_1.0.6/superbrowser_source",
-        project_root.parent / "superbrowser_process",
-    ]
-    candidate = next((path.resolve() for path in candidates if path and (path / "main").is_dir()), None)
-    if candidate is None:
-        searched = ", ".join(str(path) for path in candidates if path)
-        raise ModuleNotFoundError(f"未找到 superbrowser_process（已检查：{searched}）")
-
-    _SUPERBROWSER_ROOT = str(candidate)
-    if _SUPERBROWSER_ROOT not in sys.path:
-        sys.path.insert(0, _SUPERBROWSER_ROOT)
+    _SUPERBROWSER_ROOT = ensure_superbrowser_import_path()
 
 
 def _get_site(code: str) -> ShopeeAdsSite:
@@ -327,7 +302,7 @@ def run_shopee_ads_recharge(
         module = get_site_module(job.site_code)
     except ImportError as exc:
         raise RuntimeError(
-            f"无法加载站点模块，请确认 superbrowser_process 项目在正确位置：{exc}"
+            f"无法加载站点模块，请确认桌面项目 runtime 目录完整：{exc}"
         ) from exc
 
     _emit(progress, f"正在构建运行配置...")
@@ -429,7 +404,7 @@ def resolve_runtime_paths(site_code: str) -> dict[str, str]:
 
 
 def save_site_config(site_code: str, payload: dict[str, Any]) -> str:
-    """保存站点充值配置到 superbrowser_process 的 settings.json。返回保存路径。"""
+    """保存站点充值配置到当前用户的 settings.json。返回保存路径。"""
     _ensure_superbrowser_path()
     module = get_site_module(site_code)
 

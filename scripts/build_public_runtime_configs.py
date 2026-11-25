@@ -123,12 +123,12 @@ def generate_public_bigseller_config(source: Path, output_dir: Path) -> Path:
 
 def main() -> int:
     project_root = Path(__file__).resolve().parents[1]
-    source_dir = project_root.parent / "superbrowser_process" / "main" / "shopee" / "config"
+    source_dir = project_root / "runtime" / "superbrowser_process" / "main" / "shopee" / "config"
     output_dir = project_root / "build" / "public_runtime_config"
     generated = generate_public_runtime_configs(source_dir, output_dir)
     generated.append(
         generate_public_bigseller_config(
-            project_root.parent / "mabang_process" / "vietnam" / "config" / BIGSELLER_CONFIG_NAME,
+            project_root / "runtime" / "mabang_process" / "vietnam" / "config" / BIGSELLER_CONFIG_NAME,
             output_dir,
         )
     )

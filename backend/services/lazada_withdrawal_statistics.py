@@ -8,7 +8,6 @@ import logging
 import os
 import re
 import shutil
-import sys
 import threading
 import time
 import unicodedata
@@ -20,6 +19,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
+
+from backend.runtime_paths import ensure_superbrowser_import_path
 
 
 ProgressCallback = Callable[[str], None]
@@ -246,23 +247,7 @@ def _ensure_superbrowser_path() -> None:
     global _SUPERBROWSER_ROOT
     if _SUPERBROWSER_ROOT is not None:
         return
-    if getattr(sys, "frozen", False):
-        _SUPERBROWSER_ROOT = "<bundled>"
-        return
-    project_root = Path(__file__).resolve().parents[2]
-    candidates = [
-        Path(os.environ["SUPERBROWSER_PROCESS_ROOT"]).expanduser()
-        if os.environ.get("SUPERBROWSER_PROCESS_ROOT")
-        else None,
-        project_root.parent / "superbrowser_process",
-    ]
-    candidate = next((path.resolve() for path in candidates if path and (path / "main").is_dir()), None)
-    if candidate is None:
-        checked = "、".join(str(path) for path in candidates if path)
-        raise ModuleNotFoundError(f"未找到 superbrowser_process（已检查：{checked}）")
-    _SUPERBROWSER_ROOT = str(candidate)
-    if _SUPERBROWSER_ROOT not in sys.path:
-        sys.path.insert(0, _SUPERBROWSER_ROOT)
+    _SUPERBROWSER_ROOT = ensure_superbrowser_import_path()
 
 
 def _reference_modules() -> tuple[Any, Any, Any, Any]:

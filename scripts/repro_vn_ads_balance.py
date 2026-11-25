@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import uuid
 
 
-ROOT = Path(__file__).resolve().parents[2] / "superbrowser_process"
+ROOT = Path(__file__).resolve().parents[1] / "runtime" / "superbrowser_process"
 GUARD = ROOT / "main/shopee/ads_recharge_guard.py"
 SERVICE = ROOT / "main/shopee/vn_shopee_ads_recharge_operator_service.py"
 LOADER = ROOT / "main/super_browser_desktop.py"

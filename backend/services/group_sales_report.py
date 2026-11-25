@@ -540,9 +540,10 @@ def _default_groups() -> tuple[SalesGroup, ...]:
 
 
 def _load_groups_from_mabang_config() -> tuple[SalesGroup, ...]:
+    from backend.runtime_paths import mabang_root
+
     config_path = (
-        Path(__file__).resolve().parents[3]
-        / "mabang_process"
+        mabang_root()
         / "philippines"
         / "config"
         / "各组商品销量报表.yaml"

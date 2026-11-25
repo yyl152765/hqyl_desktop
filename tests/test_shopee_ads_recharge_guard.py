@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SUPERBROWSER_ROOT = PROJECT_ROOT.parent / "superbrowser_process"
+SUPERBROWSER_ROOT = PROJECT_ROOT / "runtime" / "superbrowser_process"
 _INSERTED_SUPERBROWSER_PATH = False
 if str(SUPERBROWSER_ROOT) not in sys.path:
     sys.path.insert(0, str(SUPERBROWSER_ROOT))

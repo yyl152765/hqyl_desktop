@@ -21,10 +21,10 @@ from scripts.build_public_runtime_configs import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SUPERBROWSER_CONFIG_DIR = (
-    PROJECT_ROOT.parent / "superbrowser_process" / "main" / "shopee" / "config"
+    PROJECT_ROOT / "runtime" / "superbrowser_process" / "main" / "shopee" / "config"
 )
 BIGSELLER_CONFIG = (
-    PROJECT_ROOT.parent / "mabang_process" / "vietnam" / "config" / BIGSELLER_CONFIG_NAME
+    PROJECT_ROOT / "runtime" / "mabang_process" / "vietnam" / "config" / BIGSELLER_CONFIG_NAME
 )
 
 

@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import Mock
 
 
-SUPERBROWSER_ROOT = Path(__file__).resolve().parents[2] / "superbrowser_process"
+SUPERBROWSER_ROOT = Path(__file__).resolve().parents[1] / "runtime" / "superbrowser_process"
 TODAY = "2026-09-11"
 PCFG = {"dingtalk": {"doc_config": {
     "app_key": "fake", "app_secret": "fake", "app_userid": "fake",

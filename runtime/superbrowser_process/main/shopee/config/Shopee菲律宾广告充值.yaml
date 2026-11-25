@@ -1,0 +1,33 @@
+task:
+- ph_shopee_ads_recharge
+thread_num: 5
+database:
+  FIELD_MAPPING:
+    browserIp: browser_ip
+    browserName: browser_name
+    browserOauth: browser_oauth
+    isDynamic: is_dynamic
+    isExpired: is_expired
+    proxyType: proxy_type
+    siteId: site_id
+    platform_id: platform_id
+    platform_name: platform_name
+    store_username: store_username
+    tags: tags
+shopee:
+  recharge_amount: 100
+  timeout: 60
+  ads_wallet_url: https://seller.shopee.ph/portal/marketing/pas/index
+  security_verify:
+    enabled: true
+    base_url: http://rpa.whhqyl.com.cn:8090
+    dynamic_code_system_name: 【{shop_name}】广告充值金额：{recharge_amount}，动态验证码接收
+    personal_code_enabled: true
+    personal_code_system_name: 【{shop_name}】广告充值金额：{recharge_amount}，个人安全码接收
+    timeout: 300
+    poll_interval: 5
+    auto_mark_sent: true
+dingtalk:
+  doc_config:
+    config_sheet: 菲律宾
+    success_log_sheet_name_format: '%Y-%m-%d'

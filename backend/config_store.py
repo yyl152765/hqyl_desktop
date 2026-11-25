@@ -12,13 +12,13 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, normalize_manifest_url
+from backend.runtime_paths import superbrowser_root
 
 
 APP_NAME = "HQYLAutomation"
 DEFAULT_OUTPUT_DIR = "D:\\报表"
 _GROUP_SALES_RUN_DIR = re.compile(r"菲律宾各组商品销量报表_\d{8}_\d{8}_\d{6}(?:_\d+)?")
 DEFAULT_ROWS_PER_PAGE = 500
-LEGACY_DINGTALK_CONFIG_ENV = "HQYL_LEGACY_DINGTALK_CONFIG"
 _SETTINGS_LOCK = threading.RLock()
 
 
@@ -300,10 +300,6 @@ def _coerce_tool_output_dirs(value: Any) -> dict[str, str]:
 
 def _legacy_dingtalk_config_candidates(*, include_source_fallback: bool) -> list[Path]:
     candidates: list[Path] = []
-    env_path = str(os.getenv(LEGACY_DINGTALK_CONFIG_ENV) or "").strip()
-    if env_path:
-        candidates.append(Path(env_path).expanduser())
-
     if getattr(sys, "frozen", False):
         install_root = Path(sys.executable).resolve().parent
         candidates.extend(
@@ -319,11 +315,11 @@ def _legacy_dingtalk_config_candidates(*, include_source_fallback: bool) -> list
             ]
         )
     elif include_source_fallback:
-        superbrowser_root = Path(__file__).resolve().parents[2] / "superbrowser_process"
+        runtime_root = superbrowser_root()
         candidates.extend(
             [
-                superbrowser_root / "config" / "config.yaml",
-                superbrowser_root
+                runtime_root / "config" / "config.yaml",
+                runtime_root
                 / "main"
                 / "shopee"
                 / "config"

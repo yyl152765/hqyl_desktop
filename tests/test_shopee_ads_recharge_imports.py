@@ -6,7 +6,7 @@ from backend.services import shopee_ads_recharge
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SUPERBROWSER_ROOT = PROJECT_ROOT.parent / "superbrowser_process"
+SUPERBROWSER_ROOT = PROJECT_ROOT / "runtime" / "superbrowser_process"
 
 
 class ShopeeAdsRechargeImportTests(unittest.TestCase):
