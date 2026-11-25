@@ -4567,3 +4567,7 @@ select:focus {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+.nav-leaf[aria-disabled="true"] { cursor: not-allowed; background: rgba(148, 163, 184, 0.08); color: #a3b3c6; transform: none; }
+.dashboard-tool[aria-disabled="true"] { cursor: not-allowed; background: #f3f4f6; border-style: dashed; }
+.limited-build-notice { padding: 28px; }
+.limited-build-notice p { margin: 16px 0; }

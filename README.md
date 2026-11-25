@@ -149,6 +149,8 @@ if (-not (Test-Path -LiteralPath $env:HQYL_ADS_DATABASE_RESOURCE -PathType Leaf)
 
 在同一个 PowerShell 窗口、仓库根目录执行：
 
+双击项目根目录的 `一键生成更新包.cmd`，即可执行完整构建并输出四个更新文件和桌面 RAR。缺少依赖时窗口会显示原因并保留，补齐后重新双击即可。也可以在 PowerShell 中执行：
+
 ```powershell
 .\scripts\build.ps1
 ```
@@ -170,7 +172,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
 | 自动生成的公共配置 | `build/public_runtime_config/` |
 | 自动生成的运行时代码副本 | `build/runtime/superbrowser_source/` |
 
-必须保留整个 `dist/HQYLAutomation` 目录，不能只复制其中的 EXE。脚本会查找 PATH、当前用户安装目录和 Program Files 下的 `ISCC.exe`；找不到时只生成程序目录，不会有安装包。
+必须保留整个 `dist/HQYLAutomation` 目录，不能只复制 EXE。构建前会检查 Inno Setup 6 和 WinRAR；缺少工具时停止并说明原因。
 
 更新业务代码时修改 `backend` 或 `runtime` 的受控源码，不要改 `build` 下的生成副本。`scripts/public_mabang_inputs.json` 是马帮工具代码的校验清单，修改这些工具文件时需在审查后同步校验值，不能直接关闭校验。
 
@@ -186,7 +188,7 @@ Get-FileHash -LiteralPath .\release\HQYLAutomationSetup_1.0.6.exe -Algorithm SHA
 
 正式发新版本前，统一更新 `backend/app_bridge.py`、`frontend/assets/common.js`、`packaging/hqyl_automation.iss`、`scripts/package_release.py` 和 `scripts/stage_superbrowser_source.py` 中的版本号，再构建并验证安装包。已公开发布的版本不覆盖为另一个二进制文件。
 
-正式发版另需生成 `release/HQYLAutomation_<版本>_BUILD_MANIFEST.json`，记录桌面源码提交、依赖校验、测试结果、安装包大小及 SHA-256，并如实说明是否内置数据库连接。`build.ps1` 不会自动生成这份验收清单；只生成 EXE 不代表已经完成发布。
+完整构建会自动生成 `release/HQYLAutomation_<版本>_BUILD_MANIFEST.json`，记录实际源码提交、构建模式、离线自检、安装包大小和 SHA-256；未执行的回归、真实业务或安装验收不会标为通过。正式发布前仍须审查清单与凭据包含情况。
 
 准备好安装包和构建清单后，可整理上传文件（示例版本为 1.0.6，新发版必须换新版本号）：
 
@@ -194,7 +196,7 @@ Get-FileHash -LiteralPath .\release\HQYLAutomationSetup_1.0.6.exe -Algorithm SHA
 .\.venv\Scripts\python.exe scripts\package_release.py 1.0.6
 ```
 
-该命令会重建同版本的 `release/upload_<版本>` 等输出目录，执行前先保留旧发布产物。构建清单不存在时它只生成三个文件，不能直接作为完整正式发布交付。完整上传目录必须包含：
+单独整理已有安装包不会重新编译源码。同名旧产物先备份；已有构建清单必须与安装包一致，缺少清单时明确记录构建验证未知。完整更新目录包含：
 
 ```text
 HQYLAutomationSetup_<版本>.exe
@@ -211,6 +213,47 @@ latest.json
 - 同事直接下载：<https://hrms.whhqyl.com.cn/desktop-updates/latest.json?download=1>
 
 `.git/release-work/` 下的历史验收、上传脚本只存在于维护机，不属于公开仓库，也不是新克隆项目的打包前提。
+
+### 5. 完整更新包与精简构建
+
+每次更新代码并完成验证后运行上面的命令。脚本自动核对后端、前端、安装脚本的版本号，完成 PyInstaller / Inno Setup 构建，再生成与 `upload_1.0.5.rar` 相同结构的四个文件。需要 Python 依赖、项目 `runtime` 下随附的运行依赖、Inno Setup 6 和 WinRAR；缺少时会在构建前说明并停止。
+
+可先检查环境，或指定更新说明、压缩包输出目录：
+
+```powershell
+.\scripts\build.ps1 -Check
+.\scripts\build.ps1 -Notes "本次更新内容" -OutputDirectory "$env:USERPROFILE\Desktop"
+```
+
+Python 依赖已安装时可加 `-SkipDependencyInstall`。版本号取当前项目值，不固定为 `1.0.5`；例如当前版本生成：
+
+```text
+release\upload_1.0.6\
+  HQYLAutomationSetup_1.0.6.exe
+  HQYLAutomation_1.0.6_BUILD_MANIFEST.json
+  latest.json
+  SHA256.txt
+```
+
+默认在系统桌面生成 `upload_1.0.6.rar`，RAR 内含上述 `upload_1.0.6` 文件夹。压缩后自动做完整性检查，安装包 SHA-256 与两个 JSON、校验文件保持一致。同名旧产物先保留为带时间戳的 `.bak`；压缩失败不替换旧 RAR。冻结程序仍在 `dist\HQYLAutomation`，原有两个 ZIP 分发包仍在 `release`。
+
+需要精简构建时，双击 `一键生成精简更新包.cmd`，或执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -SkipInternalDependencies
+```
+
+精简版仍从当前源码生成新 EXE 和安装包。工作台、导航和接口会禁用 Shopee 充值、全部 BigSeller 查询/同步、Lazada 提现与余额统计，以及 TEMU 财务/费用退款/活动/在售导出与余额统计。其他功能保留，包括马帮工具、Lazada 月报/广告/账单/活动导出、TEMU 物流渠道和本地表格处理；业务运行仍需对应账号和本机环境。完整版构建使用本项目 `runtime` 下的运行组件。两种模式都会先执行冻结程序的离线自检，再生成安装包；构建清单记录模式、跳过项和自检结果，不将离线自检标为真实业务或安装验收通过。
+
+若只是重新整理已有的安装包（安装包放在 `release`），可单独执行：
+
+```powershell
+python scripts\package_release.py --rar-output-dir "$env:USERPROFILE\Desktop" --notes "本次更新内容"
+```
+
+该命令不重新编译程序。存在构建清单时必须与安装包版本、大小和哈希匹配；缺少清单时生成清单，但明确记录源码与构建验证未知。`--fresh-build` 仅供 `build.ps1` 在新构建成功后使用，记录实际工作区提交、未提交修改状态与本地上游引用；不把本地引用当作已经联网核验的最新提交，不复用旧版测试结论。
+
+此流程生成本地交付文件；正式发布时按 `AGENTS.md` 的 OSS 顺序上传。
 
 ## 配置
 

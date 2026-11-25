@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from backend.build_profile import require_dependency
+
 import importlib.util
 import json
 import os
@@ -152,6 +154,7 @@ def mabang_process_root() -> Path:
 
 
 def load_bigseller_request_util():
+    require_dependency("mabang_process")
     root = mabang_process_root()
     if not root.exists():
         raise RuntimeError(f"缺少桌面内置 BigSeller 组件，请检查本项目 runtime/mabang_process: {root}")

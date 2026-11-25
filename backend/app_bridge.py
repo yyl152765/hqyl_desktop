@@ -5,6 +5,7 @@ import os
 import shutil
 import threading
 import time
+from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -138,7 +139,7 @@ from backend.services.lazada_monthly_report import (
 )
 from backend.services import lazada_ads_data
 from backend.services import lazada_bill_detail
-from backend.services import lazada_campaign_workbook
+from backend.services import download_lazada_campaign, lazada_campaign_workbook
 from backend.services.vietnam_income_collection import (
     create_collection_run,
     default_collection_period,
@@ -166,6 +167,7 @@ from backend.services.vietnam_final_reconciliation import (
     run_vietnam_final_reconciliation,
     validate_vietnam_final_reconciliation_payload,
 )
+from backend.build_profile import annotate_app_info, requires_internal_runtime
 from backend.task_manager import TaskManager
 from backend.core.ziniao_browser import ZiniaoBrowser, account_profile as ziniao_account_profile, runtime_paths as ziniao_runtime_paths
 from backend.services import temu_on_sale_export as temu_export
@@ -216,6 +218,7 @@ class AppBridge:
         self._lazada_ads_monthly_lock = threading.RLock()
         self._lazada_ads_monthly_active = False
         self._campaign_operation_lock = threading.Lock()
+        self._campaign_download_start_lock = threading.Lock()
 
     def get_sidebar_preferences(self) -> dict[str, Any]:
         try:
@@ -235,7 +238,7 @@ class AppBridge:
 
     def get_app_info(self) -> dict[str, Any]:
         settings = self.config_store.load()
-        return {
+        return annotate_app_info({
             "ok": True,
             "app": {
                 "name": APP_NAME,
@@ -362,6 +365,13 @@ class AppBridge:
                     "key": "lazada_bill_detail",
                     "name": "Lazada 后台收支数据",
                     "description": "按国家和账单区间采集总金额、收入与扣减项，写入指定钉钉 Sheet 并保存截图。",
+                    "status": "ready",
+                    "vendor": "ziniao",
+                },
+                {
+                    "key": "lazada_campaign_download",
+                    "name": "Lazada 活动模板下载",
+                    "description": "按店铺、站点和子活动下载报名用的 Excel 模板。",
                     "status": "ready",
                     "vendor": "ziniao",
                 },
@@ -506,7 +516,7 @@ class AppBridge:
                     "vendor": "echotik",
                 },
             ],
-        }
+        })
 
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -600,7 +610,7 @@ class AppBridge:
         saved = self.config_store.save(settings)
         return {"ok": True, "account_state": _account_state_payload(saved)}
 
-    def choose_output_dir(self, current_dir: str = "") -> dict[str, Any]:
+    def choose_output_dir(self, current_dir: str = "", remember: bool = True) -> dict[str, Any]:
         try:
             import webview
 
@@ -616,6 +626,8 @@ class AppBridge:
             if not result:
                 return {"ok": False, "cancelled": True}
             selected = result[0] if isinstance(result, (list, tuple)) else result
+            if not remember:
+                return {"ok": True, "path": str(selected)}
             saved = self.save_settings({"output_dir": str(selected)})
             if not saved["ok"]:
                 return saved
@@ -1744,6 +1756,7 @@ class AppBridge:
         os.startfile(str(target))
         return {"ok": True}
 
+    @requires_internal_runtime
     def get_shopee_ads_info(self) -> dict[str, Any]:
         """返回 Shopee 广告充值页面所需信息（站点列表、路径等）。"""
         sites = get_site_options_list()
@@ -1756,6 +1769,7 @@ class AppBridge:
             "webdriver_path": paths.get("webdriver_path", ""),
         }
 
+    @requires_internal_runtime
     def get_lazada_withdrawal_statistics_info(self) -> dict[str, Any]:
         """加载提现统计默认值和钉钉配置状态，不要求已安装紫鸟。"""
         try:
@@ -1785,6 +1799,7 @@ class AppBridge:
     def _temu_export_latest_path(self) -> Path:
         return self.config_store.local_data_dir / "temu_on_sale_export" / "latest.json"
 
+    @requires_internal_runtime
     def get_balance_statistics_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         """Load local defaults without logging in or querying the store catalog."""
         try:
@@ -1860,12 +1875,15 @@ class AppBridge:
             release()
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def start_balance_statistics(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._start_balance_statistics(payload, retry=False)
 
+    @requires_internal_runtime
     def retry_balance_statistics(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._start_balance_statistics(payload, retry=True)
 
+    @requires_internal_runtime
     def get_temu_fee_refund_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
             try:
@@ -1877,6 +1895,7 @@ class AppBridge:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def get_temu_fee_refund_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             request = self._payload_with_account(payload, "ziniao")
@@ -1886,6 +1905,7 @@ class AppBridge:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def start_temu_fee_refund_export(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._temu_export_lock:
             try:
@@ -1938,12 +1958,14 @@ class AppBridge:
                 release()
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def get_temu_financial_export_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
             return {"ok": True, **resolve_output_directories(self.config_store.load(), "temu_financial_export")}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def get_temu_financial_export_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             request = self._payload_with_account(payload, "ziniao")
@@ -1953,6 +1975,7 @@ class AppBridge:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def start_temu_financial_export(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._temu_export_lock:
             try:
@@ -2011,6 +2034,7 @@ class AppBridge:
     def _temu_activity_latest_path(self) -> Path:
         return self.config_store.local_data_dir / "temu_activity_export" / "latest.json"
 
+    @requires_internal_runtime
     def get_temu_activity_export_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
             directories = resolve_output_directories(self.config_store.load(), "temu_activity_export")
@@ -2036,6 +2060,7 @@ class AppBridge:
             browser.ready()
             return {store["store_id"]: store for store in browser.list_stores()}
 
+    @requires_internal_runtime
     def start_temu_activity_export(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._temu_export_lock:
             try:
@@ -2092,6 +2117,7 @@ class AppBridge:
                 release()
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def retry_temu_activity_export(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._temu_export_lock:
             try:
@@ -2134,6 +2160,7 @@ class AppBridge:
             release()
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def get_temu_activity_export_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             request = self._payload_with_account(payload, "ziniao")
@@ -2143,6 +2170,7 @@ class AppBridge:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def inspect_temu_activity_page(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Read-only probe: open one store and report which calibrated labels exist."""
         with self._temu_export_lock:
@@ -2171,6 +2199,7 @@ class AppBridge:
             with self._temu_export_lock:
                 self._temu_export_active = False
 
+    @requires_internal_runtime
     def get_temu_on_sale_export_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
             import json
@@ -2193,6 +2222,7 @@ class AppBridge:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def list_temu_on_sale_stores(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._temu_export_lock:
             if self._temu_export_active:
@@ -2214,6 +2244,7 @@ class AppBridge:
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def preview_temu_on_sale_stores(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._temu_export_lock:
             try:
@@ -2240,6 +2271,7 @@ class AppBridge:
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def get_temu_on_sale_export_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             request = self._payload_with_account(payload, "ziniao")
@@ -2286,6 +2318,7 @@ class AppBridge:
             release()
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def start_temu_on_sale_export(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._temu_export_lock:
             try:
@@ -2321,6 +2354,7 @@ class AppBridge:
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def retry_temu_on_sale_export(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._temu_export_lock:
             try:
@@ -2396,6 +2430,36 @@ class AppBridge:
             return {"ok": True}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def get_lazada_campaign_download_info(self) -> dict[str, Any]:
+        settings = self.config_store.load()
+        return {"ok": True, "output_dir": str(download_lazada_campaign.default_output_dir(settings)),
+                "site_aliases": dict(download_lazada_campaign.COUNTRY_ALIASES),
+                "timeout_minutes": download_lazada_campaign.DEFAULT_TIMEOUT_MINUTES}
+
+    def start_lazada_campaign_download(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            settings = self.config_store.load()
+            options = download_lazada_campaign.download_options(payload, settings)
+            account_id = payload.get("account_id") or settings.active_account_ids.get("ziniao", "")
+            config = download_lazada_campaign.resolve_browser_config(settings, account_id)
+        except download_lazada_campaign.ZiniaoAccountRequired as exc:
+            return {"ok": False, "requires_account": True, "vendor": "ziniao", "error": str(exc)}
+        except (TypeError, ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+        def runner(progress):
+            try:
+                return download_lazada_campaign.run_download(options, config, progress)
+            except (RuntimeError, ValueError, OSError) as exc:
+                return {"is_complete": False, "completion_message": str(exc)}
+
+        tool = "lazada_campaign_download"
+        with self._campaign_download_start_lock:
+            if self.tasks.latest_snapshot(tool).get("status") in {"pending", "running"}:
+                return {"ok": False, "error": "活动模板正在下载，可在运行日志中查看进度"}
+            return self.tasks.start("Lazada 活动模板下载", runner, tool=tool,
+                                    context={**asdict(options), "account_id": account_id})
 
     def get_lazada_campaign_workbook_info(self) -> dict[str, Any]:
         settings = self.config_store.load()
@@ -2939,6 +3003,7 @@ class AppBridge:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def save_shopee_ads_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         """保存 Shopee 充值配置到 AppData（按站点分别存储）。"""
         try:
@@ -2950,6 +3015,7 @@ class AppBridge:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    @requires_internal_runtime
     def start_shopee_ads_recharge(self, payload: dict[str, Any]) -> dict[str, Any]:
         """启动 Shopee 广告充值任务（异步）。"""
         try:
@@ -2971,6 +3037,7 @@ class AppBridge:
 
         return self.tasks.start(f"Shopee{site_name}广告充值", runner, tool="shopee_ads")
 
+    @requires_internal_runtime
     def start_lazada_withdrawal_statistics(self, payload: dict[str, Any]) -> dict[str, Any]:
         """启动 Lazada 提现统计任务（异步）。"""
         try:
@@ -3179,6 +3246,7 @@ class AppBridge:
             },
         )
 
+    @requires_internal_runtime
     def start_bigseller_sync(self, payload: dict[str, Any]) -> dict[str, Any]:
         """启动 BigSeller 产品/库存同步任务（异步）。"""
         try:
@@ -3205,6 +3273,7 @@ class AppBridge:
         status_name = "售完" if job.listing_status == "soldOut" else "在售"
         return self.tasks.start(f"BigSeller{status_name}{sync_type_name}同步", runner, tool="bigseller_sync")
 
+    @requires_internal_runtime
     def start_bigseller_item_id_query(self, payload: dict[str, Any]) -> dict[str, Any]:
         """按 SKU（含子SKU）模糊查询 Views 最高的商品 ID 并异步导出。"""
         try:
@@ -3224,6 +3293,7 @@ class AppBridge:
             context={"sku_count": len(job.skus)},
         )
 
+    @requires_internal_runtime
     def inspect_bigseller_benchmark_file(self, source_file: str) -> dict[str, Any]:
         try:
             info = inspect_benchmark_workbook(str(source_file or "").strip())
@@ -3238,6 +3308,7 @@ class AppBridge:
         except Exception:
             return {"ok": False, "error": "读取 Excel 失败，请确认文件可访问、未加密且格式正确"}
 
+    @requires_internal_runtime
     def choose_bigseller_benchmark_file(self) -> dict[str, Any]:
         try:
             import webview
@@ -3253,6 +3324,7 @@ class AppBridge:
         except Exception:
             return {"ok": False, "error": "打开文件选择器失败，请直接输入 Excel 完整路径"}
 
+    @requires_internal_runtime
     def choose_bigseller_benchmark_checkpoint(self) -> dict[str, Any]:
         try:
             import webview
@@ -3268,6 +3340,7 @@ class AppBridge:
         except Exception:
             return {"ok": False, "error": "打开文件选择器失败，请直接输入进度文件完整路径"}
 
+    @requires_internal_runtime
     def start_bigseller_sku_benchmark(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             request_payload = self._payload_with_account(payload, "bigseller")
@@ -3290,6 +3363,7 @@ class AppBridge:
                      "resume_checkpoint": str(getattr(job, "resume_checkpoint", None) or "")},
         )
 
+    @requires_internal_runtime
     def start_bigseller_link_query(self, payload: dict[str, Any]) -> dict[str, Any]:
         """批量查询 SKU 最早上架商品的店铺和链接。"""
         try:
@@ -3307,6 +3381,7 @@ class AppBridge:
             tool="bigseller_link_query", context={"sku_count": len(job.skus), "site": job.site},
         )
 
+    @requires_internal_runtime
     def inspect_bigseller_claim_file(self, source_file: str) -> dict[str, Any]:
         try:
             source = str(source_file or "").strip()
@@ -3319,6 +3394,7 @@ class AppBridge:
         except Exception:
             return {"ok": False, "error": "读取 Excel 失败，请确认文件可访问、未加密且格式正确"}
 
+    @requires_internal_runtime
     def choose_bigseller_claim_file(self) -> dict[str, Any]:
         try:
             import webview
@@ -3334,6 +3410,7 @@ class AppBridge:
         except Exception:
             return {"ok": False, "error": "打开文件选择器失败，请直接输入 Excel 完整路径"}
 
+    @requires_internal_runtime
     def choose_bigseller_claim_checkpoint(self) -> dict[str, Any]:
         try:
             import webview
@@ -3349,6 +3426,7 @@ class AppBridge:
         except Exception:
             return {"ok": False, "error": "打开文件选择器失败，请直接输入进度文件完整路径"}
 
+    @requires_internal_runtime
     def start_bigseller_claim_query(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             job = validate_bigseller_claim_payload(self._payload_with_account(payload, "bigseller"))

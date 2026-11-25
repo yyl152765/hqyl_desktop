@@ -23,7 +23,7 @@ except ImportError:
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
 STORAGE_KEY = "hqyl.sidebar.v1"
-GROUP_COUNTS = {"finance": 3, "mabang": 14, "ziniao": 12, "tools": 1, "echotik": 1, "bigseller": 5}
+GROUP_COUNTS = {"finance": 3, "mabang": 14, "ziniao": 13, "tools": 1, "echotik": 1, "bigseller": 5}
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
@@ -446,6 +446,39 @@ class SidebarNavigationTests(unittest.TestCase):
                         const rect = element.getBoundingClientRect();
                         return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
                     }"""), f"{selector} is covered at {width}x{height}")
+
+
+    def install_limited_bridge(self) -> None:
+        info = {
+            "ok": True, "app": {"name": "测试平台", "version": "1.0.6", "build_profile": {"name": "limited"}},
+            "settings": {}, "account_state": {"accounts": [], "active_account_ids": {}},
+            "tools": [
+                {"key": "bigseller_item_id_query", "name": "BS 商品ID查询", "description": "查询商品", "vendor": "bigseller", "status": "unavailable", "unavailable_reason": "精简版不包含此功能，请使用完整版。"},
+                {"key": "mabang_arrival_query", "name": "马帮到货查询", "description": "查询到货", "vendor": "mabang", "status": "ready"},
+            ],
+        }
+        self.page.add_init_script("window.pywebview = {api: {get_app_info: async () => (" + json.dumps(info) + ")}};")
+
+    def test_limited_build_marks_cards_and_search_results_unavailable(self) -> None:
+        self.install_limited_bridge()
+        self.open_page()
+        expect(self.page.locator(".side-channel")).to_have_text("精简版")
+        card = self.page.locator(".dashboard-tool").filter(has_text="BS 商品ID查询")
+        expect(card).to_have_attribute("aria-disabled", "true")
+        self.assertIsNone(card.get_attribute("href"))
+        expect(card).to_contain_text("精简版不可用")
+        self.page.locator("#navSearch").fill("BS 商品ID")
+        link = self.page.locator('#navSearchResults [data-page="bigseller_item_id_query"]')
+        expect(link).to_have_attribute("aria-disabled", "true")
+        self.assertIsNone(link.get_attribute("href"))
+        expect(self.page.locator('.dashboard-tool[href="mabang-arrival-query.html"]')).to_be_visible()
+
+    def test_limited_build_blocks_direct_page_entry(self) -> None:
+        self.install_limited_bridge()
+        self.open_page("bigseller-item-id-query.html")
+        expect(self.page.locator(".limited-build-notice")).to_contain_text("精简版不可用")
+        self.assertEqual(self.page.locator("#itemIdQueryForm").count(), 0)
+        expect(self.page.locator('.limited-build-notice a[href="dashboard.html"]')).to_be_visible()
 
 
 if __name__ == "__main__":

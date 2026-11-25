@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from launcher.main import main, self_check
+from launcher.main import main, self_check_cli
 
 
 if __name__ == "__main__":
@@ -18,5 +18,5 @@ if __name__ == "__main__":
         print("ADS_DATABASE_CHECK=passed", flush=True)
         raise SystemExit(0)
     if "--self-check" in sys.argv:
-        raise SystemExit(self_check())
+        raise SystemExit(self_check_cli())
     main()

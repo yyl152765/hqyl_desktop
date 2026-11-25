@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.app_bridge import AppBridge
+from backend.build_profile import current_profile
 
 
 PAGE_ENTRIES = {
@@ -45,6 +46,7 @@ PAGE_ENTRIES = {
     "lazada-ads-monthly": "lazada-ads-monthly.html",
     "lazada-ads-data": "lazada-ads-data.html",
     "lazada-bill-detail": "lazada-bill-detail.html",
+    "lazada-campaign-download": "lazada-campaign-download.html",
     "lazada-campaign-workbook": "lazada-campaign-workbook.html",
     "vietnam-income-reconciliation": "vietnam-income-reconciliation.html",
     "kec-reconciliation": "kec-reconciliation.html",
@@ -107,28 +109,40 @@ def self_check() -> int:
     if lz_account_check.get("ok") or not lz_account_check.get("requires_account"):
         raise RuntimeError("lz inventory must require its configured account")
 
-    # Exercise the dynamic imports that PyInstaller cannot discover on its own.
-    from backend.services.shopee_ads_recharge import SITE_OPTIONS, get_site_module
-
-    for site in SITE_OPTIONS:
-        module = get_site_module(site.code)
-        if not hasattr(module, "run_ads_recharge"):
-            raise RuntimeError(f"Shopee Ads module is incomplete: {site.module_name}")
-
-    from backend.ads_database import self_check as ads_database_self_check
-    print("ADS_DATABASE_SELF_CHECK=" + str(ads_database_self_check()))
-
-    # Check the bundled BigSeller loader without creating a session or logging in.
-    from backend.services.bigseller_sync import load_bigseller_request_util
     from backend.services.bigseller_item_id_query import build_listing_query, export_item_ids
+    if current_profile()["name"] == "full":
+        # Exercise the dynamic imports that PyInstaller cannot discover on its own.
+        from backend.services.shopee_ads_recharge import SITE_OPTIONS, get_site_module
 
-    bigseller_util = load_bigseller_request_util()
-    for name in (
-        "login_bigseller_by_request", "build_api_url", "get_request_user_agent",
-        "get_listing_page_url", "build_request_headers",
-    ):
-        if not callable(getattr(bigseller_util, name, None)):
-            raise RuntimeError(f"BigSeller request module is incomplete: {name}")
+        for site in SITE_OPTIONS:
+            module = get_site_module(site.code)
+            if not hasattr(module, "run_ads_recharge"):
+                raise RuntimeError(f"Shopee Ads module is incomplete: {site.module_name}")
+
+        from backend.ads_database import self_check as ads_database_self_check
+        print("ADS_DATABASE_SELF_CHECK=" + str(ads_database_self_check()))
+
+        # Check the bundled BigSeller loader without creating a session or logging in.
+        from backend.services.bigseller_sync import load_bigseller_request_util
+
+        bigseller_util = load_bigseller_request_util()
+        for name in (
+            "login_bigseller_by_request", "build_api_url", "get_request_user_agent",
+            "get_listing_page_url", "build_request_headers",
+        ):
+            if not callable(getattr(bigseller_util, name, None)):
+                raise RuntimeError(f"BigSeller request module is incomplete: {name}")
+
+    else:
+        unavailable = {tool["key"] for tool in info["tools"] if tool["status"] == "unavailable"}
+        if unavailable != set(current_profile()["unavailable_tools"]):
+            raise RuntimeError("Limited build capability catalog is inconsistent")
+        for operation in (bridge.start_shopee_ads_recharge, bridge.start_bigseller_sync,
+                          bridge.start_temu_financial_export, bridge.start_balance_statistics):
+            result = operation({})
+            if result.get("ok") or not result.get("unavailable"):
+                raise RuntimeError("An unavailable operation was not blocked")
+        print("INTERNAL_RUNTIME_IMPORTS=skipped; profile=limited; capability_guards=passed")
 
     query = build_listing_query("self-check SKU")
     expected_query = {
@@ -424,6 +438,44 @@ def self_check() -> int:
     return 0
 
 
+def self_check_cli() -> int:
+    """Write a machine-readable result even for the windowed frozen executable."""
+    from contextlib import redirect_stderr, redirect_stdout
+    import hashlib
+    import io
+    import json
+    import traceback
+    from backend.app_bridge import APP_VERSION
+
+    report_path = next((arg.partition("=")[2] for arg in sys.argv
+                        if arg.startswith("--self-check-report=")), "")
+    log = io.StringIO()
+    report = {"version": APP_VERSION, "build_profile": current_profile(),
+              "scope": "offline bridge, frontend resources and synthetic workbook/checkpoint checks",
+              "live_business_validation": "not_run", "installation_acceptance": "not_run",
+              "internal_runtime_imports": "skipped" if current_profile()["name"] == "limited" else "checked"}
+    with redirect_stdout(log), redirect_stderr(log):
+        try:
+            exit_code = self_check()
+            report["status"] = "passed" if exit_code == 0 else "failed"
+        except Exception:
+            traceback.print_exc()
+            exit_code = 1
+            report["status"] = "failed"
+    report["log"] = log.getvalue()
+    if getattr(sys, "frozen", False):
+        digest = hashlib.sha256()
+        with Path(sys.executable).open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        report["executable"] = {"file": Path(sys.executable).name, "sha256": digest.hexdigest().upper()}
+    if report_path:
+        Path(report_path).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if sys.stdout is not None:
+        print(json.dumps(report, ensure_ascii=True, indent=2))
+    return exit_code
+
+
 def main() -> None:
     import webview
 
@@ -437,7 +489,7 @@ def main() -> None:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("HQYL.Automation")
     api = AppBridge()
     webview.create_window(
-        "寰球云联自动化平台",
+        "寰球云联自动化平台" + ("（精简版）" if current_profile()["name"] == "limited" else ""),
         index_html.as_uri(),
         js_api=api,
         width=1180,
@@ -449,5 +501,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     if "--self-check" in sys.argv:
-        raise SystemExit(self_check())
+        raise SystemExit(self_check_cli())
     main()

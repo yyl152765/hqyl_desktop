@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from backend.build_profile import require_dependency
+
 import csv
 import json
 import logging
@@ -244,6 +246,7 @@ def validate_lazada_withdrawal_payload(
 
 
 def _ensure_superbrowser_path() -> None:
+    require_dependency("superbrowser_process")
     global _SUPERBROWSER_ROOT
     if _SUPERBROWSER_ROOT is not None:
         return

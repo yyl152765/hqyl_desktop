@@ -11,7 +11,7 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from backend.update_sources import DEFAULT_UPDATE_MANIFEST_URL, installer_object_url
-from scripts.package_release import _release_output_path, package_release
+from scripts.package_release import _release_output_path, package_release, project_version
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -21,25 +21,15 @@ class PackagingContractTests(unittest.TestCase):
     def test_application_and_installer_versions_match(self):
         bridge = (PROJECT_ROOT / "backend" / "app_bridge.py").read_text(encoding="utf-8")
         installer = (PROJECT_ROOT / "packaging" / "hqyl_automation.iss").read_text(encoding="utf-8")
-        package_script = (PROJECT_ROOT / "scripts" / "package_release.py").read_text(encoding="utf-8")
         frontend = (PROJECT_ROOT / "frontend" / "assets" / "common.js").read_text(encoding="utf-8")
 
         app_version = re.search(r'^APP_VERSION = "([^"]+)"', bridge, re.MULTILINE)
         installer_version = re.search(r'^#define MyAppVersion "([^"]+)"', installer, re.MULTILINE)
-        package_version = re.search(r'^def package_release\(version: str = "([^"]+)"\)', package_script, re.MULTILINE)
-        package_cli_version = re.search(
-            r'else "([^"]+)"\s*\n\s*package_release\(ver\)',
-            package_script,
-            re.MULTILINE,
-        )
 
         self.assertIsNotNone(app_version)
         self.assertIsNotNone(installer_version)
-        self.assertIsNotNone(package_version)
-        self.assertIsNotNone(package_cli_version)
         self.assertEqual(app_version.group(1), installer_version.group(1))
-        self.assertEqual(app_version.group(1), package_version.group(1))
-        self.assertEqual(app_version.group(1), package_cli_version.group(1))
+        self.assertEqual(app_version.group(1), project_version(PROJECT_ROOT))
         self.assertIn(f'version: "{app_version.group(1)}"', frontend)
 
     def test_shopee_ads_runtime_is_bundled_by_pyinstaller(self):
@@ -106,7 +96,7 @@ class PackagingContractTests(unittest.TestCase):
         self.assertIn('$env:PYTHONHASHSEED = "0"', build_script)
 
     def test_release_packaging_rejects_invalid_versions(self):
-        for version in (None, "", "../0.2.41", "0.2.41/../../outside", "0.2", "0.2.41-beta"):
+        for version in (123, "", "../0.2.41", "0.2.41/../../outside", "0.2", "0.2.41-beta"):
             with self.subTest(version=version):
                 with self.assertRaises(ValueError):
                     package_release(version)

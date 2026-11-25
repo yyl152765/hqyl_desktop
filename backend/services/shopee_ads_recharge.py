@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from backend.build_profile import require_dependency
+
 import importlib
 from dataclasses import dataclass, field
 from types import ModuleType
@@ -51,6 +53,7 @@ _SUPERBROWSER_ROOT: str | None = None
 
 def _ensure_superbrowser_path() -> None:
     """加载本项目随附的运行组件，不查找相邻项目或外部路径。"""
+    require_dependency("superbrowser_process")
     global _SUPERBROWSER_ROOT
     if _SUPERBROWSER_ROOT is not None:
         return

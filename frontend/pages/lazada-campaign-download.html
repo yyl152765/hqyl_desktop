@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lazada 活动模板下载</title>
+    <link rel="icon" type="image/png" href="../assets/logo.png" />
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">紫鸟流程 / Lazada 营销中心</div><h1>Lazada 活动模板下载</h1></div>
+          <div id="taskBadge" class="status-pill idle" role="status">待运行</div>
+        </header>
+        <div class="layout-grid">
+          <form id="downloadForm" class="surface form-surface">
+            <div class="section-head"><h2>下载条件</h2></div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon ziniao-icon" aria-hidden="true">Z</span>
+              <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a>
+            </div>
+            <div class="form-grid">
+              <label class="store-field"><span>店铺名称 <small>每行一个，按店名自动识别站点</small></span>
+                <textarea id="store" required spellcheck="false" aria-describedby="siteHint" placeholder="输入紫鸟店铺名称，每行一个"></textarea>
+              </label>
+              <p id="siteHint" class="form-note store-field" aria-live="polite">支持泰国、菲律宾、马来西亚、印尼、越南和新加坡。</p>
+              <label><span>首页活动名称</span><input id="campaign" required spellcheck="false" placeholder="例如 A+ Other" /></label>
+              <label><span>活动模式</span>
+                <select id="mode" required>
+                  <option value="invited">特邀活动（特别邀请）</option>
+                  <option value="unregistered">未报名活动</option>
+                </select>
+              </label>
+              <label class="store-field"><span>子活动完整名称</span><input id="scene" required spellcheck="false" placeholder="复制详情页上的标题，保留方括号前缀、折扣和日期" /></label>
+              <div class="output-field">
+                <label for="outputDir"><span>保存目录</span></label>
+                <div class="input-action"><input id="outputDir" required /><button id="chooseDirBtn" type="button" class="secondary">选择目录</button></div>
+              </div>
+              <label><span>每家店最长等待时间（分钟）</span><input id="timeoutMinutes" type="number" min="1" step="1" required /></label>
+            </div>
+            <div class="actions">
+              <button id="downloadBtn" type="submit" class="primary" disabled>下载 Excel 模板</button>
+              <button id="openFolderBtn" type="button" class="secondary" disabled>打开文件所在目录</button>
+            </div>
+          </form>
+          <section class="surface log-surface">
+            <div class="section-head tight">
+              <div><h2>运行日志</h2><p>模板生成期间，每两分钟关闭历史文件窗口，刷新活动页并检查导出记录。</p></div>
+              <button id="copyLogBtn" type="button" class="secondary compact-btn">复制日志</button>
+            </div>
+            <pre id="logBox" class="log-box" tabindex="0" aria-label="运行日志"></pre>
+          </section>
+        </div>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js"></script>
+    <script src="../assets/pages/lazada-campaign-download.js?v=20261123-campaign-modes"></script>
+  </body>
+</html>

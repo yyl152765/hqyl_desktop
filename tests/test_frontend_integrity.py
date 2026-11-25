@@ -41,6 +41,7 @@ PAGE_SCRIPTS = {
     FRONTEND / "pages" / "lazada-ads-data.html": FRONTEND / "assets" / "pages" / "lazada-ads-data.js",
     FRONTEND / "pages" / "lazada-bill-detail.html": FRONTEND / "assets" / "pages" / "lazada-bill-detail.js",
     FRONTEND / "pages" / "lazada-campaign-workbook.html": FRONTEND / "assets" / "pages" / "lazada-campaign-workbook.js",
+    FRONTEND / "pages" / "lazada-campaign-download.html": FRONTEND / "assets" / "pages" / "lazada-campaign-download.js",
     FRONTEND / "pages" / "vietnam-income-reconciliation.html": FRONTEND / "assets" / "pages" / "vietnam-income-reconciliation.js",
     FRONTEND / "pages" / "bigseller-sync.html": FRONTEND / "assets" / "pages" / "bigseller-sync.js",
     FRONTEND / "pages" / "bigseller-item-id-query.html": FRONTEND / "assets" / "pages" / "bigseller-item-id-query.js",

@@ -28,6 +28,10 @@ const HQYL = (() => {
     throw new Error("pywebview bridge is not ready");
   }
 
+  function unavailableTool(key) {
+    return state.info?.tools?.find((tool) => tool.key === key && tool.status === "unavailable");
+  }
+
   const SIDEBAR_STORAGE_KEY = "hqyl.sidebar.v1";
   const SIDEBAR_FAVORITE_LIMIT = 5;
   // One catalog drives the full menu, search results, favorites, and current location.
@@ -66,6 +70,7 @@ const HQYL = (() => {
       { id: "lazada_ads_monthly", href: "lazada-ads-monthly.html", name: "Lazada 广告月报", icon: "告", tag: "Lazada", category: "Lazada 广告", description: "六站点广告、联盟及优惠券月报导出", keywords: "Lazada 广告 联盟 优惠券 真实花费 月报 支出 Spend" },
       { id: "lazada_ads_data", href: "lazada-ads-data.html", name: "广告数据", icon: "广", tag: "Lazada", category: "Lazada 广告", description: "指定日期采集广告费与业绩并写入 Sheet", keywords: "泰国 钉钉 广告 支出 业绩 Sheet" },
       { id: "lazada_bill_detail", href: "lazada-bill-detail.html", name: "后台收支数据", icon: "账", tag: "Lazada", category: "Lazada 账单", description: "按国家采集店铺后台收支数据并写入指定 Sheet", keywords: "泰国 菲律宾 马来 印尼 越南 钉钉 总金额 收入 扣减项 截图 账单区间" },
+      { id: "lazada_campaign_download", href: "lazada-campaign-download.html", name: "活动模板下载", icon: "活", tag: "Lazada", category: "Lazada 活动", description: "下载指定子活动的 Excel 模板", keywords: "报名 模板 子活动 站点 下载 Excel" },
     ] },
     { id: "tools", name: "通用工具", icon: "表", keywords: "本地 Excel 表格", items: [
       { id: "lazada_campaign_workbook", href: "lazada-campaign-workbook.html", name: "Excel 折扣筛选", icon: "表", tag: "Excel", category: "本地表格", description: "批量导入表格、按最低折扣率筛选并导出", keywords: "活动 导入 上传 模板 Excel xlsx xlsm 折扣 价格 筛选" },
@@ -226,7 +231,8 @@ const HQYL = (() => {
       const favorite = sidebarPreferences.favorites.includes(item.id);
       const path = `${item.group.name} / ${item.category}`;
       const title = `${item.name}\n${path}\n${item.description}`;
-      return `<div class="nav-row${selected ? " active" : ""}${searchResult ? " nav-search-result" : ""}"><a class="nav-leaf${selected ? " active" : ""}" data-page="${item.id}" href="${item.href}" title="${escape(title)}" aria-label="${escape(`${item.name}，${path}，${item.description}`)}"${selected ? ' aria-current="page"' : ""}><span class="nav-leaf-icon" aria-hidden="true">${escape(item.icon)}</span><span class="nav-leaf-copy"><strong>${escape(item.name)}</strong>${searchResult ? `<small class="nav-result-path">${escape(path)}</small>` : ""}</span>${searchResult ? "" : `<span class="nav-item-tag">${escape(item.tag)}</span>`}</a><button type="button" class="nav-favorite-toggle" data-nav-favorite="${item.id}" aria-pressed="${favorite}" aria-label="${favorite ? "取消常用" : "设为常用"}：${escape(item.name)}" title="${favorite ? "取消常用" : "设为常用（最多 5 个）"}">${favorite ? "★" : "☆"}</button></div>`;
+      const unavailable = unavailableTool(item.id);
+      return `<div class="nav-row${selected ? " active" : ""}${searchResult ? " nav-search-result" : ""}"><a class="nav-leaf${selected ? " active" : ""}" data-page="${item.id}" ${unavailable ? 'aria-disabled="true" tabindex="-1"' : `href="${item.href}"`} title="${escape(unavailable?.unavailable_reason || title)}" aria-label="${escape(`${item.name}，${path}，${unavailable ? '精简版不可用' : item.description}`)}"${selected ? ' aria-current="page"' : ""}><span class="nav-leaf-icon" aria-hidden="true">${escape(item.icon)}</span><span class="nav-leaf-copy"><strong>${escape(item.name)}</strong>${searchResult ? `<small class="nav-result-path">${escape(unavailable ? '精简版不可用' : path)}</small>` : ""}</span>${searchResult ? "" : `<span class="nav-item-tag">${escape(unavailable ? '不可用' : item.tag)}</span>`}</a><button type="button" class="nav-favorite-toggle" data-nav-favorite="${item.id}" aria-pressed="${favorite}" aria-label="${favorite ? "取消常用" : "设为常用"}：${escape(item.name)}" title="${favorite ? "取消常用" : "设为常用（最多 5 个）"}">${favorite ? "★" : "☆"}</button></div>`;
     }
     function update() {
       const focused = document.activeElement;
@@ -717,10 +723,30 @@ const HQYL = (() => {
       const info = await api().get_app_info();
       if (!info.ok) throw new Error(info.error || "应用信息加载失败");
       state.info = info;
+      sidebarController?.update();
       state.outputDir = (info.settings || {}).output_dir || "";
       document.title = `${page.title} - ${info.app.name}`;
       if ($("appVersion")) $("appVersion").textContent = info.app.version;
+      if (info.app.build_profile?.name === "limited") {
+        const channel = document.querySelector(".side-channel");
+        if (channel) channel.textContent = "精简版";
+        if ($("updateSummary")) $("updateSummary").textContent = "部分功能不可用，详见工作台";
+      }
       applyAccountState(info.account_state || {});
+      if (unavailableTool(page.key)) {
+        const notice = document.createElement("section");
+        notice.className = "surface limited-build-notice";
+        const heading = document.createElement("h1");
+        heading.textContent = `${page.title} · 精简版不可用`;
+        const explanation = document.createElement("p");
+        explanation.textContent = unavailableTool(page.key).unavailable_reason;
+        const back = document.createElement("a");
+        back.href = "dashboard.html";
+        back.textContent = "返回工作台";
+        notice.append(heading, explanation, back);
+        document.querySelector("main")?.replaceChildren(notice);
+        return;
+      }
       if (typeof page.init === "function") await page.init(info);
       if (typeof api().get_latest_task_status === "function") {
         const latestGlobalTask = await api().get_latest_task_status();
@@ -823,6 +849,11 @@ const HQYL = (() => {
       async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "1.0.6" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, warehouse_sales_export: { month_range: { start_month: "2026-06", end_month: "2026-11" }, categories: [], warehouses: [], output_dir: previewScopedDirs("warehouse_sales_export").output_dir }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
       async get_latest_task_status(tool) { return tasks[tool] || { ok: false, empty: true }; },
       async get_task_status(id) { return Object.values(tasks).find((task) => task.id === id) || { ok: false, error: "任务不存在" }; },
+      async get_lazada_campaign_download_info() {
+        return { ok: true, output_dir: "C:\\Preview\\Lazada活动模板", timeout_minutes: 30,
+          site_aliases: { 菲律宾: "PH", 马来西亚: "MY", 马来: "MY", 泰国: "TH", 印度尼西亚: "ID", 印尼: "ID", 越南: "VN", 新加坡: "SG" } };
+      },
+      async start_lazada_campaign_download() { return { ok: false, error: "请在桌面应用中运行活动模板下载" }; },
       async get_lazada_campaign_workbook_info() { return { ok: true, preview: true, workflow: "local_excel", supports_reprice_equal_prices: true, supports_sku_price_filter: true, supports_removed_sku_export: true, default_threshold: "0.95", output_dir: "C:\\Preview\\Excel折扣筛选", max_files: 100 }; },
       async choose_lazada_campaign_files() { return { ok: true, paths: ["C:\\Preview\\商品表格.xlsx"] }; },
       async choose_lazada_campaign_sku_price_file() { return { ok: true, preview: true, path: "C:\\Preview\\SKU价格表.xlsx" }; },
