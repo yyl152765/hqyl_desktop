@@ -8,6 +8,11 @@
 
   const busy = () => running || preparing;
   const activeId = () => HQYL.activeAccount("ziniao")?.id || "";
+  const allStores = () => $("storeScope").value === "all_indonesia";
+  const selectionPayload = () => ({
+    store_scope: $("storeScope").value,
+    store_names: allStores() ? "" : $("storeNames").value.trim(),
+  });
   const accountPayload = () => ({
     account_id: activeId(),
     client_path: $("clientPath").value.trim(),
@@ -30,12 +35,13 @@
     const rawNames = $("storeNames").value;
     const month = $("invoiceMonth").value.trim();
     const outDir = $("outputDir").value.trim();
-    if (!month || !rawNames.trim() || !outDir) {
-      return "请选择账单月份、填写店铺名并设置输出目录。";
+    if (!month || !outDir) {
+      return "请选择账单月份并设置输出目录。";
     }
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
       return "账单月份格式必须为 YYYY-MM。";
     }
+    if (allStores()) return "";
     const lines = rawNames.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     if (!lines.length) {
       return "请至少输入一个 Shopee 印尼店铺名或店号简称。";
@@ -48,10 +54,14 @@
 
   function controls() {
     const disabled = busy();
-    ["invoiceMonth", "storeNames", "outputDir", "chooseOutputBtn", "chooseClientBtn", "chooseDriverBtn"].forEach(id => {
+    ["invoiceMonth", "storeScope", "storeNames", "outputDir", "chooseOutputBtn", "chooseClientBtn", "chooseDriverBtn"].forEach(id => {
       $(id).disabled = disabled;
     });
-    const hasBasicInputs = Boolean($("invoiceMonth").value.trim() && $("storeNames").value.trim());
+    $("namesPanel").hidden = allStores();
+    $("storeNames").disabled = disabled || allStores();
+    $("previewBtn").textContent = allStores() ? "查看全部店铺" : "预览匹配店铺";
+    $("startBtn").textContent = allStores() ? "开始处理全部店铺" : "开始下载";
+    const hasBasicInputs = Boolean($("invoiceMonth").value.trim() && (allStores() || $("storeNames").value.trim()));
     $("previewBtn").disabled = disabled || !hasBasicInputs;
     $("startBtn").disabled = disabled || Boolean(validation());
     $("retryBtn").disabled = disabled || !activeId() || !snapshot?.can_retry || (Boolean(profile) && snapshot.profile !== profile);
@@ -220,7 +230,7 @@
       const payload = {
         ...accountPayload(),
         month: $("invoiceMonth").value.trim(),
-        store_names: $("storeNames").value,
+        ...selectionPayload(),
       };
       const version = revision;
       const result = await call("preview_shopee_id_monthly_invoice_stores", payload);
@@ -230,10 +240,11 @@
         showIssue(issueText);
       }
       if (result.stores && result.stores.length) {
-        const matchedText = result.stores
+        const matchedText = result.stores.slice(0, 10)
           .map(item => `${item.requested_name || item.store_name} → ${item.store_name} (ID ${item.store_id})`)
           .join("；");
-        showPreview(`已匹配 ${result.stores.length} 家 Shopee 印尼店铺：${matchedText}`);
+        const remaining = result.stores.length > 10 ? `；另有 ${result.stores.length - 10} 家` : "";
+        showPreview(`当前账号共匹配 ${result.stores.length} 家 Shopee 印尼店铺：${matchedText}${remaining}。启动时会重新核对店铺名单。`);
       }
     });
   }
@@ -274,14 +285,14 @@
         ? { manifest_path: snapshot?.manifest_path }
         : {
             month: $("invoiceMonth").value.trim(),
-            store_names: $("storeNames").value.trim(),
+            ...selectionPayload(),
             output_dir: $("outputDir").value.trim(),
           }),
     };
     const version = ++revision;
     showIssue("");
     $("connectionNotice").textContent = retry
-      ? "正在恢复本账号的税票下载批次…"
+      ? "正在恢复本批名单，只继续未完成店铺…"
       : "正在核对紫鸟账号下的 Shopee 印尼店铺并启动下载…";
     await HQYL.startTask(
       async () => {
@@ -293,7 +304,7 @@
           );
           if (version === revision && payload.account_id === activeId()) {
             profile = task.context?.profile || profile;
-            $("connectionNotice").textContent = "任务已启动，按名单顺序逐店下载 Master Invoice 与 Tax Invoice。";
+            $("connectionNotice").textContent = "任务已启动，将逐店下载收入 Excel、服务费账单与税票 PDF，成功店铺可在重试时跳过。";
           }
           return task;
         } catch (error) {
@@ -331,13 +342,15 @@
   const page = {
     key: "shopee_id_monthly_invoice",
     taskKey: "shopee_id_monthly_invoice",
-    title: "Shopee 印尼月度税票下载",
+    title: "Shopee 印尼月度账单与税票下载",
     taskContextFilter: context =>
       Boolean(activeId()) &&
       context.account_id === activeId() &&
       (!profile || !context.profile || context.profile === profile),
     async init() {
       accountId = activeId();
+      if (!$("storeScope").value) $("storeScope").value = "all_indonesia";
+      $("storeScope").addEventListener("change", invalidate);
       $("exportForm").addEventListener("submit", event => {
         event.preventDefault();
         void start(false);
@@ -401,7 +414,7 @@
       $("logBox").textContent = "";
       $("taskBadge").className = "status-pill idle";
       $("taskBadge").textContent = "待运行";
-      $("statusText").textContent = "请填写本账号的店铺名";
+      $("statusText").textContent = "已切换账号，请核对店铺范围";
       $("connectionNotice").textContent = "账号已切换，开始下载时将使用当前紫鸟账号匹配 Shopee 印尼店铺。";
       $("resultMessage").textContent = "所选账号尚未加载批次。";
       void loadInfo();
@@ -417,7 +430,7 @@
       $("completedCount").textContent = "0";
       $("recordCount").textContent = "0";
       $("noDataCount").textContent = "无税票 0 · 失败 0";
-      $("invoiceBreakdown").textContent = "Master 0 · Tax 0";
+      $("invoiceBreakdown").textContent = "收入 Excel 0 · Master 0 · Tax 0";
       $("outputFile").textContent = "未生成";
       $("batchLabel").textContent = "准备新任务";
       $("resultMessage").textContent = "正在启动，请稍候…";

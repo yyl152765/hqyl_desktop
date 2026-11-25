@@ -104,6 +104,54 @@ class ShopeeIdMonthlyBridgeTests(TestCase):
                 f"Forbidden import in {rel}: {imported}",
             )
 
+    def test_all_mode_reads_full_bound_catalogue_and_start_uses_fresh_snapshot(self):
+        from tests.test_shopee_id_all_stores import catalog
+        self.browser.list_stores.return_value = catalog()
+        payload = {"account_id": self.account.id, "store_scope": "all_indonesia", "month": "2026-10"}
+        preview = self.bridge.preview_shopee_id_monthly_invoice_stores(payload)
+        self.assertTrue(preview["ok"], preview)
+        self.assertTrue(preview["can_start"])
+        self.assertEqual(len(preview["stores"]), 211)
+        self.assertEqual(preview["store_scope"], "all_indonesia")
+        self.browser.prepare_task.assert_not_called()
+        # The catalogue changed since preview; startup must take a new snapshot.
+        self.browser.list_stores.return_value = catalog(212)
+        start = self.bridge.start_shopee_id_monthly_invoice(payload)
+        self.assertTrue(start["ok"], start)
+        runner = self.bridge.tasks.start.call_args.args[1]
+        context = self.bridge.tasks.start.call_args.kwargs["context"]
+        with patch.object(app_bridge.shopee_id_monthly_invoice, "run_batch", return_value={}) as run:
+            runner(lambda _: None)
+        record = load_batch(context["manifest_path"], self.profile)
+        self.assertEqual(record["store_scope"], "all_indonesia")
+        self.assertEqual(len(record["stores"]), 212)
+        self.assertEqual(self.browser.list_stores.call_count, 2)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(self.factory.call_args.args[0]["username"], self.account.username)
+
+        # Retry must use the saved batch even if the account gains more stores.
+        self.browser.list_stores.reset_mock()
+        self.browser.list_stores.return_value = catalog(213)
+        retry = self.bridge.retry_shopee_id_monthly_invoice(context)
+        self.assertTrue(retry["ok"], retry)
+        with patch.object(app_bridge.shopee_id_monthly_invoice, "run_batch", return_value={}):
+            self.bridge.tasks.start.call_args.args[1](lambda _: None)
+        self.browser.list_stores.assert_not_called()
+        self.assertEqual(len(load_batch(context["manifest_path"])["stores"]), 212)
+
+    def test_all_mode_empty_account_stops_before_batch_or_store_export(self):
+        self.browser.list_stores.return_value = []
+        payload = {"account_id": self.account.id, "store_scope": "all_indonesia", "month": "2026-10"}
+        preview = self.bridge.preview_shopee_id_monthly_invoice_stores(payload)
+        self.assertFalse(preview["can_start"])
+        self.assertTrue(self.bridge.start_shopee_id_monthly_invoice(payload)["ok"])
+        with patch.object(app_bridge.shopee_id_monthly_invoice, "create_batch") as create:
+            with self.assertRaisesRegex(ValueError, "未找到"):
+                self.bridge.tasks.start.call_args.args[1](lambda _: None)
+        create.assert_not_called()
+        self.browser.open_store.assert_not_called()
+        self.assertFalse(self.bridge._shopee_id_invoice_active)
+
     def test_bound_account_shorthand_exclusive_task_and_scoped_output_dir(self) -> None:
         scoped_dir = str(self.root / "shopee-id-invoices")
         self.settings.tool_output_dirs[directory_scope_key("shopee_id_monthly_invoice")] = scoped_dir
@@ -320,7 +368,31 @@ vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
   await page.init();
   assert.equal(e('invoiceMonth').value, '2026-10');
   assert.equal(e('outputDir').value, 'D:/ShopeeIDInvoices');
+  assert.equal(e('storeScope').value, 'all_indonesia');
+  assert.equal(e('namesPanel').hidden, true);
+  assert.equal(e('storeNames').disabled, true);
+  assert.equal(e('startBtn').disabled, false);
+  e('previewBtn').listeners.click();
+  assert.equal(e('storeScope').disabled, true);
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(sentPreview.store_scope, 'all_indonesia');
+  assert.equal(sentPreview.store_names, '');
+  e('exportForm').listeners.submit({ preventDefault() {} });
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(sentStart.store_scope, 'all_indonesia');
+  assert.equal(sentStart.store_names, '');
+  page.setRunning(true);
+  assert.equal(e('storeScope').disabled, true);
+  page.setRunning(false);
+  e('storeScope').value = 'named';
+  e('storeScope').listeners.change();
+  assert.equal(e('namesPanel').hidden, false);
+  assert.equal(e('storeNames').disabled, false);
+  assert.equal(e('previewBox').hidden, true);
   assert.equal(e('startBtn').disabled, true);
+  e('storeNames').value = Array.from({length: 211}, (_, i) => `印尼${i + 1}`).join('\n');
+  e('storeNames').listeners.input();
+  assert.equal(e('startBtn').disabled, false);
   e('storeNames').value = '印尼046';
   e('storeNames').listeners.input();
   assert.equal(e('startBtn').disabled, false);
@@ -332,6 +404,7 @@ vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
   e('exportForm').listeners.submit({ preventDefault() {} });
   await new Promise(r => setTimeout(r, 0));
   assert.equal(sentStart.month, '2026-10');
+  assert.equal(sentStart.store_scope, 'named');
   assert.equal(sentStart.store_names, '印尼046');
   assert.deepEqual(savedDir, { tool: 'shopee_id_monthly_invoice', output_dir: 'D:/ShopeeIDInvoices' });
   page.applyResult({
@@ -351,6 +424,11 @@ vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
   assert.equal(e('invoiceBreakdown').textContent, '收入 Excel 2 · Master 1 · Tax 0');
   assert.equal(e('storeResults').childNodes[0].childNodes.length, 8);
   assert.match(e('storeResults').childNodes[0].childNodes[7].textContent, /当月无税票/);
+  account = 'ziniao-2';
+  page.onAccountsChanged();
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(e('retryBtn').disabled, true);
+  assert.equal(e('previewBox').hidden, true);
 })().catch(err => { console.error(err); process.exitCode = 1; });
 """
         proc = subprocess.run(

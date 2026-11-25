@@ -28,7 +28,7 @@ from backend.services.shopee_id_income_report import INCOME_REPORT_TYPE, validat
 SCHEMA = "shopee_id_monthly_invoice_v2"
 LEGACY_SCHEMA = "shopee_id_monthly_invoice_v1"
 TERMINAL = {"success"}
-MAX_STORES = 200
+STORE_SCOPES = {"named", "all_indonesia"}
 
 _OTHER_COUNTRY_CN_RE = re.compile(
     r"泰国|菲律宾|越南|马来(?:西亚)?|新加坡|台湾|巴西|墨西哥|哥伦比亚|智利"
@@ -38,7 +38,7 @@ _OTHER_COUNTRY_CODE_RE = re.compile(
     re.IGNORECASE,
 )
 _OTHER_PLATFORM_NAME_RE = re.compile(
-    r"(?:^|[\s\-_])(?:lz|lazada|lzmall|lz跨境|temu|tk|tiktok|bigseller)(?:[\s\-_\d]|$)",
+    r"(?:^|[\s\-_])(?:lz|lazada|lzmall|lz跨境|temu|tk|tiktok|bigseller)(?=[\s\-_\d\u3400-\u9fff]|$)",
     re.IGNORECASE,
 )
 _INDONESIA_MARKER_RE = re.compile(
@@ -92,7 +92,7 @@ def validate_month(value: Any, *, today: date | None = None) -> str:
 
 
 def parse_store_names(value: Any) -> list[str]:
-    """Parse and deduplicate store names while rejecting empty or excessive lists."""
+    """Parse and deduplicate store names; lists are not capped at 200 stores."""
     if isinstance(value, str):
         raw_lines = value.splitlines()
     elif isinstance(value, (list, tuple)):
@@ -112,9 +112,22 @@ def parse_store_names(value: Any) -> list[str]:
             names.append(cleaned)
     if not names:
         raise ValueError("请至少填写一个 Shopee 印尼店铺名或店号简称，每行一个")
-    if len(names) > MAX_STORES:
-        raise ValueError(f"单批最多支持 {MAX_STORES} 个店铺")
     return names
+
+
+def validate_store_selection(payload: Mapping[str, Any]) -> dict[str, Any]:
+    # Older callers omit the scope and retain explicit-name behavior.
+    scope = payload.get("store_scope", "named")
+    if not isinstance(scope, str) or scope not in STORE_SCOPES:
+        raise ValueError("店铺范围无效，请选择全部印尼 Shopee 店铺或指定店铺")
+    if scope == "all_indonesia":
+        return {"store_scope": scope, "store_names": []}
+    raw_stores = payload.get("store_names")
+    names = parse_store_names(raw_stores)
+    raw_lines = raw_stores.splitlines() if isinstance(raw_stores, str) else raw_stores
+    if len([line for line in raw_lines if _normalize_text(line)]) != len(names):
+        raise ValueError("店铺名称不能重复，请删除重复项")
+    return {"store_scope": scope, "store_names": names}
 
 
 def validate_request(
@@ -131,22 +144,13 @@ def validate_request(
     else:
         month = validate_month(raw_month, today=today)
 
-    raw_stores = payload.get("store_names")
-    names = parse_store_names(raw_stores)
-    if isinstance(raw_stores, str):
-        non_empty = [_normalize_text(line) for line in raw_stores.splitlines() if _normalize_text(line)]
-    elif isinstance(raw_stores, (list, tuple)):
-        non_empty = [_normalize_text(line) for line in raw_stores if _normalize_text(line)]
-    else:
-        non_empty = names
-    if len(non_empty) != len(names):
-        raise ValueError("店铺名称不能重复，请删除重复项")
+    selection = validate_store_selection(payload)
 
     raw_output = str(payload.get("output_dir") or default_output_dir or "").strip()
     output_dir = writable_directory(raw_output)
     return {
         "month": month,
-        "store_names": names,
+        **selection,
         "output_dir": str(output_dir),
     }
 
@@ -208,9 +212,9 @@ def _parse_shorthand(query: str) -> tuple[str, int] | None:
     return None
 
 
-def match_stores(names: Any, catalog: list[dict[str, Any]]) -> dict[str, Any]:
-    """Match requested names against ZiNiao catalog by exact full name or unique ID shorthand."""
-    requested = parse_store_names(names)
+def _validated_catalog(catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not isinstance(catalog, list):
+        raise ValueError("紫鸟店铺列表结构无效")
     sanitized_catalog: list[dict[str, Any]] = []
     seen_catalog_ids: set[str] = set()
     for row in catalog:
@@ -228,6 +232,31 @@ def match_stores(names: Any, catalog: list[dict[str, Any]]) -> dict[str, Any]:
             "store_name": store_name,
             "platform_name": platform_name,
         })
+    return sanitized_catalog
+
+
+def select_stores(selection: Mapping[str, Any], catalog: list[dict[str, Any]]) -> dict[str, Any]:
+    selected = validate_store_selection(selection)
+    if selected["store_scope"] == "named":
+        return match_stores(selected["store_names"], catalog)
+    stores = [store for store in _validated_catalog(catalog)
+              if is_shopee_store(store) and classify_store_country(store) == "ID"]
+    def ordering(store):
+        numbers = extract_id_shop_numbers(store["store_name"])
+        return (min(numbers) if len(numbers) == 1 else float("inf"),
+                store["store_name"].casefold(), store["store_id"])
+    stores.sort(key=ordering)
+    return {
+        "stores": [{**copy.deepcopy(s), "requested_name": s["store_name"]} for s in stores],
+        "issues": [] if stores else [{"name": "全部印尼 Shopee 店铺", "error": "当前紫鸟账号下未找到可确认的印尼 Shopee 店铺", "candidates": []}],
+        "can_start": bool(stores),
+    }
+
+
+def match_stores(names: Any, catalog: list[dict[str, Any]]) -> dict[str, Any]:
+    """Match requested names against ZiNiao catalog by exact full name or unique ID shorthand."""
+    requested = parse_store_names(names)
+    sanitized_catalog = _validated_catalog(catalog)
 
     matched: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
@@ -368,7 +397,13 @@ def create_batch(
     profile: str,
     month: str,
     stores: list[dict[str, Any]],
+    *,
+    store_scope: str = "named",
 ) -> Path:
+    if not isinstance(store_scope, str) or store_scope not in STORE_SCOPES:
+        raise ValueError("店铺范围无效")
+    if not stores:
+        raise ValueError("批次没有可处理的店铺")
     validated_month = validate_month(month)
     root_dir = writable_directory(output_dir)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -384,6 +419,7 @@ def create_batch(
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "profile": profile,
         "month": validated_month,
+        "store_scope": store_scope,
         "status": "pending",
         "error": "",
         "stores": [
@@ -426,8 +462,12 @@ def load_batch(path: str | Path, profile: str | None = None) -> dict[str, Any]:
     if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", str(record.get("month") or "")):
         raise ValueError("批次月份格式无效")
     stores = record.get("stores")
-    if not isinstance(stores, list) or not stores or len(stores) > MAX_STORES:
+    if not isinstance(stores, list) or not stores:
         raise ValueError("批次店铺清单无效")
+    scope = record.get("store_scope", "named")
+    if not isinstance(scope, str) or scope not in STORE_SCOPES:
+        raise ValueError("批次店铺范围无效")
+    record["store_scope"] = scope
     invoices_root = (manifest_path.parent / "invoices").resolve()
     seen_ids: set[str] = set()
     for store in stores:
@@ -502,6 +542,7 @@ def public_result(path: str | Path, record: dict[str, Any] | None = None) -> dic
         "run_id": record["run_id"],
         "profile": record["profile"],
         "month": record["month"],
+        "store_scope": record.get("store_scope", "named"),
         "status": record["status"],
         "manifest_path": str(manifest_path),
         "output_dir": str(manifest_path.parent),

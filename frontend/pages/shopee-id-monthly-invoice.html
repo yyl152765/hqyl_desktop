@@ -24,7 +24,7 @@
         </section>
         <section class="layout-grid">
           <form id="exportForm" class="surface form-surface">
-            <div class="section-head"><div><h2>下载条件</h2><p>选择已完成的历史自然月，填写紫鸟完整店铺名或印尼店号简称（如 印尼046）。</p></div><span class="section-badge">印尼 · Excel / PDF</span></div>
+            <div class="section-head"><div><h2>下载条件</h2><p>默认遍历当前紫鸟账号的全部印尼 Shopee 店铺，无需逐个输入或拆分名单。</p></div><span class="section-badge">印尼 · Excel / PDF</span></div>
             <div class="flow-account-bar">
               <span class="flow-account-icon ziniao-icon">Z</span>
               <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
@@ -33,16 +33,17 @@
             <p id="connectionNotice" class="temu-export-note" role="status">开始后自动使用所选紫鸟账号核对 Shopee 印尼店铺，并逐店下载所选月份的收入 Excel、Master Invoice 与 Tax Invoice。</p>
             <div class="form-grid">
               <label><span>账单月份 <small>仅支持已结束自然月</small></span><input id="invoiceMonth" type="month" required /></label>
+              <label><span>店铺范围</span><select id="storeScope"><option value="all_indonesia" selected>全部印尼 Shopee 店铺</option><option value="named">只处理指定店铺</option></select></label>
               <label><span>紫鸟客户端</span><div class="input-action"><input id="clientPath" readonly /><button id="chooseClientBtn" class="secondary" type="button">选择</button></div></label>
               <label><span>驱动目录</span><div class="input-action"><input id="driverPath" readonly /><button id="chooseDriverBtn" class="secondary" type="button">选择</button></div></label>
-              <label id="namesPanel" class="store-field"><span>紫鸟店铺名 / 印尼店号简称 <small>每行一个，支持完整店铺名或唯一简称（如 印尼046）</small></span><textarea id="storeNames" spellcheck="false" placeholder="例如：&#10;印尼046&#10;操作员-SP印尼047-本土"></textarea></label>
+              <label id="namesPanel" class="store-field" hidden><span>紫鸟店铺名 / 印尼店号简称 <small>每行一个，支持完整店铺名或唯一简称（如 印尼046），不限200家</small></span><textarea id="storeNames" spellcheck="false" placeholder="例如：&#10;印尼046&#10;操作员-SP印尼047-本土"></textarea></label>
             </div>
             <div id="startIssues" class="temu-export-warning" hidden role="alert"></div>
             <div id="previewBox" class="temu-export-note" hidden role="status"></div>
             <label class="temu-output-label"><span>输出目录</span><div class="input-action"><input id="outputDir" placeholder="输入或选择本地输出目录" /><button id="chooseOutputBtn" type="button" class="secondary">选择目录</button></div></label>
             <div class="actions">
-              <button id="previewBtn" class="secondary" type="button" disabled>预览匹配店铺</button>
-              <button id="startBtn" class="primary" type="submit" disabled>开始下载</button>
+              <button id="previewBtn" class="secondary" type="button" disabled>查看全部店铺</button>
+              <button id="startBtn" class="primary" type="submit" disabled>开始处理全部店铺</button>
             </div>
             <p class="temu-export-note">先检查完整导出历史：已有整月收入报表就直接下载，正在生成则等待；没有才选择月初至月末并提交一次 Export。每行税票同时下载两类 PDF。页面提示 No receipt found 时仍需保存收入 Excel。所有文件保留原名并校验 SHA-256。</p>
           </form>
@@ -51,7 +52,7 @@
           </div>
         </section>
         <section class="surface">
-          <div class="section-head"><div><h2>批次结果</h2><p id="resultMessage" aria-live="polite">尚未运行。填写月份、店铺名和输出目录后，点击开始下载。</p></div><span id="batchLabel" class="section-badge">尚无批次</span></div>
+          <div class="section-head"><div><h2>批次结果</h2><p id="resultMessage" aria-live="polite">尚未运行。选择月份、店铺范围和输出目录后开始；已成功店铺在重试时跳过。</p></div><span id="batchLabel" class="section-badge">尚无批次</span></div>
           <div class="actions"><button id="openDirectoryBtn" type="button" class="secondary" disabled>打开批次目录</button><button id="retryBtn" type="button" class="secondary" disabled>重试失败店铺</button></div>
           <div class="collection-table-wrap"><table><thead><tr><th>店铺名</th><th>状态</th><th>收入 Excel</th><th>税票行数</th><th>Master Invoice</th><th>Tax Invoice</th><th>保存目录</th><th>说明 / 失败原因</th></tr></thead><tbody id="storeResults"><tr><td colspan="8">尚未运行</td></tr></tbody></table></div>
         </section>

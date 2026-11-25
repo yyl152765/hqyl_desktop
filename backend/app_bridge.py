@@ -191,7 +191,7 @@ from backend.update_service import (
 )
 
 
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 APP_NAME = "寰球云联自动化平台"
 
 
@@ -2449,13 +2449,13 @@ class AppBridge:
                     if raw_month is None
                     else shopee_id_monthly_invoice.validate_month(raw_month)
                 )
-                names = shopee_id_monthly_invoice.parse_store_names(data.get("store_names"))
+                selection = shopee_id_monthly_invoice.validate_store_selection(data)
                 request = self._payload_with_account(data, "ziniao")
                 profile = ziniao_account_profile(request)
                 with ZiniaoBrowser(request) as browser:
                     browser.ready()
                     current_stores = browser.list_stores()
-                result = shopee_id_monthly_invoice.match_stores(names, current_stores)
+                result = shopee_id_monthly_invoice.select_stores(selection, current_stores)
                 self._shopee_id_invoice_previews.clear()
                 token = ""
                 if result["can_start"]:
@@ -2470,6 +2470,7 @@ class AppBridge:
                     "ok": True,
                     **result,
                     "month": month,
+                    "store_scope": selection["store_scope"],
                     "preview_token": token,
                     "profile": profile,
                     "account_id": request["account_id"],
@@ -2529,16 +2530,18 @@ class AppBridge:
                     # a normal-mode client or accessing any account's stores.
                     browser.prepare_task(progress=progress)
                     if path is None:
-                        matched = shopee_id_monthly_invoice.match_stores(
-                            options["store_names"], browser.list_stores()
+                        matched = shopee_id_monthly_invoice.select_stores(
+                            options, browser.list_stores()
                         )
                         if not matched["can_start"]:
                             raise ValueError("\n".join(
                                 f"{issue['name']}：{issue['error']}" for issue in matched["issues"]
                             ))
                         path = shopee_id_monthly_invoice.create_batch(
-                            options["output_dir"], profile, month, matched["stores"]
+                            options["output_dir"], profile, month, matched["stores"],
+                            store_scope=options["store_scope"],
                         )
+                        progress(f"已确认 {len(matched['stores'])} 家印尼 Shopee 店铺，按顺序逐店处理；重试沿用本批名单")
                         # TaskManager retains this context mapping; subsequent
                         # snapshots expose the manifest as soon as it exists.
                         context["manifest_path"] = str(path)
