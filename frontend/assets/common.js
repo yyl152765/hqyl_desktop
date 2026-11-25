@@ -64,6 +64,7 @@ const HQYL = (() => {
       { id: "temu_activity_export", href: "temu-activity-export.html", name: "活动报名导出", icon: "活", tag: "TEMU", category: "TEMU 活动", description: "按店铺批量导出活动申报模板并核对范围", keywords: "营销活动 批量报名 限时秒杀 官方大促 专题 清仓 模板 报价 库存" },
       { id: "temu_balance_statistics", href: "temu-balance-statistics.html", name: "余额统计", icon: "余", tag: "TEMU", category: "TEMU 财务", description: "当前账户总金额与指定月份待处理款项", keywords: "资金 月份 余额 财务 截图" },
       { id: "shopee_ads", href: "shopee-ads.html", name: "广告充值", icon: "充", tag: "Shopee", category: "Shopee 广告", description: "多站点店铺充值", keywords: "印尼 泰国 菲律宾 越南 马来西亚 马来 按表充值 营销" },
+      { id: "shopee_id_monthly_invoice", href: "shopee-id-monthly-invoice.html", name: "印尼月度税票下载", icon: "票", tag: "Shopee", category: "Shopee 印尼", description: "按月下载 Master Invoice 与 Tax Invoice PDF", keywords: "Shopee 印尼 税票 Faktur Pajak Master Tax Invoice My Tax Invoices PDF" },
       { id: "lazada_withdrawal_statistics", href: "lazada-withdrawal-statistics.html", name: "提现统计", icon: "提", tag: "Lazada", category: "Lazada 财务", description: "Excel 与账单归档", keywords: "菲律宾 马来西亚 泰国 收入" },
       { id: "lazada_balance_statistics", href: "lazada-balance-statistics.html", name: "余额统计", icon: "余", tag: "Lazada", category: "Lazada 财务", description: "多站点当前余额与处理中提现截图", keywords: "Income Balance Ads processing 菲律宾 马来西亚 泰国 印尼 越南 新加坡" },
       { id: "lazada_monthly_report", href: "lazada-monthly-report.html", name: "月度账单下载", icon: "月", tag: "Lazada", category: "Lazada 财务", description: "按月份批量下载账单", keywords: "泰国 马来西亚 菲律宾 月报" },
@@ -837,7 +838,7 @@ const HQYL = (() => {
       const code = country || (tool === "lazada_ads_data" || tool === "lazada_bill_detail" ? "TH" : "");
       const name = { TH: "泰国", PH: "菲律宾", MY: "马来西亚", ID: "印尼", VN: "越南" }[code] || "泰国";
       const root = "C:\\Users\\Demo\\Desktop\\log";
-      const folder = { mabang_order_sku_export: "马帮订单SKU汇总", ph_cancel_refund_sync: "菲律宾取消订单同步退款", lazada_ads_data: "lz泰国广告数据", temu_activity_export: "TEMU活动报名导出", temu_financial_export: "TEMU财务报表导出", lz_warehouse_inventory: "lz各仓库存", warehouse_sales_export: "商品仓库报表导出" }[tool] || "lz各仓库存";
+      const folder = { mabang_order_sku_export: "马帮订单SKU汇总", ph_cancel_refund_sync: "菲律宾取消订单同步退款", lazada_ads_data: "lz泰国广告数据", temu_activity_export: "TEMU活动报名导出", temu_financial_export: "TEMU财务报表导出", lz_warehouse_inventory: "lz各仓库存", warehouse_sales_export: "商品仓库报表导出", shopee_id_monthly_invoice: "Shopee印尼月度税票" }[tool] || "lz各仓库存";
       const defaults = tool === "lazada_bill_detail"
         ? { output_dir: `${root}\\Lazada${name}账单明细`, screenshot_root: `${root}\\Lazada${name}账单明细截图` }
         : { output_dir: `${root}\\${folder}` };
@@ -846,7 +847,7 @@ const HQYL = (() => {
       return { ...defaults, ...saved };
     };
     return {
-      async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "1.0.6" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, warehouse_sales_export: { month_range: { start_month: "2026-06", end_month: "2026-11" }, categories: [], warehouses: [], output_dir: previewScopedDirs("warehouse_sales_export").output_dir }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
+      async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "1.0.7" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, warehouse_sales_export: { month_range: { start_month: "2026-06", end_month: "2026-11" }, categories: [], warehouses: [], output_dir: previewScopedDirs("warehouse_sales_export").output_dir }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
       async get_latest_task_status(tool) { return tasks[tool] || { ok: false, empty: true }; },
       async get_task_status(id) { return Object.values(tasks).find((task) => task.id === id) || { ok: false, error: "任务不存在" }; },
       async get_lazada_campaign_download_info() {
@@ -898,6 +899,32 @@ const HQYL = (() => {
         return task;
       },
       async get_temu_financial_export_progress() { return { ok: true, result: null }; },
+      async get_shopee_id_monthly_invoice_info() {
+        return { ok: true, default_month: "2026-10", output_dir: previewScopedDirs("shopee_id_monthly_invoice").output_dir, client_path: "C:\\Preview\\ziniao.exe", webdriver_path: "C:\\Preview\\drivers", profile: "preview-profile", account_id: activeAccountIds.ziniao || "", latest: null };
+      },
+      async preview_shopee_id_monthly_invoice_stores(payload = {}) {
+        const stores = String(payload.store_names || "").split(/\r?\n/).map(name => name.trim()).filter(Boolean).map((name, index) => ({ store_id: `preview-${index + 1}`, store_name: name, requested_name: name, platform_name: "Shopee" }));
+        return { ok: true, stores, issues: [], can_start: stores.length > 0, month: payload.month || "2026-10", preview_token: "preview-token", profile: "preview-profile" };
+      },
+      async start_shopee_id_monthly_invoice(payload = {}) {
+        const stores = String(payload.store_names || "").split(/\r?\n/).map(name => name.trim()).filter(Boolean);
+        const result = {
+          preview: true, run_id: "Shopee印尼税票_2026-10_preview", month: payload.month || "2026-10", status: "complete",
+          profile: "preview-profile", manifest_path: "C:\\Preview\\Shopee印尼月度税票\\manifest.json",
+          output_dir: previewScopedDirs("shopee_id_monthly_invoice").output_dir,
+          store_count: stores.length, success_count: stores.length, no_data_count: 0, failed_count: 0, completed_count: stores.length,
+          row_count: stores.length * 3, file_count: stores.length * 6, master_invoice_count: stores.length * 3, tax_invoice_count: stores.length * 3,
+          is_complete: true, can_retry: false, completion_message: `全部 ${stores.length} 个店铺税票已下载完成（共 ${stores.length * 6} 份 PDF）`,
+          stores: stores.map((name, index) => ({ store_id: `preview-${index + 1}`, store_name: name, requested_name: name, status: "success", row_count: 3, file_count: 6, master_invoice_count: 3, tax_invoice_count: 3, store_output_dir: "", error: "" })),
+        };
+        const task = startPreviewTask("shopee_id_monthly_invoice", result);
+        task.context = { account_id: payload.account_id || activeAccountIds.ziniao || "", manifest_path: "C:\\Preview\\Shopee印尼月度税票\\manifest.json", profile: "preview-profile", month: payload.month || "2026-10" };
+        task.logs = ["[界面演示] 展示 Shopee 印尼月度 Master Invoice 与 Tax Invoice 下载流程，不启动真实浏览器。"];
+        task.created_at = new Date().toISOString();
+        return task;
+      },
+      async retry_shopee_id_monthly_invoice() { return startPreviewTask("shopee_id_monthly_invoice", { preview: true, status: "complete", is_complete: true, completion_message: "重试完成" }); },
+      async get_shopee_id_monthly_invoice_progress() { return { ok: true, result: null }; },
       async start_temu_activity_export(payload = {}) {
         const stores = String(payload.store_names || "").split(/\r?\n/).map(name => name.trim()).filter(Boolean);
         const result = {

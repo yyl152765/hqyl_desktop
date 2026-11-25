@@ -181,6 +181,8 @@ from backend.services import balance_statistics, tax_declaration_service
 from backend.services import lazada_ads_monthly
 from backend.services.lazada_ads_monthly_cli import ZiniaoMonthlyCli
 from backend.services.temu_on_sale_gateway import TemuOnSaleGateway
+from backend.services import shopee_id_monthly_invoice
+from backend.services.shopee_id_invoice_gateway import ShopeeIdInvoiceGateway
 from backend.update_service import (
     calculate_sha256,
     check_update_manifest,
@@ -189,7 +191,7 @@ from backend.update_service import (
 )
 
 
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.7"
 APP_NAME = "寰球云联自动化平台"
 
 
@@ -217,6 +219,9 @@ class AppBridge:
         self._balance_statistics_active = False
         self._lazada_ads_monthly_lock = threading.RLock()
         self._lazada_ads_monthly_active = False
+        self._shopee_id_invoice_lock = threading.RLock()
+        self._shopee_id_invoice_active = False
+        self._shopee_id_invoice_previews: dict[str, dict[str, Any]] = {}
         self._campaign_operation_lock = threading.Lock()
         self._campaign_download_start_lock = threading.Lock()
 
@@ -330,6 +335,13 @@ class AppBridge:
                     "key": "shopee_ads",
                     "name": "Shopee 广告充值",
                     "description": "多站点店铺广告充值，支持印尼、泰国、菲律宾、越南、马来。",
+                    "status": "ready",
+                    "vendor": "ziniao",
+                },
+                {
+                    "key": "shopee_id_monthly_invoice",
+                    "name": "Shopee 印尼月度税票下载",
+                    "description": "按月批量下载 Shopee 印尼站点 Master Invoice 与 Tax Invoice PDF。",
                     "status": "ready",
                     "vendor": "ziniao",
                 },
@@ -2369,6 +2381,247 @@ class AppBridge:
                     temu_export.writable_directory(path.parent)
                 self._temu_export_active = True
                 return self._launch_temu_export(path, request)
+            except AccountRequiredError as exc:
+                return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+    def _shopee_id_invoice_latest_path(self) -> Path:
+        return self.config_store.local_data_dir / "shopee_id_monthly_invoice" / "latest.json"
+
+    @requires_internal_runtime
+    def get_shopee_id_monthly_invoice_info(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            try:
+                paths = ziniao_runtime_paths()
+            except Exception:
+                paths = {"client_path": "", "webdriver_path": ""}
+            directories = resolve_output_directories(self.config_store.load(), "shopee_id_monthly_invoice")
+            default_month = shopee_id_monthly_invoice.default_month()
+            try:
+                request = self._payload_with_account(payload, "ziniao")
+            except AccountRequiredError:
+                return {
+                    "ok": True,
+                    "default_month": default_month,
+                    **paths,
+                    **directories,
+                    "profile": "",
+                    "account_id": "",
+                    "latest": None,
+                }
+            profile = ziniao_account_profile(request)
+            latest = None
+            pointer_path = self._shopee_id_invoice_latest_path()
+            if pointer_path.is_file():
+                try:
+                    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+                    manifest_path = pointer.get(profile) if isinstance(pointer, dict) else ""
+                    if manifest_path and Path(manifest_path).is_file():
+                        progress_res = self.get_shopee_id_monthly_invoice_progress(
+                            {"manifest_path": manifest_path, "account_id": request["account_id"]}
+                        )
+                        latest = progress_res.get("result")
+                except Exception:
+                    latest = None
+            return {
+                "ok": True,
+                "default_month": default_month,
+                **paths,
+                **directories,
+                "profile": profile,
+                "account_id": request["account_id"],
+                "latest": latest,
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @requires_internal_runtime
+    def preview_shopee_id_monthly_invoice_stores(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._shopee_id_invoice_lock:
+            try:
+                if self._shopee_id_invoice_active:
+                    raise ValueError("已有 Shopee 印尼月度税票下载任务正在运行，请完成后再匹配")
+                data = dict(payload or {})
+                raw_month = data.get("month")
+                month = (
+                    shopee_id_monthly_invoice.validate_month(shopee_id_monthly_invoice.default_month())
+                    if raw_month is None
+                    else shopee_id_monthly_invoice.validate_month(raw_month)
+                )
+                names = shopee_id_monthly_invoice.parse_store_names(data.get("store_names"))
+                request = self._payload_with_account(data, "ziniao")
+                profile = ziniao_account_profile(request)
+                with ZiniaoBrowser(request) as browser:
+                    browser.ready()
+                    current_stores = browser.list_stores()
+                result = shopee_id_monthly_invoice.match_stores(names, current_stores)
+                self._shopee_id_invoice_previews.clear()
+                token = ""
+                if result["can_start"]:
+                    token = uuid4().hex
+                    self._shopee_id_invoice_previews[token] = {
+                        "profile": profile,
+                        "month": month,
+                        "stores": result["stores"],
+                        "created": time.monotonic(),
+                    }
+                return {
+                    "ok": True,
+                    **result,
+                    "month": month,
+                    "preview_token": token,
+                    "profile": profile,
+                    "account_id": request["account_id"],
+                }
+            except AccountRequiredError as exc:
+                return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+    @requires_internal_runtime
+    def get_shopee_id_monthly_invoice_progress(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            request = self._payload_with_account(payload, "ziniao")
+            path = Path(str((payload or {}).get("manifest_path") or "")).resolve()
+            record = shopee_id_monthly_invoice.load_batch(path, ziniao_account_profile(request))
+            if record["status"] in {"running", "pending"}:
+                try:
+                    with temu_export.batch_lock(path):
+                        if not self._shopee_id_invoice_active:
+                            record["status"] = "interrupted"
+                except ValueError:
+                    pass
+            return {"ok": True, "result": shopee_id_monthly_invoice.public_result(path, record)}
+        except AccountRequiredError as exc:
+            return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def _launch_shopee_id_monthly_invoice(
+        self,
+        path: Path | None,
+        request: dict[str, Any],
+        *,
+        month: str,
+        retry: bool = False,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        profile = ziniao_account_profile(request)
+        context = {"profile": profile, "account_id": request["account_id"], "month": month}
+        if path is not None:
+            context["manifest_path"] = str(path)
+
+        def release() -> None:
+            with self._shopee_id_invoice_lock:
+                self._shopee_id_invoice_active = False
+
+        def redact(text: Any) -> str:
+            value = str(text or "")
+            secret = str(request.get("password") or "")
+            return value.replace(secret, "[已隐藏]") if secret else value
+
+        def runner(progress):
+            nonlocal path
+            try:
+                with ZiniaoBrowser(request) as browser:
+                    # Acquire the exclusive TaskManager slot before restarting
+                    # a normal-mode client or accessing any account's stores.
+                    browser.prepare_task(progress=progress)
+                    if path is None:
+                        matched = shopee_id_monthly_invoice.match_stores(
+                            options["store_names"], browser.list_stores()
+                        )
+                        if not matched["can_start"]:
+                            raise ValueError("\n".join(
+                                f"{issue['name']}：{issue['error']}" for issue in matched["issues"]
+                            ))
+                        path = shopee_id_monthly_invoice.create_batch(
+                            options["output_dir"], profile, month, matched["stores"]
+                        )
+                        # TaskManager retains this context mapping; subsequent
+                        # snapshots expose the manifest as soon as it exists.
+                        context["manifest_path"] = str(path)
+                    pointer = self._shopee_id_invoice_latest_path()
+                    previous = json.loads(pointer.read_text(encoding="utf-8")) if pointer.is_file() else {}
+                    if not isinstance(previous, dict):
+                        previous = {}
+                    previous[profile] = str(path)
+                    temu_export.write_json(pointer, previous)
+                    return shopee_id_monthly_invoice.run_batch(
+                        path,
+                        ShopeeIdInvoiceGateway(profile, browser=browser),
+                        progress,
+                    )
+            except Exception as exc:
+                if path is not None:
+                    return shopee_id_monthly_invoice.fail_batch(
+                        path, profile, f"批次中断：{redact(exc)}"
+                    )
+                raise ValueError(redact(exc)) from None
+            finally:
+                release()
+
+        try:
+            title = "Shopee 印尼月度税票下载重试" if retry else "Shopee 印尼月度税票下载"
+            task = self.tasks.start(
+                title,
+                runner,
+                tool="shopee_id_monthly_invoice",
+                context=context,
+                exclusive=True,
+            )
+            if not task.get("ok"):
+                release()
+            return task
+        except Exception as exc:
+            release()
+            return {"ok": False, "error": redact(exc)}
+
+    @requires_internal_runtime
+    def start_shopee_id_monthly_invoice(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._shopee_id_invoice_lock:
+            try:
+                if self._shopee_id_invoice_active:
+                    raise ValueError("已有 Shopee 印尼月度税票下载任务正在运行，请等待完成")
+                request = self._payload_with_account(payload, "ziniao")
+                directories = resolve_output_directories(self.config_store.load(), "shopee_id_monthly_invoice")
+                validated = shopee_id_monthly_invoice.validate_request(
+                    payload or {},
+                    default_output_dir=directories["output_dir"],
+                )
+                self.config_store.save({
+                    "tool_output_dirs": {
+                        directory_scope_key("shopee_id_monthly_invoice"): validated["output_dir"],
+                    }
+                })
+                self._shopee_id_invoice_active = True
+                self._shopee_id_invoice_previews.clear()
+                return self._launch_shopee_id_monthly_invoice(
+                    None, request, month=validated["month"], retry=False, options=validated
+                )
+            except AccountRequiredError as exc:
+                return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+    @requires_internal_runtime
+    def retry_shopee_id_monthly_invoice(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._shopee_id_invoice_lock:
+            try:
+                if self._shopee_id_invoice_active:
+                    raise ValueError("已有 Shopee 印尼月度税票下载任务正在运行，请等待完成")
+                path = Path(str((payload or {}).get("manifest_path") or "")).resolve()
+                request = self._payload_with_account(payload, "ziniao")
+                record = shopee_id_monthly_invoice.load_batch(path, ziniao_account_profile(request))
+                if record["status"] == "complete":
+                    raise ValueError("此批次已全部完成，无需重试")
+                with temu_export.batch_lock(path):
+                    temu_export.writable_directory(path.parent)
+                self._shopee_id_invoice_active = True
+                return self._launch_shopee_id_monthly_invoice(
+                    path, request, month=record["month"], retry=True
+                )
             except AccountRequiredError as exc:
                 return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}
             except Exception as exc:

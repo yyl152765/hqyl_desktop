@@ -16,7 +16,7 @@ from scripts.build_public_runtime_configs import PRIVATE_SITE_FIELDS
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.0.6"
+VERSION = "1.0.7"
 SOURCE = ROOT / "runtime" / "superbrowser_process"
 INPUTS = ROOT / "build/runtime"
 TARGET = INPUTS / "superbrowser_source"

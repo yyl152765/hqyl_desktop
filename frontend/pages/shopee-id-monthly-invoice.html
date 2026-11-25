@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shopee 印尼月度税票下载 · 寰球云联</title>
+    <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+    <link rel="stylesheet" href="../assets/pages/temu-on-sale-export.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar"></aside>
+      <main class="main">
+        <header class="page-header">
+          <div><div class="page-kicker">紫鸟流程 / Shopee 印尼 / 财务税票</div><h1>Shopee 印尼月度税票下载</h1></div>
+          <div id="taskBadge" class="status-pill idle">待运行</div>
+        </header>
+        <p class="temu-export-note">仅从 Shopee 印尼卖家中心 My Tax Invoices 按月下载全部 <strong>Master Invoice</strong>（服务费账单 PDF）与 <strong>Tax Invoice</strong>（Faktur Pajak 税票 PDF）；不下载 Income Statements（收入对账单）及 Itemised Billing Excel。</p>
+        <section class="overview-grid">
+          <article class="overview-card accent-green"><span>本批店铺</span><strong id="storeCount">0</strong><small>按名单顺序逐店执行</small></article>
+          <article class="overview-card"><span>已完成店铺</span><strong id="completedCount">0</strong><small id="noDataCount">无税票 0 · 失败 0</small></article>
+          <article class="overview-card"><span>已下载 PDF</span><strong id="recordCount">0</strong><small id="invoiceBreakdown">Master 0 · Tax 0</small></article>
+          <article class="overview-card file-card"><span>批次状态</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
+        </section>
+        <section class="layout-grid">
+          <form id="exportForm" class="surface form-surface">
+            <div class="section-head"><div><h2>下载条件</h2><p>选择已完成的历史自然月，填写紫鸟完整店铺名或印尼店号简称（如 印尼046）。</p></div><span class="section-badge">印尼 · PDF</span></div>
+            <div class="flow-account-bar">
+              <span class="flow-account-icon ziniao-icon">Z</span>
+              <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
+              <a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a>
+            </div>
+            <p id="connectionNotice" class="temu-export-note" role="status">开始后自动使用所选紫鸟账号核对 Shopee 印尼店铺，并逐店下载所选月份的 Master Invoice 与 Tax Invoice。</p>
+            <div class="form-grid">
+              <label><span>账单月份 <small>仅支持已结束自然月</small></span><input id="invoiceMonth" type="month" required /></label>
+              <label><span>紫鸟客户端</span><div class="input-action"><input id="clientPath" readonly /><button id="chooseClientBtn" class="secondary" type="button">选择</button></div></label>
+              <label><span>驱动目录</span><div class="input-action"><input id="driverPath" readonly /><button id="chooseDriverBtn" class="secondary" type="button">选择</button></div></label>
+              <label id="namesPanel" class="store-field"><span>紫鸟店铺名 / 印尼店号简称 <small>每行一个，支持完整店铺名或唯一简称（如 印尼046）</small></span><textarea id="storeNames" spellcheck="false" placeholder="例如：&#10;印尼046&#10;操作员-SP印尼047-本土"></textarea></label>
+            </div>
+            <div id="startIssues" class="temu-export-warning" hidden role="alert"></div>
+            <div id="previewBox" class="temu-export-note" hidden role="status"></div>
+            <label class="temu-output-label"><span>输出目录</span><div class="input-action"><input id="outputDir" placeholder="输入或选择本地输出目录" /><button id="chooseOutputBtn" type="button" class="secondary">选择目录</button></div></label>
+            <div class="actions">
+              <button id="previewBtn" class="secondary" type="button" disabled>预览匹配店铺</button>
+              <button id="startBtn" class="primary" type="submit" disabled>开始下载</button>
+            </div>
+            <p class="temu-export-note">每一行账单均同时校验并下载 Master Invoice 与 Tax Invoice 两份 PDF，保留原始文件名与 SHA-256 校验值；若当月页面明确提示 No receipt found 则记为“无税票”。</p>
+          </form>
+          <div class="right-stack">
+            <section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>逐店打开、密码校验、月份切换与 PDF 下载校验进度。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section>
+          </div>
+        </section>
+        <section class="surface">
+          <div class="section-head"><div><h2>批次结果</h2><p id="resultMessage" aria-live="polite">尚未运行。填写月份、店铺名和输出目录后，点击开始下载。</p></div><span id="batchLabel" class="section-badge">尚无批次</span></div>
+          <div class="actions"><button id="openDirectoryBtn" type="button" class="secondary" disabled>打开批次目录</button><button id="retryBtn" type="button" class="secondary" disabled>重试失败店铺</button></div>
+          <div class="collection-table-wrap"><table><thead><tr><th>店铺名</th><th>状态</th><th>税票行数</th><th>Master Invoice</th><th>Tax Invoice</th><th>保存目录</th><th>说明 / 失败原因</th></tr></thead><tbody id="storeResults"><tr><td colspan="7">尚未运行</td></tr></tbody></table></div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="../assets/common.js?v=20260623-log-panel"></script>
+    <script src="../assets/pages/shopee-id-monthly-invoice.js"></script>
+  </body>
+</html>

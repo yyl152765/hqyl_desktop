@@ -8,14 +8,14 @@ from backend import config_store
 
 
 COUNTRY_NAMES = {"TH": "泰国", "PH": "菲律宾", "MY": "马来西亚", "ID": "印尼", "VN": "越南"}
-SUPPORTED_TOOLS = frozenset({"lazada_ads_data", "lazada_bill_detail", "lz_warehouse_inventory", "temu_fee_refund_export", "temu_activity_export", "temu_financial_export", "mabang_order_sku_export", "warehouse_sales_export", "ph_cancel_refund_sync"})
+SUPPORTED_TOOLS = frozenset({"lazada_ads_data", "lazada_bill_detail", "lz_warehouse_inventory", "temu_fee_refund_export", "temu_activity_export", "temu_financial_export", "mabang_order_sku_export", "warehouse_sales_export", "ph_cancel_refund_sync", "shopee_id_monthly_invoice"})
 
 
 def _scope(tool: str, country: str = "TH") -> tuple[str, str]:
     tool = str(tool or "").strip()
     if tool not in SUPPORTED_TOOLS:
         raise ValueError("不支持该功能的独立输出目录")
-    if tool in {"lz_warehouse_inventory", "temu_fee_refund_export", "temu_activity_export", "temu_financial_export", "mabang_order_sku_export", "warehouse_sales_export", "ph_cancel_refund_sync"}:
+    if tool in {"lz_warehouse_inventory", "temu_fee_refund_export", "temu_activity_export", "temu_financial_export", "mabang_order_sku_export", "warehouse_sales_export", "ph_cancel_refund_sync", "shopee_id_monthly_invoice"}:
         return tool, ""
     if tool == "lazada_ads_data":
         return tool, "TH"
@@ -54,6 +54,8 @@ def default_output_directories(tool: str, country: str = "TH") -> dict[str, str]
         return {"output_dir": str(root / "商品仓库报表导出")}
     if tool == "ph_cancel_refund_sync":
         return {"output_dir": str(root / "菲律宾取消订单同步退款")}
+    if tool == "shopee_id_monthly_invoice":
+        return {"output_dir": str(root / "Shopee印尼月度税票")}
     name = COUNTRY_NAMES[code]
     return {
         "output_dir": str(root / f"Lazada{name}账单明细"),

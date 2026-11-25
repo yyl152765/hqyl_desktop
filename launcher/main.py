@@ -50,6 +50,7 @@ PAGE_ENTRIES = {
     "lazada-campaign-workbook": "lazada-campaign-workbook.html",
     "vietnam-income-reconciliation": "vietnam-income-reconciliation.html",
     "kec-reconciliation": "kec-reconciliation.html",
+    "shopee-id-monthly-invoice": "shopee-id-monthly-invoice.html",
     "tax-declaration": "tax-declaration.html",
 }
 

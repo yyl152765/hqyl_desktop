@@ -11,7 +11,7 @@ import sys
 UNAVAILABLE_MESSAGE = "精简版不包含此功能，请使用完整版。"
 INTERNAL_TOOLS = {
     "superbrowser_process": (
-        "shopee_ads", "lazada_withdrawal_statistics", "temu_fee_refund_export",
+        "shopee_ads", "shopee_id_monthly_invoice", "lazada_withdrawal_statistics", "temu_fee_refund_export",
         "temu_financial_export", "temu_on_sale_export", "temu_activity_export",
         "temu_balance_statistics", "lazada_balance_statistics",
     ),

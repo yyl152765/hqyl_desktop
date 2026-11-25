@@ -48,6 +48,7 @@ PAGE_SCRIPTS = {
     FRONTEND / "pages" / "echotik-collect.html": FRONTEND / "assets" / "pages" / "echotik-collect.js",
     FRONTEND / "pages" / "settings.html": FRONTEND / "assets" / "pages" / "settings.js",
     FRONTEND / "pages" / "kec-reconciliation.html": FRONTEND / "assets" / "pages" / "kec-reconciliation.js",
+    FRONTEND / "pages" / "shopee-id-monthly-invoice.html": FRONTEND / "assets" / "pages" / "shopee-id-monthly-invoice.js",
 }
 
 
