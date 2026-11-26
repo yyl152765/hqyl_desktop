@@ -18,6 +18,7 @@ from backend.services.shopee_id_income_report import (
     GENERATION_TIMEOUT,
     MY_REPORTS_INCOME_URL,
     export_monthly_income_report,
+    validate_empty_income_evidence,
     _navigate_url,
 )
 
@@ -511,7 +512,7 @@ class ShopeeIdInvoiceGateway:
         return "紫鸟认证已失效，请恢复后重试"
 
     def preflight(self, stores: list[dict[str, Any]]) -> None:
-        if all(store.get("status") in {"success", "no_data"} for store in stores):
+        if all(store.get("status") in {"success", "empty_month"} for store in stores):
             return
         self.browser.ready()
         self.current_stores = {
@@ -896,24 +897,42 @@ class ShopeeIdInvoiceGateway:
                 verify_password=lambda: self._complete_password_verification(store_id),
                 progress=self.progress,
             )
-            income_entry = {
-                "row_index": 0,
-                "description": f"Income Report ({income_info['period_start']} to {income_info['period_end']})",
-                "amount": "",
-                "date": month,
-                "invoice_type": INCOME_REPORT_TYPE,
-                "invoice_label": INCOME_REPORT_LABEL,
-                "report_period": f"{income_info['period_start']}_{income_info['period_end']}",
-                "period_start": income_info["period_start"],
-                "period_end": income_info["period_end"],
+            income_empty = income_info.get("no_data") is True
+            if income_empty and not validate_empty_income_evidence(income_info.get("empty_evidence"), month):
+                raise ValueError("收入报表无数据证据无效，不能跳过下载")
+            income_summary = {
+                "filename": income_info.get("filename", ""),
+                "period_start": income_info["period_start"], "period_end": income_info["period_end"],
+                "source": income_info["source"], "no_data": income_empty,
                 "currency": income_info.get("currency", "Rp"),
-                "report_source": income_info["source"],
-                "filename": income_info["filename"],
-                "path": income_info["path"],
-                "size": income_info["size"],
-                "sha256": income_info["sha256"],
+                "history_page": income_info.get("history_page"),
             }
-            downloaded_files.append(income_entry)
+            income_evidence = {
+                "income_report_count": 0 if income_empty else 1,
+                "income_report_source": income_info["source"],
+                "income_report_period": f"{income_info['period_start']}_{income_info['period_end']}",
+            }
+            if income_empty:
+                income_evidence["income_no_data"] = income_info["empty_evidence"]
+            else:
+                income_entry = {
+                    "row_index": 0,
+                    "description": f"Income Report ({income_info['period_start']} to {income_info['period_end']})",
+                    "amount": "",
+                    "date": month,
+                    "invoice_type": INCOME_REPORT_TYPE,
+                    "invoice_label": INCOME_REPORT_LABEL,
+                    "report_period": f"{income_info['period_start']}_{income_info['period_end']}",
+                    "period_start": income_info["period_start"],
+                    "period_end": income_info["period_end"],
+                    "currency": income_info.get("currency", "Rp"),
+                    "report_source": income_info["source"],
+                    "filename": income_info["filename"],
+                    "path": income_info["path"],
+                    "size": income_info["size"],
+                    "sha256": income_info["sha256"],
+                }
+                downloaded_files.append(income_entry)
 
             self._navigate_to_invoice_page(store_id)
             settled_state, chosen_option = self._select_month(store_id, month)
@@ -926,26 +945,17 @@ class ShopeeIdInvoiceGateway:
                     "selected_month_text": selected_text,
                     "row_count": 0,
                     "file_count": len(downloaded_files),
-                    "income_report_count": 1,
+                    "income_report_count": 0 if income_empty else 1,
                     "master_invoice_count": 0,
                     "tax_invoice_count": 0,
                     "files": downloaded_files,
                     "rows": [],
-                    "income_report": {
-                        "filename": income_info["filename"],
-                        "period_start": income_info["period_start"],
-                        "period_end": income_info["period_end"],
-                        "currency": income_info.get("currency", "Rp"),
-                        "source": income_info["source"],
-                        "history_page": income_info.get("history_page"),
-                    },
+                    "income_report": income_summary,
                     "evidence": {
                         "selected_month": selected_text,
                         "empty_text": "No receipt found",
                         "is_empty_month_option": bool(chosen_option.get("is_empty_month")),
-                        "income_report_count": 1,
-                        "income_report_source": income_info["source"],
-                        "income_report_period": f"{income_info['period_start']}_{income_info['period_end']}",
+                        **income_evidence,
                     },
                 }
 
@@ -1025,7 +1035,7 @@ class ShopeeIdInvoiceGateway:
         income_count = sum(1 for item in downloaded_files if item["invoice_type"] == INCOME_REPORT_TYPE)
         master_count = sum(1 for item in downloaded_files if item["invoice_type"] == "master_invoice")
         tax_count = sum(1 for item in downloaded_files if item["invoice_type"] == "tax_invoice")
-        if income_count != 1 or master_count != expected_row_count or tax_count != expected_row_count - len(unavailable_documents):
+        if income_count != (0 if income_empty else 1) or master_count != expected_row_count or tax_count != expected_row_count - len(unavailable_documents):
             raise InvoiceExportError(
                 f"下载数量不完整：收入报表 {income_count} 份，税票共 {expected_row_count} 行（Master Invoice {master_count} 份，Tax Invoice {tax_count} 份）",
                 partial_files=downloaded_files,
@@ -1043,21 +1053,12 @@ class ShopeeIdInvoiceGateway:
             "tax_invoice_count": tax_count,
             "files": downloaded_files,
             "rows": row_records,
-            "income_report": {
-                "filename": income_info["filename"],
-                "period_start": income_info["period_start"],
-                "period_end": income_info["period_end"],
-                "currency": income_info.get("currency", "Rp"),
-                "source": income_info["source"],
-                "history_page": income_info.get("history_page"),
-            },
+            "income_report": income_summary,
             "evidence": {
                 "unavailable_documents": unavailable_documents,
                 "selected_month": selected_text,
                 "row_count": expected_row_count,
-                "income_report_count": income_count,
-                "income_report_source": income_info["source"],
-                "income_report_period": f"{income_info['period_start']}_{income_info['period_end']}",
+                **income_evidence,
                 "master_invoice_count": master_count,
                 "tax_invoice_count": tax_count,
             },

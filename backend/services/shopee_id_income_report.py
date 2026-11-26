@@ -582,6 +582,17 @@ INCOME_PAGE_STATE = r"""(() => {
       ? 'button.report-exporter-button'
       : uniquePath(exportButtons[0]);
   }
+  // Empty order rows alone do not exclude adjustments. Only a fresh Export
+  // response saying that no data is downloadable can confirm an empty report.
+  const transactionTables = [...document.querySelectorAll('.transaction-table')].filter(visible);
+  const transactionTable = transactionTables.length === 1 ? transactionTables[0] : null;
+  const transactionBody = transactionTable?.querySelector('.grid-table-body');
+  const transactionRows = transactionBody
+    ? [...transactionBody.querySelectorAll('.grid-table-row')].filter(visibleRow) : [];
+  const transactionEmpty = transactionBody
+    ? [...transactionBody.querySelectorAll('.grid-table-empty')].filter(visible) : [];
+  const exportNotices = [...document.querySelectorAll('.eds-toast .eds-toast__content')]
+    .filter(visible).map(e => clean(e.innerText || e.textContent));
   const toggleButtons = [...document.querySelectorAll('button.report-exporter-toggle')].filter(visible);
   let toggleButtonSelector = '';
   if (toggleButtons.length === 1) {
@@ -659,6 +670,11 @@ INCOME_PAGE_STATE = r"""(() => {
       },
     },
     income_page: {
+      transaction_table_count: transactionTables.length,
+      transaction_body_present: Boolean(transactionBody && visible(transactionBody)),
+      transaction_row_count: transactionRows.length,
+      transaction_empty_text: transactionEmpty.length === 1 ? clean(transactionEmpty[0].innerText || transactionEmpty[0].textContent) : '',
+      export_notices: exportNotices,
       active_tab_count: activeTabs.length,
       active_tab_text: activeTabText,
       date_range_count: dateRanges.length,
@@ -1117,6 +1133,47 @@ def _wait_income_export_page_ready(
         time.sleep(min(max(float(poll_interval), 0.01), max(0.0, deadline - time.monotonic())))
 
 
+NO_DOWNLOAD_DATA_NOTICE = "No data is available for download."
+TRANSACTION_EMPTY_LABELS = frozenset({"ps_no_data", "no data", "tidak ada data"})
+
+
+def _confirmed_empty_income_page(state: dict[str, Any], target_month: str) -> bool:
+    """Require the selected calendar month and its own settled empty transaction table."""
+    bounds = month_date_bounds(target_month)
+    parsed = urlsplit(str(state.get("url") or ""))
+    query = parse_qs(parsed.query)
+    page = state.get("income_page") or {}
+    return bool(
+        parsed.scheme == "https" and parsed.hostname == "seller.shopee.co.id"
+        and parsed.path.rstrip("/") == "/portal/finance/income"
+        and query.get("type") == ["2"] and query.get("dateRange") == [bounds["date_range_param"]]
+        and not any(state.get(key) for key in ("busy", "challenge", "login_page"))
+        and not (state.get("password_dialog") or {}).get("password_visible")
+        and page.get("active_tab_count") == 1
+        and str(page.get("active_tab_text") or "").casefold() in RELEASED_LABELS
+        and page.get("date_range_count") == 1 and page.get("date_range_text") == bounds["display_dmy_range"]
+        and page.get("transaction_table_count") == 1 and page.get("transaction_body_present") is True
+        and page.get("transaction_row_count") == 0
+        and str(page.get("transaction_empty_text") or "").casefold() in TRANSACTION_EMPTY_LABELS
+    )
+
+
+def validate_empty_income_evidence(evidence: Any, target_month: str) -> bool:
+    """Persisted absence has a stricter contract than a boolean or a missing file."""
+    if not isinstance(evidence, dict):
+        return False
+    bounds = month_date_bounds(target_month)
+    return (
+        evidence.get("month") == target_month
+        and evidence.get("date_range") == bounds["date_range_param"]
+        and evidence.get("history_checked") is True
+        and evidence.get("reason") == "export_no_data"
+        and evidence.get("export_notice") == NO_DOWNLOAD_DATA_NOTICE
+        and evidence.get("transaction_row_count") == 0
+        and str(evidence.get("transaction_empty_text") or "").casefold() in TRANSACTION_EMPTY_LABELS
+    )
+
+
 def export_monthly_income_report(
     browser: Any,
     store_id: str,
@@ -1172,6 +1229,8 @@ def export_monthly_income_report(
             browser, store_id, target_month, timeout=timeout,
             poll_interval=poll_interval, verify_password=verify_password,
         )
+        if (ready["income_page"].get("export_notices") or []):
+            raise ValueError("Income 页面仍有上一次操作提示，请稍后重试；未提交 Export")
         if progress:
             progress(f"历史中没有 {target_month} 整月收入报表，确认 Released 和日期后提交一次 Export")
         browser.click(store_id, ready["income_page"]["export_button_selector"])
@@ -1187,6 +1246,25 @@ def export_monthly_income_report(
             items = ((state.get("income_page") or {}).get("exporter_container") or {}).get("items") or []
             if any(is_matching_monthly_income_filename(item.get("name"), target_month) for item in items):
                 break
+            # The button remains enabled even when there is no downloadable data.
+            # Without this response the empty order table is not enough to skip.
+            notices = (state.get("income_page") or {}).get("export_notices") or []
+            if NO_DOWNLOAD_DATA_NOTICE in notices:
+                if not (_confirmed_empty_income_page(ready, target_month)
+                        and _confirmed_empty_income_page(state, target_month)):
+                    raise ValueError("Shopee 提示无可下载数据，但目标月份收入明细空状态未确认，请重试核对")
+                if progress:
+                    progress(f"Shopee 确认 {target_month} 无可下载收入报表，继续核对当月账单和税票")
+                return {
+                    "no_data": True, "source": "empty", "period_start": bounds["start_iso"],
+                    "period_end": bounds["end_iso"],
+                    "empty_evidence": {
+                        "month": target_month, "date_range": bounds["date_range_param"],
+                        "history_checked": True, "reason": "export_no_data",
+                        "export_notice": NO_DOWNLOAD_DATA_NOTICE, "transaction_row_count": 0,
+                        "transaction_empty_text": state["income_page"]["transaction_empty_text"],
+                    },
+                }
             if time.monotonic() >= acknowledgement_deadline:
                 break
             time.sleep(min(max(poll_interval, 0.01), max(acknowledgement_deadline - time.monotonic(), 0.0)))

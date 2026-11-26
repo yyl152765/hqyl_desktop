@@ -126,7 +126,7 @@
     snapshot = result;
     $("storeCount").textContent = String(result.store_count || 0);
     $("completedCount").textContent = String(result.completed_count || 0);
-    $("noDataCount").textContent = `待补税票 ${result.unavailable_count || 0} · 当月无税票 ${result.no_data_count || 0} · 失败 ${result.failed_count || 0}`;
+    $("noDataCount").textContent = `无账单 ${result.empty_month_count || 0} · 待补税票 ${result.unavailable_count || 0} · 失败 ${result.failed_count || 0}`;
     $("recordCount").textContent = Number(result.file_count || 0).toLocaleString();
     $("invoiceBreakdown").textContent = `收入 Excel ${result.income_report_count || 0} · Master ${result.master_invoice_count || 0} · Tax ${result.tax_invoice_count || 0}`;
     $("outputFile").textContent = result.is_complete ? "下载已完成" : (result.file_count ? "部分已保存" : "未完成");
@@ -142,7 +142,7 @@
       const onlyUnavailable = result.status === "complete_with_unavailable";
       $("taskBadge").className = `status-pill ${result.is_complete ? "success" : onlyUnavailable ? "pending" : "failed"}`;
       $("taskBadge").textContent = result.is_complete ? "已完成" : onlyUnavailable ? "待补税票" : "结果不完整";
-      $("statusText").textContent = result.is_complete ? "账单与税票已校验保存" : onlyUnavailable ? "可用文件已保存，可稍后补查税票" : "可处理失败项后重试";
+      $("statusText").textContent = result.is_complete ? "文件已校验，无账单店铺已跳过" : onlyUnavailable ? "可用文件已保存，可稍后补查税票" : "可处理失败项后重试";
     }
 
     const labels = {
@@ -150,7 +150,8 @@
       running: "运行中",
       success: "成功",
       unavailable: "平台未提供税票",
-      no_data: "无税票 (No receipt found)",
+      no_data: "旧批次待核对",
+      empty_month: "当月无账单，已跳过",
       failed: "失败",
     };
     const body = $("storeResults");
@@ -201,10 +202,12 @@
       const noteCell = document.createElement("td");
       if (store.error) {
         noteCell.textContent = store.error;
+      } else if (store.status === "empty_month") {
+        noteCell.textContent = `${result.month || ""} 收入报表、服务费账单和税票均已核对为空`;
       } else if (store.status === "no_data") {
-        noteCell.textContent = `${result.month || ""} 页面确认 No receipt found`;
+        noteCell.textContent = "旧批次仅确认无税票，请重试核对收入报表";
       } else if (store.status === "success") {
-        noteCell.textContent = `已校验 ${store.income_report_count || 0} 份收入 Excel、${(store.master_invoice_count || 0) + (store.tax_invoice_count || 0)} 份 PDF${store.evidence?.empty_text === "No receipt found" ? "（当月无税票）" : ""} (SHA-256)`;
+        noteCell.textContent = `已校验 ${store.income_report_count || 0} 份收入 Excel、${(store.master_invoice_count || 0) + (store.tax_invoice_count || 0)} 份 PDF${store.evidence?.empty_text === "No receipt found" ? "（当月无税票）" : ""}${store.evidence?.income_no_data ? "（当月无收入报表）" : ""} (SHA-256)`;
       } else {
         noteCell.textContent = "—";
       }
@@ -431,7 +434,7 @@
       $("storeCount").textContent = "0";
       $("completedCount").textContent = "0";
       $("recordCount").textContent = "0";
-      $("noDataCount").textContent = "待补税票 0 · 当月无税票 0 · 失败 0";
+      $("noDataCount").textContent = "无账单 0 · 待补税票 0 · 失败 0";
       $("invoiceBreakdown").textContent = "收入 Excel 0 · Master 0 · Tax 0";
       $("outputFile").textContent = "未生成";
       $("batchLabel").textContent = "准备新任务";

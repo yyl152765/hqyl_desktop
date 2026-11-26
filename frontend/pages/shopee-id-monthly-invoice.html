@@ -18,7 +18,7 @@
         <p class="temu-export-note">按完整自然月下载 <strong>Income → Released 收入账单 Excel</strong>，并从 My Tax Invoices 下载全部 <strong>Master Invoice</strong>（服务费账单 PDF）与 <strong>Tax Invoice</strong>（Faktur Pajak 税票 PDF）；不下载 Income Statements（收入对账单）及 Itemised Billing Excel。</p>
         <section class="overview-grid">
           <article class="overview-card accent-green"><span>本批店铺</span><strong id="storeCount">0</strong><small>按名单顺序逐店执行</small></article>
-          <article class="overview-card"><span>已保存可用文件</span><strong id="completedCount">0</strong><small id="noDataCount">待补税票 0 · 当月无税票 0 · 失败 0</small></article>
+          <article class="overview-card"><span>已处理店铺</span><strong id="completedCount">0</strong><small id="noDataCount">无账单 0 · 待补税票 0 · 失败 0</small></article>
           <article class="overview-card"><span>已保存文件</span><strong id="recordCount">0</strong><small id="invoiceBreakdown">收入 Excel 0 · Master 0 · Tax 0</small></article>
           <article class="overview-card file-card"><span>批次状态</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
         </section>
@@ -45,7 +45,7 @@
               <button id="previewBtn" class="secondary" type="button" disabled>查看全部店铺</button>
               <button id="startBtn" class="primary" type="submit" disabled>开始处理全部店铺</button>
             </div>
-            <p class="temu-export-note">先检查完整导出历史：已有整月收入报表就直接下载，正在生成则等待；没有才选择月初至月末并提交一次 Export。下载页面提供的账单与税票；平台未提供 Tax Invoice 时先保存可用文件，并标明待补税票。所有文件保留原名并校验 SHA-256。</p>
+            <p class="temu-export-note">先检查完整导出历史：已有整月收入报表就直接下载，正在生成则等待；没有才选择月初至月末并提交一次 Export。下载页面提供的账单与税票；平台未提供 Tax Invoice 时先保存可用文件，并标明待补税票。收入报表与税票均确认无数据时，自动标记“当月无账单”并继续下一家。所有文件保留原名并校验 SHA-256。</p>
           </form>
           <div class="right-stack">
             <section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>逐店打开、密码校验、历史核对、收入报表生成与文件下载进度。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section>
