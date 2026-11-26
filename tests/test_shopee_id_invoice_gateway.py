@@ -457,7 +457,7 @@ class ShopeeIdInvoiceGatewayTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "人工验证或验证码"):
             gateway_captcha.export(self.store, "2026-10", self.root / "captcha")
 
-    def test_pagination_extra_table_or_missing_action_type_fail_closed(self) -> None:
+    def test_pagination_and_extra_table_fail_but_absent_tax_preserves_master(self) -> None:
         paginated = FakeWebDriverBrowser(self.store, pagination_count=1)
         gw_page = ShopeeIdInvoiceGateway(
             paginated.profile, browser=paginated, timeout=0.2, poll_interval=0.01
@@ -487,8 +487,25 @@ class ShopeeIdInvoiceGatewayTests(unittest.TestCase):
             missing_tax.profile, browser=missing_tax, timeout=0.2, poll_interval=0.01
         )
         gw_missing.preflight([self.store])
-        with self.assertRaisesRegex(ValueError, "Tax Invoice"):
-            gw_missing.export(self.store, "2026-10", self.root / "missing_tax")
+        result = gw_missing.export(self.store, "2026-10", self.root / "missing_tax")
+        self.assertEqual((result["income_report_count"], result["master_invoice_count"], result["tax_invoice_count"]), (1, 1, 0))
+        self.assertEqual(result["evidence"]["unavailable_documents"][0]["reason"], "not_provided")
+        self.assertEqual(missing_tax.download_call_count, 1)
+
+    def test_missing_tax_never_hides_disabled_duplicate_or_unknown_buttons(self):
+        for case in ("disabled", "duplicate", "unknown", "missing_master"):
+            with self.subTest(case=case):
+                row = make_row_state(1, "Shopee invoices - October 2026")
+                if case == "disabled":
+                    row["actions"][1]["disabled"] = True
+                elif case == "duplicate":
+                    row["actions"].append(dict(row["actions"][1]))
+                elif case == "unknown":
+                    row["actions"][1]["text"] = "Unrecognized Invoice"
+                else:
+                    row["actions"] = row["actions"][1:]
+                with self.assertRaises(ValueError):
+                    ShopeeIdInvoiceGateway._validate_row_actions_and_month(row, "2026-10")
 
     def test_corrupt_or_wrong_pdf_and_partial_failure_preserve_completed_pdfs(self) -> None:
         def fail_on_fourth_download(selector: str, download_dir: Path, call_index: int) -> None:
@@ -606,6 +623,11 @@ class ShopeeIdInvoiceGatewayTests(unittest.TestCase):
         self.assertTrue(state["password_dialog"]["password_visible"])
         self.assertTrue(state["password_dialog"]["password_filled"])
         self.assertEqual(state["password_dialog"]["verify_selector"], "button.eds-button--primary.action")
+        page.locator("button.action").evaluate("e => e.textContent = 'Verifikasi'")
+        translated = json.loads(page.evaluate(PAGE_STATE))
+        self.assertEqual(translated["password_dialog"]["verify_selector"], "button.eds-button--primary.action")
+        page.locator("button.action").evaluate("e => e.textContent = 'Verify With Phone Number'")
+        self.assertFalse(json.loads(page.evaluate(PAGE_STATE))["password_dialog"]["verify_selector"])
         self.assertEqual(state["month_selector"]["selected_text"], "October 2026")
         self.assertEqual(len(state["month_options"]["options"]), 3)
         self.assertTrue(state["month_options"]["options"][0]["is_empty_month"])

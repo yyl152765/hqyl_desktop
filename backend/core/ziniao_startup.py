@@ -379,7 +379,11 @@ class _WindowsProcesses:
                 try:
                     if self.alive(record):
                         if not self.user.PostMessageW(hwnd, 0x10, 0, 0):  # WM_CLOSE
-                            raise C.WinError(C.get_last_error())
+                            error = C.get_last_error()
+                            # A window may disappear after enumeration while its
+                            # verified process exits. Continue the normal PID/port checks.
+                            if error != 1400:  # ERROR_INVALID_WINDOW_HANDLE
+                                raise C.WinError(error)
                 except Exception as error:
                     errors.append(error)
                     return False

@@ -11,6 +11,8 @@ from typing import Any, Callable, Mapping
 import unicodedata
 from uuid import uuid4
 
+from backend.atomic_json import write_json
+
 from backend.services.shopee_id_invoice_gateway import (
     InvoiceExportError,
     REQUIRED_ACTIONS,
@@ -20,14 +22,14 @@ from backend.services.shopee_id_invoice_gateway import (
 from backend.services.temu_on_sale_export import (
     batch_lock,
     writable_directory,
-    write_json,
 )
 from backend.services.shopee_id_income_report import INCOME_REPORT_TYPE, validate_income_xlsx
 
 
-SCHEMA = "shopee_id_monthly_invoice_v2"
+SCHEMA = "shopee_id_monthly_invoice_v3"
+PREVIOUS_SCHEMA = "shopee_id_monthly_invoice_v2"
 LEGACY_SCHEMA = "shopee_id_monthly_invoice_v1"
-TERMINAL = {"success"}
+TERMINAL = {"success", "unavailable"}
 STORE_SCOPES = {"named", "all_indonesia"}
 
 _OTHER_COUNTRY_CN_RE = re.compile(
@@ -455,7 +457,7 @@ def load_batch(path: str | Path, profile: str | None = None) -> dict[str, Any]:
         record = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ValueError(f"无法读取税票批次清单：{exc}") from None
-    if not isinstance(record, dict) or record.get("schema") not in {SCHEMA, LEGACY_SCHEMA}:
+    if not isinstance(record, dict) or record.get("schema") not in {SCHEMA, PREVIOUS_SCHEMA, LEGACY_SCHEMA}:
         raise ValueError("不是有效的 Shopee 印尼月度税票批次清单")
     if profile is not None and record.get("profile") != profile:
         raise ValueError("所选紫鸟账号与此批次不一致，请切换回原账号或重新开始下载")
@@ -477,7 +479,7 @@ def load_batch(path: str | Path, profile: str | None = None) -> dict[str, Any]:
         if store_id in seen_ids:
             raise ValueError("批次包含重复店铺 ID")
         seen_ids.add(store_id)
-        if store.get("status") not in {"pending", "running", "success", "no_data", "failed"}:
+        if store.get("status") not in {"pending", "running", "success", "no_data", "failed", "unavailable"}:
             raise ValueError("批次店铺状态无效")
         for file_entry in store.get("files") or []:
             if not isinstance(file_entry, dict) or not file_entry.get("path"):
@@ -493,6 +495,8 @@ def load_batch(path: str | Path, profile: str | None = None) -> dict[str, Any]:
             store["income_report_count"] = 0
             if store["status"] in {"success", "no_data"}:
                 store.update(status="failed", error="旧版批次尚未下载整月收入 Excel")
+    elif record["schema"] == PREVIOUS_SCHEMA:
+        record.update(schema=SCHEMA, migrated_from=PREVIOUS_SCHEMA)
     return record
 
 
@@ -517,8 +521,9 @@ def public_result(path: str | Path, record: dict[str, Any] | None = None) -> dic
     success_count = count("success")
     no_data_count = sum(s["status"] == "success" and (s.get("evidence") or {}).get("empty_text") == "No receipt found" for s in stores)
     failed_count = count("failed")
-    completed_count = success_count
-    total_rows = sum(int(store.get("row_count") or 0) for store in stores if store["status"] == "success")
+    unavailable_count = count("unavailable")
+    completed_count = success_count + unavailable_count
+    total_rows = sum(int(store.get("row_count") or 0) for store in stores if store["status"] in TERMINAL)
     master_count = sum(int(store.get("master_invoice_count") or 0) for store in stores)
     tax_count = sum(int(store.get("tax_invoice_count") or 0) for store in stores)
     income_count = sum(int(store.get("income_report_count") or 0) for store in stores)
@@ -535,7 +540,7 @@ def public_result(path: str | Path, record: dict[str, Any] | None = None) -> dic
     else:
         message = (
             record.get("error")
-            or f"部分结果：已完成 {completed_count}/{len(stores)} 个店铺（成功 {success_count}，无税票 {no_data_count}，失败 {failed_count}）"
+            or f"已保存可用文件 {completed_count}/{len(stores)} 个店铺（完整 {success_count}，平台未提供税票 {unavailable_count}，失败 {failed_count}）；可重试失败项并补查税票"
         )
 
     return {
@@ -552,6 +557,7 @@ def public_result(path: str | Path, record: dict[str, Any] | None = None) -> dic
         "success_count": success_count,
         "no_data_count": no_data_count,
         "failed_count": failed_count,
+        "unavailable_count": unavailable_count,
         "completed_count": completed_count,
         "row_count": total_rows,
         "file_count": file_count,
@@ -579,7 +585,26 @@ def fail_batch(path: str | Path, profile: str | None, error: str) -> dict[str, A
 
 
 def _validate_completeness(files: list[dict[str, Any]], row_count: int, evidence: dict[str, Any]) -> None:
-    if row_count < 0 or len(files) != 1 + row_count * len(REQUIRED_ACTIONS):
+    unavailable = evidence.get("unavailable_documents", [])
+    if not isinstance(unavailable, list):
+        raise ValueError("缺失税票的页面证据无效")
+    missing_tax_rows = set()
+    for item in unavailable:
+        if not isinstance(item, dict):
+            raise ValueError("缺失税票的页面证据无效")
+        row = item.get("row_index")
+        labels = item.get("observed_actions")
+        if (type(row) is not int or row not in range(1, row_count + 1)
+                or row in missing_tax_rows or item.get("invoice_type") != "tax_invoice"
+                or item.get("reason") != "not_provided" or not isinstance(labels, list)
+                or any(not isinstance(label, str) for label in labels)):
+            raise ValueError("缺失税票的页面证据无效")
+        normalized_labels = [label.strip().casefold() for label in labels]
+        if (normalized_labels.count("master invoice") != 1
+                or any(label not in {"master invoice", "itemised billing", "itemized billing"} for label in normalized_labels)):
+            raise ValueError("缺失税票的页面证据未确认 Master Invoice 或含未知按钮")
+        missing_tax_rows.add(row)
+    if row_count < 0 or len(files) != 1 + row_count * len(REQUIRED_ACTIONS) - len(missing_tax_rows):
         raise ValueError("下载结果需包含一份整月收入 Excel，以及每行 Master Invoice 和 Tax Invoice PDF")
     income = [f for f in files if f["invoice_type"] == INCOME_REPORT_TYPE]
     if len(income) != 1 or income[0]["row_index"] != 0:
@@ -590,7 +615,10 @@ def _validate_completeness(files: list[dict[str, Any]], row_count: int, evidence
     for item in files:
         if item["invoice_type"] != INCOME_REPORT_TYPE:
             by_row.setdefault(item["row_index"], set()).add(item["invoice_type"])
-    if set(by_row) != set(range(1, row_count + 1)) or any(v != set(REQUIRED_ACTIONS) for v in by_row.values()):
+    if set(by_row) != set(range(1, row_count + 1)) or any(
+        kinds != ({"master_invoice"} if row in missing_tax_rows else set(REQUIRED_ACTIONS))
+        for row, kinds in by_row.items()
+    ):
         raise ValueError("部分税票行缺少 Master Invoice 或 Tax Invoice")
     if row_count == 0 and evidence.get("empty_text") != "No receipt found":
         raise ValueError("缺少页面 No receipt found 空状态确认")
@@ -664,6 +692,10 @@ def run_batch(
             backup = manifest_path.with_name("manifest.tax_only_v1.json")
             if not backup.exists():
                 shutil.copyfile(manifest_path, backup)
+        elif record.get("migrated_from") == PREVIOUS_SCHEMA:
+            backup = manifest_path.with_name("manifest.v2.json")
+            if not backup.exists():
+                shutil.copyfile(manifest_path, backup)
 
         def save() -> None:
             record["updated_at"] = datetime.now().isoformat(timespec="seconds")
@@ -688,6 +720,8 @@ def run_batch(
                     store.update(**_file_counts(store.get("files") or []))
             elif store["status"] == "no_data":
                 store.update(status="failed", error="尚未确认整月收入 Excel，请重试补下载")
+            elif store["status"] == "unavailable":
+                store.update(status="pending", error="补查平台是否已提供税票")
         save()
 
         try:
@@ -736,7 +770,7 @@ def run_batch(
                     )
                     _validate_completeness(normalized_files, row_count, evidence)
                     store.update(
-                        status="success", row_count=row_count,
+                        status="unavailable" if evidence.get("unavailable_documents") else "success", row_count=row_count,
                         **_file_counts(normalized_files), files=normalized_files,
                         rows=[{
                             "row_index": int(r.get("row_index") or 0),
@@ -746,7 +780,11 @@ def run_batch(
                         } for r in (result.get("rows") or [])],
                         evidence=evidence, error="",
                     )
-                    log(f"{store['store_name']}：已保存收入 Excel 1 份、账单和税票 PDF {row_count * 2} 份")
+                    missing_count = len(evidence.get("unavailable_documents") or [])
+                    if missing_count:
+                        store["error"] = f"平台未提供 {missing_count} 份 Tax Invoice，已保存收入 Excel 和可用账单；可稍后补查税票"
+                    log(f"{store['store_name']}：已保存收入 Excel 1 份、账单和税票 PDF {store['master_invoice_count'] + store['tax_invoice_count']} 份"
+                        + (f"；{store['error']}" if missing_count else ""))
                 except Exception as exc:
                     candidates = exc.partial_files if isinstance(exc, InvoiceExportError) else result.get("files") or []
                     partial_files: list[dict[str, Any]] = []
@@ -772,7 +810,7 @@ def run_batch(
                     break
 
         complete = all(store["status"] in TERMINAL for store in record["stores"])
-        record["status"] = "complete" if complete else "incomplete"
+        record["status"] = ("complete_with_unavailable" if any(s["status"] == "unavailable" for s in record["stores"]) else "complete") if complete else "incomplete"
         save()
         final_result = public_result(manifest_path, record)
         log(final_result["completion_message"])

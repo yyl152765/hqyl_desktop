@@ -240,6 +240,28 @@ class StartupTests(unittest.TestCase):
                 prepare_ziniao_client(str(path), _backend=backend)
         self.assertFalse(backend.mock_calls)
 
+    def test_close_ignores_only_window_disappearing_during_enumeration(self):
+        for code in (1400, 5):
+            with self.subTest(code=code):
+                adapter = object.__new__(_WindowsProcesses)
+                adapter.user = Mock()
+                adapter.callback_type = lambda callback: callback
+                adapter.alive = Mock(return_value=True)
+                def get_pid(hwnd, pointer):
+                    pointer._obj.value = self.root.pid
+                def post(*args):
+                    C.set_last_error(code)
+                    return False
+                adapter.user.GetWindowThreadProcessId.side_effect = get_pid
+                adapter.user.PostMessageW.side_effect = post
+                adapter.user.EnumWindows.side_effect = lambda visit, arg: visit(123, arg)
+                if code == 1400:
+                    adapter.request_close(self.root)
+                else:
+                    with self.assertRaises(OSError) as error:
+                        adapter.request_close(self.root)
+                    self.assertEqual(error.exception.winerror, 5)
+
     def test_native_terminate_revalidates_handle_identity_and_pid_reuse(self):
         adapter = object.__new__(_WindowsProcesses)
         adapter.kernel = Mock()

@@ -23,7 +23,7 @@ INCOME_REPORT_TYPE = "income_report"
 INCOME_REPORT_LABEL = "Income Report"
 INCOME_REPORT_FOLDER = "Income_Report"
 
-REQUIRED_WORKBOOK_SHEETS: tuple[str, ...] = ("Summary", "Adjustment")
+REQUIRED_WORKBOOK_SHEETS: tuple[str, ...] = ("Summary",)
 EXPECTED_HISTORY_HEADERS: tuple[str, ...] = (
     "report type",
     "request time",
@@ -31,6 +31,16 @@ EXPECTED_HISTORY_HEADERS: tuple[str, ...] = (
     "report name",
     "action",
 )
+INDONESIAN_HISTORY_HEADERS = (
+    "jenis laporan", "waktu laporan dibuat", "akun", "nama laporan", "aksi",
+)
+RELEASED_LABELS = {"released", "sudah dilepas"}
+WORKBOOK_LABELS = {
+    "income report": ("report details", "username (seller)", "from", "to", "Income",
+                      {"Order Info", "Released Amount Details"}, {"Sequence No.", "Order ID"}),
+    "laporan penghasilan": ("rincian laporan", "username (penjual)", "dari", "ke", "Penghasilan",
+                           {"Informasi Pesanan", "Rincian Jumlah Pelepasan Dana"}, {"No.", "No. Pesanan"}),
+}
 
 MAX_XLSX_BYTES = 64 * 1024 * 1024
 MAX_UNCOMPRESSED_ZIP_BYTES = 256 * 1024 * 1024
@@ -39,7 +49,7 @@ GENERATION_TIMEOUT = 30 * 60.0
 TEMP_DOWNLOAD_SUFFIXES = (".crdownload", ".tmp", ".part", ".download", ".partial")
 
 _INCOME_FILENAME_RE = re.compile(
-    r"^Income\.(?P<report_type>[A-Za-z0-9_-]+)\.(?P<country>[A-Za-z0-9_-]+)\.(?P<start_ymd>\d{8})_(?P<end_ymd>\d{8})\.xlsx$"
+    r"^Income\.(?P<report_type>sudah dilepas|[A-Za-z0-9_-]+)\.(?P<country>[A-Za-z0-9_-]+)\.(?P<start_ymd>\d{8})_(?P<end_ymd>\d{8})\.xlsx$"
 )
 
 
@@ -112,7 +122,7 @@ def parse_income_report_filename(filename: Any) -> dict[str, Any] | None:
         "end_iso": end_dt.isoformat(),
         "is_full_month": is_full_month,
         "month": month,
-        "is_released_id": report_type == "released" and country == "id",
+        "is_released_id": report_type in RELEASED_LABELS and country == "id",
     }
 
 
@@ -126,7 +136,6 @@ def is_matching_monthly_income_filename(filename: Any, target_month: str) -> boo
         parsed["is_released_id"]
         and parsed["is_full_month"]
         and parsed["month"] == bounds["month"]
-        and parsed["filename"] == bounds["expected_filename"]
     )
 
 
@@ -218,7 +227,7 @@ def validate_income_xlsx(path: str | Path, target_month: str) -> dict[str, Any]:
         raise ValueError(
             f"收入报表文件名格式无效（应为 {bounds['expected_filename']}）：{target.name}"
         )
-    if parsed_name["report_type"] != "released":
+    if parsed_name["report_type"] not in RELEASED_LABELS:
         raise ValueError(
             f"收入报表类型不是 Released（当前为 {parsed_name['report_type']}）：{target.name}"
         )
@@ -230,7 +239,7 @@ def validate_income_xlsx(path: str | Path, target_month: str) -> dict[str, Any]:
         raise ValueError(
             f"收入报表文件名日期区间不是完整自然月（{parsed_name['start_iso']} 至 {parsed_name['end_iso']}）：{target.name}"
         )
-    if parsed_name["month"] != bounds["month"] or target.name != bounds["expected_filename"]:
+    if parsed_name["month"] != bounds["month"]:
         raise ValueError(
             f"收入报表文件名月份（{parsed_name['month']}）与所选月份 {bounds['month']} 不一致：{target.name}"
         )
@@ -263,18 +272,20 @@ def validate_income_xlsx(path: str | Path, target_month: str) -> dict[str, Any]:
             raise ValueError(f"收入报表 XLSX 缺少必要工作表：{'、'.join(missing_sheets)}")
 
         summary_grid = _read_sheet_grid(workbook["Summary"], max_rows=15, max_cols=10)
-        if _clean_cell_text(summary_grid.get((1, 1))).casefold() != "income report":
+        title = _clean_cell_text(summary_grid.get((1, 1))).casefold()
+        if title not in WORKBOOK_LABELS:
             raise ValueError("收入报表 Summary 工作表缺少 Income Report 标题（A1）")
-        if _clean_cell_text(summary_grid.get((5, 1))).casefold() != "report details":
+        details, seller, from_text, to_text, income_sheet, income_headers, fee_headers = WORKBOOK_LABELS[title]
+        if _clean_cell_text(summary_grid.get((5, 1))).casefold() != details:
             raise ValueError("收入报表 Summary 工作表缺少 Report Details 区块（A5）")
-        if _clean_cell_text(summary_grid.get((6, 1))).casefold() != "username (seller)":
+        if _clean_cell_text(summary_grid.get((6, 1))).casefold() != seller:
             raise ValueError("收入报表 Summary 工作表缺少 Username (Seller) 标签（A6）")
 
         from_label = _clean_cell_text(summary_grid.get((7, 1)))
         from_val = _normalize_cell_date(summary_grid.get((7, 2)))
         to_label = _clean_cell_text(summary_grid.get((8, 1)))
         to_val = _normalize_cell_date(summary_grid.get((8, 2)))
-        if from_label.casefold() != "from" or to_label.casefold() != "to":
+        if from_label.casefold() != from_text or to_label.casefold() != to_text:
             raise ValueError("收入报表 Summary 工作表缺少 From / to 账期标签（A7:A8）")
         if from_val != bounds["start_iso"] or to_val != bounds["end_iso"]:
             raise ValueError(
@@ -288,36 +299,41 @@ def validate_income_xlsx(path: str | Path, target_month: str) -> dict[str, Any]:
                 f"收入报表 Summary 币种不是印尼盾 Rp（D10 当前为 {summary_currency or '空'}）"
             )
 
-        adj_grid = _read_sheet_grid(workbook["Adjustment"], max_rows=10, max_cols=8)
-        adj_from_label = _clean_cell_text(adj_grid.get((3, 1)))
-        adj_from_val = _normalize_cell_date(adj_grid.get((3, 2)))
-        adj_to_label = _clean_cell_text(adj_grid.get((3, 3)))
-        adj_to_val = _normalize_cell_date(adj_grid.get((3, 4)))
-        adj_currency = _clean_cell_text(adj_grid.get((4, 1)))
-        if (
-            adj_from_label.casefold() != "from"
-            or adj_to_label.casefold() != "to"
-            or adj_from_val != bounds["start_iso"]
-            or adj_to_val != bounds["end_iso"]
-        ):
-            raise ValueError(
-                f"收入报表 Adjustment 内部账期（{adj_from_val or '空'} 至 {adj_to_val or '空'}）"
-                f"与所选月份 {bounds['month']}（{bounds['start_iso']} 至 {bounds['end_iso']}）不一致"
-            )
-        if adj_currency != "Rp":
-            raise ValueError(
-                f"收入报表 Adjustment 币种不是印尼盾 Rp（A4 当前为 {adj_currency or '空'}）"
-            )
+        # Shopee omits this sheet entirely in valid reports without adjustments.
+        if "Adjustment" in sheet_names:
+            adj_grid = _read_sheet_grid(workbook["Adjustment"], max_rows=10, max_cols=8)
+            adj_from_label = _clean_cell_text(adj_grid.get((3, 1)))
+            adj_from_val = _normalize_cell_date(adj_grid.get((3, 2)))
+            adj_to_label = _clean_cell_text(adj_grid.get((3, 3)))
+            adj_to_val = _normalize_cell_date(adj_grid.get((3, 4)))
+            adj_currency = _clean_cell_text(adj_grid.get((4, 1)))
+            if (
+                adj_from_label.casefold() != from_text
+                or adj_to_label.casefold() != to_text
+                or adj_from_val != bounds["start_iso"]
+                or adj_to_val != bounds["end_iso"]
+            ):
+                raise ValueError(
+                    f"收入报表 Adjustment 内部账期（{adj_from_val or '空'} 至 {adj_to_val or '空'}）"
+                    f"与所选月份 {bounds['month']}（{bounds['start_iso']} 至 {bounds['end_iso']}）不一致"
+                )
+            if adj_currency != "Rp":
+                raise ValueError(
+                    f"收入报表 Adjustment 币种不是印尼盾 Rp（A4 当前为 {adj_currency or '空'}）"
+                )
 
-        for name in _workbook_sheet_family(sheet_names, "Income"):
+        other_family = "Penghasilan" if income_sheet == "Income" else "Income"
+        if any(name == other_family or name.startswith(other_family + " - ") for name in sheet_names):
+            raise ValueError("收入报表包含多个语言的收入明细，无法确认完整性")
+        for name in _workbook_sheet_family(sheet_names, income_sheet):
             grid = _read_sheet_grid(workbook[name], max_rows=1, max_cols=30)
             labels = {_clean_cell_text(v) for v in grid.values()}
-            if not {"Order Info", "Released Amount Details"}.issubset(labels):
+            if not income_headers.issubset(labels):
                 raise ValueError(f"收入报表 {name} 明细缺少 Order Info / Released Amount Details 表头")
         for name in _workbook_sheet_family(sheet_names, "Seller Fee"):
             grid = _read_sheet_grid(workbook[name], max_rows=2, max_cols=10)
             labels = {_clean_cell_text(v) for v in grid.values()}
-            if not {"Sequence No.", "Order ID"}.issubset(labels):
+            if not fee_headers.issubset(labels):
                 raise ValueError(f"收入报表 {name} 缺少费用明细表头")
     except ValueError:
         raise
@@ -339,6 +355,7 @@ def validate_income_xlsx(path: str | Path, target_month: str) -> dict[str, Any]:
         "period_start": bounds["start_iso"],
         "period_end": bounds["end_iso"],
         "currency": "Rp",
+        "adjustment_sheet_present": "Adjustment" in sheet_names,
     }
 
 
@@ -459,7 +476,7 @@ INCOME_PAGE_STATE = r"""(() => {
 
   const passwordInputs = [...document.querySelectorAll('input[type="password"]')].filter(visible);
   const verifyButtons = [...document.querySelectorAll('button.eds-button--primary.action')].filter(
-    e => visible(e) && /^verify$/i.test(clean(e.innerText || e.textContent))
+    e => visible(e) && /^(?:verify|verifikasi)$/i.test(clean(e.innerText || e.textContent))
   );
   let verifySelector = '';
   if (verifyButtons.length === 1) {
@@ -689,7 +706,10 @@ def _raw_income_state(browser: Any, store_id: str) -> dict[str, Any]:
     result = browser.evaluate(store_id, INCOME_PAGE_STATE)
     if not isinstance(result, dict) or ("history_grid" not in result and "income_page" not in result):
         raise ValueError("无法识别 Shopee 印尼收入报表页面结构")
-    hostname = (urlsplit(str(result.get("url") or "")).hostname or "").casefold()
+    page_url = urlsplit(str(result.get("url") or ""))
+    hostname = (page_url.hostname or "").casefold()
+    if hostname == "accounts.shopee.co.id" and page_url.path.rstrip("/") == "/seller/login":
+        raise ValueError("店铺 Shopee 登录已失效，请在紫鸟中重新登录该店铺后重试；其他店铺继续处理")
     if hostname != SHOPEE_ID_HOST:
         raise ValueError("当前页面不是 Shopee 印尼卖家中心（seller.shopee.co.id），已拒绝操作")
     if result.get("challenge"):
@@ -712,7 +732,7 @@ def _is_my_reports_income_url(url: str) -> bool:
 
 def _validate_history_headers(header_columns: list[Any]) -> bool:
     normalized = tuple(" ".join(str(col or "").strip().split()).casefold() for col in header_columns)
-    return normalized == EXPECTED_HISTORY_HEADERS
+    return normalized in (EXPECTED_HISTORY_HEADERS, INDONESIAN_HISTORY_HEADERS)
 
 
 def _history_rows_signature(rows: list[dict[str, Any]]) -> tuple[Any, ...]:
@@ -741,7 +761,7 @@ def _classify_history_row_status(row: dict[str, Any]) -> str:
         and bool(re.fullmatch(r"download", dl_text or action_text, re.IGNORECASE))
     ):
         return "download"
-    if re.search(r"processing|generating|exporting|pending|in\s*progress", action_text, re.IGNORECASE):
+    if re.search(r"processing|generating|exporting|pending|in\s*progress|sedang diproses", action_text, re.IGNORECASE):
         return "processing"
     return action_text.casefold() or "unknown"
 
@@ -756,7 +776,7 @@ def _classify_popover_item_status(item: dict[str, Any]) -> str:
         and re.fullmatch(r"download", btn_text or status_text, re.IGNORECASE)
     ):
         return "download"
-    if re.search(r"processing|generating|exporting|pending|in\s*progress", status_text, re.IGNORECASE):
+    if re.search(r"processing|generating|exporting|pending|in\s*progress|sedang diproses", status_text, re.IGNORECASE):
         return "processing"
     if re.fullmatch(r"downloaded", status_text, re.IGNORECASE):
         return "downloaded"
@@ -888,12 +908,12 @@ def _revalidate_history_download_before_click(
     row_index = int(expected_row.get("row_index") or 0)
     live_rows = list(grid.get("rows") or [])
     live_row = next((r for r in live_rows if int(r.get("row_index") or 0) == row_index), None)
-    if live_row is None or str(live_row.get("report_name") or "").strip() != bounds["expected_filename"]:
+    if live_row is None or not is_matching_monthly_income_filename(live_row.get("report_name"), target_month):
         live_row = next(
             (
                 r
                 for r in live_rows
-                if str(r.get("report_name") or "").strip() == bounds["expected_filename"]
+                if is_matching_monthly_income_filename(r.get("report_name"), target_month)
                 and _classify_history_row_status(r) == "download"
             ),
             None,
@@ -901,7 +921,7 @@ def _revalidate_history_download_before_click(
     if live_row is None:
         raise ValueError(f"下载前复核失败：未找到 {bounds['expected_filename']} 的可下载行")
     report_type = str(live_row.get("report_type") or "").strip()
-    if report_type and report_type.casefold() != "released":
+    if report_type and report_type.casefold() not in RELEASED_LABELS:
         raise ValueError(f"下载前复核失败：历史记录类型不是 released（当前为 {report_type}）")
     if not is_matching_monthly_income_filename(live_row.get("report_name"), target_month):
         raise ValueError(f"下载前复核失败：历史记录文件名 {live_row.get('report_name')} 与 {target_month} 不匹配")
@@ -990,7 +1010,7 @@ def _find_history_report(
         rows = grid.get("rows") or []
         matches = [r for r in rows if is_matching_monthly_income_filename(r.get("report_name"), target_month)]
         for row in matches:
-            if str(row.get("report_type") or "").strip().casefold() != "released":
+            if str(row.get("report_type") or "").strip().casefold() not in RELEASED_LABELS:
                 raise ValueError("整月报表文件名与历史记录的 Released 类型不一致，已停止导出")
         if matches:
             # If duplicate historical requests exist, prefer a completed file on this page.
@@ -1061,7 +1081,7 @@ def _wait_income_export_page_ready(
                 f"Income 页面 URL dateRange 参数（{query.get('dateRange')}）"
                 f"与目标月份 {bounds['date_range_param']} 不一致"
             )
-        elif active_tab_count != 1 or active_tab_text.casefold() != "released":
+        elif active_tab_count != 1 or active_tab_text.casefold() not in RELEASED_LABELS:
             settled_sig = None
             last_issue = f"Income 页面当前激活标签为 {active_tab_text or '空'}，未确认 Released 标签"
         elif date_range_count != 1 or date_range_text != bounds["display_dmy_range"]:

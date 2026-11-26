@@ -318,7 +318,7 @@ PAGE_STATE = r"""(() => {
 
   const passwordInputs = [...document.querySelectorAll('input[type="password"]')].filter(visible);
   const verifyButtons = [...document.querySelectorAll('button.eds-button--primary.action')].filter(
-    e => visible(e) && /^verify$/i.test(clean(e.innerText || e.textContent))
+    e => visible(e) && /^(?:verify|verifikasi)$/i.test(clean(e.innerText || e.textContent))
   );
   let verifySelector = '';
   if (verifyButtons.length === 1) {
@@ -423,7 +423,7 @@ PAGE_STATE = r"""(() => {
   });
 
   const bodyText = clean(document.body ? (document.body.innerText || document.body.textContent) : '');
-  const noReceiptFound = /\bno\s+receipt\s+found\b/i.test(bodyText);
+  const noReceiptFound = /\b(?:no\s+receipt\s+found|tidak\s+ada\s+faktur)\b/i.test(bodyText);
   const busy = [...document.querySelectorAll('.eds-loading,.eds-spin,.eds-table__loading,[aria-busy="true"],.loading-mask')].some(visible);
   const loginPage = /^\/(?:account\/(?:signin|login)|buyer\/login)(?:\/|$)/i.test(location.pathname || '');
 
@@ -526,7 +526,10 @@ class ShopeeIdInvoiceGateway:
             raise ValueError("无法识别 Shopee 印尼税票页面结构")
         if not require_invoice_fields and "password_dialog" not in result:
             raise ValueError("无法识别 Shopee 印尼密码验证弹窗结构")
-        hostname = (urlsplit(str(result.get("url") or "")).hostname or "").casefold()
+        page_url = urlsplit(str(result.get("url") or ""))
+        hostname = (page_url.hostname or "").casefold()
+        if hostname == "accounts.shopee.co.id" and page_url.path.rstrip("/") == "/seller/login":
+            raise ValueError("店铺 Shopee 登录已失效，请在紫鸟中重新登录该店铺后重试；其他店铺继续处理")
         if hostname != SHOPEE_ID_HOST:
             raise ValueError("当前页面不是 Shopee 印尼卖家中心（seller.shopee.co.id），已拒绝操作")
         if result.get("challenge"):
@@ -648,9 +651,13 @@ class ShopeeIdInvoiceGateway:
                 by_type["master_invoice"].append(action)
             elif lower == "tax invoice":
                 by_type["tax_invoice"].append(action)
+            else:
+                raise ValueError(f"第 {row_index} 行出现未识别的下载按钮：{label or '空'}")
         selected_actions: dict[str, dict[str, Any]] = {}
         for key, expected_label in ACTION_LABELS.items():
             matches = by_type[key]
+            if key == "tax_invoice" and not matches:
+                continue
             if len(matches) != 1:
                 raise ValueError(
                     f"第 {row_index} 行（{description}）缺少或存在重复的 {expected_label} 下载按钮"
@@ -820,6 +827,9 @@ class ShopeeIdInvoiceGateway:
         ):
             raise ValueError(f"下载前复核失败：第 {row_index} 行的描述或日期已发生变化")
         validated_actions = self._validate_row_actions_and_month(live_row, target_month)
+        planned_actions = self._validate_row_actions_and_month(expected_row, target_month)
+        if set(validated_actions) != set(planned_actions):
+            raise ValueError(f"下载前复核失败：第 {row_index} 行可用文件类型发生变化")
         live_action = validated_actions[action_key]
         expected_label = ACTION_LABELS[action_key]
         if str(live_action.get("text") or "").strip().casefold() != expected_label.casefold():
@@ -943,15 +953,23 @@ class ShopeeIdInvoiceGateway:
             if not rows:
                 raise ValueError("税票页面未显示数据行且未确认 No receipt found 空状态")
 
-            # Validate all rows up front so missing Master/Tax Invoice actions fail before downloading.
+            # Missing Tax Invoice is an observed platform availability state, not a failed click.
+            unavailable_documents = []
             for row in rows:
-                self._validate_row_actions_and_month(row, month)
+                actions = self._validate_row_actions_and_month(row, month)
+                if "tax_invoice" not in actions:
+                    unavailable_documents.append({
+                        "row_index": int(row["row_index"]),
+                        "invoice_type": "tax_invoice",
+                        "reason": "not_provided",
+                        "observed_actions": [str(a.get("text") or "").strip() for a in row["actions"]],
+                    })
 
             expected_row_count = len(rows)
             for row in rows:
                 row_index = int(row["row_index"])
                 row_files: dict[str, str] = {}
-                for action_key in REQUIRED_ACTIONS:
+                for action_key in self._validate_row_actions_and_month(row, month):
                     live_selector = self._revalidate_before_click(
                         store_id, month, expected_row_count, row, action_key
                     )
@@ -985,7 +1003,7 @@ class ShopeeIdInvoiceGateway:
                     "amount": row.get("amount", ""),
                     "date": row.get("date", ""),
                     "master_invoice_file": row_files["master_invoice"],
-                    "tax_invoice_file": row_files["tax_invoice"],
+                    "tax_invoice_file": row_files.get("tax_invoice", ""),
                 })
         except InvoiceExportError:
             raise
@@ -1007,7 +1025,7 @@ class ShopeeIdInvoiceGateway:
         income_count = sum(1 for item in downloaded_files if item["invoice_type"] == INCOME_REPORT_TYPE)
         master_count = sum(1 for item in downloaded_files if item["invoice_type"] == "master_invoice")
         tax_count = sum(1 for item in downloaded_files if item["invoice_type"] == "tax_invoice")
-        if income_count != 1 or master_count != expected_row_count or tax_count != expected_row_count:
+        if income_count != 1 or master_count != expected_row_count or tax_count != expected_row_count - len(unavailable_documents):
             raise InvoiceExportError(
                 f"下载数量不完整：收入报表 {income_count} 份，税票共 {expected_row_count} 行（Master Invoice {master_count} 份，Tax Invoice {tax_count} 份）",
                 partial_files=downloaded_files,
@@ -1034,6 +1052,7 @@ class ShopeeIdInvoiceGateway:
                 "history_page": income_info.get("history_page"),
             },
             "evidence": {
+                "unavailable_documents": unavailable_documents,
                 "selected_month": selected_text,
                 "row_count": expected_row_count,
                 "income_report_count": income_count,

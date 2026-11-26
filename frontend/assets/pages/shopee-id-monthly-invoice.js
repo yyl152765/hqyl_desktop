@@ -126,7 +126,7 @@
     snapshot = result;
     $("storeCount").textContent = String(result.store_count || 0);
     $("completedCount").textContent = String(result.completed_count || 0);
-    $("noDataCount").textContent = `无税票 ${result.no_data_count || 0} · 失败 ${result.failed_count || 0}`;
+    $("noDataCount").textContent = `待补税票 ${result.unavailable_count || 0} · 当月无税票 ${result.no_data_count || 0} · 失败 ${result.failed_count || 0}`;
     $("recordCount").textContent = Number(result.file_count || 0).toLocaleString();
     $("invoiceBreakdown").textContent = `收入 Excel ${result.income_report_count || 0} · Master ${result.master_invoice_count || 0} · Tax ${result.tax_invoice_count || 0}`;
     $("outputFile").textContent = result.is_complete ? "下载已完成" : (result.file_count ? "部分已保存" : "未完成");
@@ -139,15 +139,17 @@
           : (result.completion_message || "批次已结束");
 
     if (!running && result.status !== "running") {
-      $("taskBadge").className = `status-pill ${result.is_complete ? "success" : "failed"}`;
-      $("taskBadge").textContent = result.is_complete ? "已完成" : "结果不完整";
-      $("statusText").textContent = result.is_complete ? "账单与税票已校验保存" : "可处理失败项后重试";
+      const onlyUnavailable = result.status === "complete_with_unavailable";
+      $("taskBadge").className = `status-pill ${result.is_complete ? "success" : onlyUnavailable ? "pending" : "failed"}`;
+      $("taskBadge").textContent = result.is_complete ? "已完成" : onlyUnavailable ? "待补税票" : "结果不完整";
+      $("statusText").textContent = result.is_complete ? "账单与税票已校验保存" : onlyUnavailable ? "可用文件已保存，可稍后补查税票" : "可处理失败项后重试";
     }
 
     const labels = {
       pending: "等待",
       running: "运行中",
       success: "成功",
+      unavailable: "平台未提供税票",
       no_data: "无税票 (No receipt found)",
       failed: "失败",
     };
@@ -429,7 +431,7 @@
       $("storeCount").textContent = "0";
       $("completedCount").textContent = "0";
       $("recordCount").textContent = "0";
-      $("noDataCount").textContent = "无税票 0 · 失败 0";
+      $("noDataCount").textContent = "待补税票 0 · 当月无税票 0 · 失败 0";
       $("invoiceBreakdown").textContent = "收入 Excel 0 · Master 0 · Tax 0";
       $("outputFile").textContent = "未生成";
       $("batchLabel").textContent = "准备新任务";

@@ -191,7 +191,7 @@ from backend.update_service import (
 )
 
 
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.0.10"
 APP_NAME = "寰球云联自动化平台"
 
 
@@ -2550,7 +2550,7 @@ class AppBridge:
                     if not isinstance(previous, dict):
                         previous = {}
                     previous[profile] = str(path)
-                    temu_export.write_json(pointer, previous)
+                    shopee_id_monthly_invoice.write_json(pointer, previous)
                     return shopee_id_monthly_invoice.run_batch(
                         path,
                         ShopeeIdInvoiceGateway(profile, browser=browser),

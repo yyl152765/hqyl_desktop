@@ -1278,6 +1278,11 @@ h2 {
   color: var(--red);
 }
 
+.status-pill.pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .overview-grid {
   display: grid;
   grid-template-columns: 1.1fr 0.7fr 0.7fr minmax(280px, 1.5fr);
@@ -1325,6 +1330,11 @@ h2 {
 .overview-card.accent-green {
   border-color: #bfe2d7;
   background: var(--green-soft);
+}
+
+.shopee-id-invoices .overview-card small {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .overview-card.file-card strong {
