@@ -6,6 +6,7 @@
     <title>Lazada 活动模板下载</title>
     <link rel="icon" type="image/png" href="../assets/logo.png" />
     <link rel="stylesheet" href="../assets/app.css?v=20260623-log-panel" />
+    <link rel="stylesheet" href="../assets/pages/lazada-campaign-workbook.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -36,6 +37,16 @@
                 </select>
               </label>
               <label class="store-field"><span>子活动完整名称</span><input id="scene" required spellcheck="false" placeholder="复制详情页上的标题，保留方括号前缀、折扣和日期" /></label>
+              <label for="processingMode"><span>处理方式</span>
+                <select id="processingMode" required>
+                  <option value="auto">自动识别</option>
+                  <option value="plain">按已有活动价筛选</option>
+                  <option value="invited">按推荐价填充并筛选</option>
+                </select>
+              </label>
+              <label for="discountThreshold"><span>最低折扣率</span>
+                <span class="campaign-percent-field"><input id="discountThreshold" type="number" min="0.01" max="100" step="0.01" value="95" required /><span aria-hidden="true">%</span></span>
+              </label>
               <div class="output-field">
                 <label for="outputDir"><span>保存目录</span></label>
                 <div class="input-action"><input id="outputDir" required /><button id="chooseDirBtn" type="button" class="secondary">选择目录</button></div>
@@ -43,13 +54,14 @@
               <label><span>每家店最长等待时间（分钟）</span><input id="timeoutMinutes" type="number" min="1" step="1" required /></label>
             </div>
             <div class="actions">
-              <button id="downloadBtn" type="submit" class="primary" disabled>下载 Excel 模板</button>
-              <button id="openFolderBtn" type="button" class="secondary" disabled>打开文件所在目录</button>
+              <button id="downloadBtn" type="submit" class="primary" disabled>下载并筛选 Excel</button>
+              <button id="openFolderBtn" type="button" class="secondary" disabled>打开原始模板目录</button>
+              <button id="openProcessedBtn" type="button" class="secondary" disabled>打开筛选结果目录</button>
             </div>
           </form>
           <section class="surface log-surface">
             <div class="section-head tight">
-              <div><h2>运行日志</h2><p>模板生成期间，每两分钟关闭历史文件窗口，刷新活动页并检查导出记录。</p></div>
+              <div><h2>运行日志</h2><p>每两分钟检查导出进度。所有店铺下载成功后，按所选方式筛选本批模板。</p></div>
               <button id="copyLogBtn" type="button" class="secondary compact-btn">复制日志</button>
             </div>
             <pre id="logBox" class="log-box" tabindex="0" aria-label="运行日志"></pre>
@@ -59,6 +71,6 @@
     </div>
     <div id="toast" class="toast hidden"></div>
     <script src="../assets/common.js"></script>
-    <script src="../assets/pages/lazada-campaign-download.js?v=20261123-campaign-modes"></script>
+    <script src="../assets/pages/lazada-campaign-download.js?v=20261126-campaign-filter"></script>
   </body>
 </html>

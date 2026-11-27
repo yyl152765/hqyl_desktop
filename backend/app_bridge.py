@@ -385,7 +385,7 @@ class AppBridge:
                 {
                     "key": "lazada_campaign_download",
                     "name": "Lazada 活动模板下载",
-                    "description": "按店铺、站点和子活动下载报名用的 Excel 模板。",
+                    "description": "按店铺下载子活动模板，全部下载成功后按最低折扣率筛选。",
                     "status": "ready",
                     "vendor": "ziniao",
                 },
@@ -2710,6 +2710,7 @@ class AppBridge:
         settings = self.config_store.load()
         return {"ok": True, "output_dir": str(download_lazada_campaign.default_output_dir(settings)),
                 "site_aliases": dict(download_lazada_campaign.COUNTRY_ALIASES),
+                "default_threshold": str(lazada_campaign_workbook.DEFAULT_THRESHOLD),
                 "timeout_minutes": download_lazada_campaign.DEFAULT_TIMEOUT_MINUTES}
 
     def start_lazada_campaign_download(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2732,16 +2733,16 @@ class AppBridge:
         tool = "lazada_campaign_download"
         with self._campaign_download_start_lock:
             if self.tasks.latest_snapshot(tool).get("status") in {"pending", "running"}:
-                return {"ok": False, "error": "活动模板正在下载，可在运行日志中查看进度"}
+                return {"ok": False, "error": "活动模板任务正在运行，可在运行日志中查看进度"}
             return self.tasks.start("Lazada 活动模板下载", runner, tool=tool,
-                                    context={**asdict(options), "account_id": account_id})
+                                    context={**asdict(options), "threshold": str(options.threshold), "account_id": account_id})
 
     def get_lazada_campaign_workbook_info(self) -> dict[str, Any]:
         settings = self.config_store.load()
         return {
             "ok": True,
             "workflow": "local_excel",
-            "default_threshold": "0.95",
+            "default_threshold": str(lazada_campaign_workbook.DEFAULT_THRESHOLD),
             "output_dir": settings.output_dir,
             "max_files": lazada_campaign_workbook.MAX_FILES,
             "supports_reprice_equal_prices": True,

@@ -20,9 +20,11 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter, range_boundaries
 
+from backend.core.legacy_excel import XLS_WARNING, read_legacy_workbook
 from backend.services.campaign_sku_prices import find_activity_sku_column, load_sku_prices, sku_value
 
 MAX_FILES = 100
+DEFAULT_THRESHOLD = Decimal("0.95")
 MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_ROWS = 100_000
 MAX_COLUMNS = 200
@@ -45,21 +47,36 @@ class CampaignWorkbookJob:
     source_files: tuple[Path, ...]
     output_dir: Path
     mode: str = "auto"
-    threshold: Decimal = Decimal("0.95")
+    threshold: Decimal = DEFAULT_THRESHOLD
     sku_price_file: Path | None = None
     reprice_equal_prices: bool = False
 
 
-def _threshold(value: Any) -> Decimal:
-    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+def validate_processing_options(mode: Any, threshold: Any) -> tuple[str, Decimal]:
+    if not isinstance(mode, str) or mode not in MODES:
+        raise ValueError("模板类型必须是 auto、plain、invited 或 regular")
+    if isinstance(threshold, bool) or not isinstance(threshold, (str, int, float, Decimal)):
         raise ValueError("折扣率必须是大于 0 且不大于 1 的数字，例如 0.95")
     try:
-        number = Decimal(str(value).strip())
+        number = Decimal(str(threshold).strip())
     except InvalidOperation as exc:
         raise ValueError("折扣率必须是大于 0 且不大于 1 的数字，例如 0.95") from exc
     if not number.is_finite() or not 0 < number <= 1:
         raise ValueError("折扣率必须大于 0 且不大于 1，例如 0.95 表示活动价至少为原价的 95%")
-    return number
+    return mode, number
+
+
+def _campaign_source(value: Any, *, allow_xls: bool = False) -> Path:
+    if not isinstance(value, (str, Path)) or not str(value).strip():
+        raise ValueError("Excel 表格路径必须是非空字符串")
+    source = Path(value).expanduser().resolve()
+    if source.suffix.lower() not in {".xlsx", ".xlsm"} and not (allow_xls and source.suffix.lower() == ".xls"):
+        raise ValueError(f"仅支持 .xlsx 或 .xlsm Excel 表格：{source.name}")
+    if not source.is_file():
+        raise ValueError(f"Excel 表格不存在：{source.name}")
+    if not 0 < source.stat().st_size <= MAX_FILE_BYTES:
+        raise ValueError(f"Excel 表格必须非空且不超过 50 MiB：{source.name}")
+    return source
 
 
 def validate_campaign_payload(payload: Any) -> CampaignWorkbookJob:
@@ -68,23 +85,13 @@ def validate_campaign_payload(payload: Any) -> CampaignWorkbookJob:
     source_files = payload.get("source_files")
     if not isinstance(source_files, (list, tuple)) or not 1 <= len(source_files) <= MAX_FILES:
         raise ValueError(f"请选择 1 至 {MAX_FILES} 份 Excel 表格")
-    mode = payload.get("mode", "auto")
-    if not isinstance(mode, str) or mode not in MODES:
-        raise ValueError("模板类型必须是 auto、plain、invited 或 regular")
+    mode, threshold = validate_processing_options(payload.get("mode", "auto"), payload.get("threshold", DEFAULT_THRESHOLD))
     reprice_equal_prices = payload.get("reprice_equal_prices", False)
     if not isinstance(reprice_equal_prices, bool):
         raise ValueError("同价改价选项必须是布尔值")
     files, seen = [], set()
     for value in source_files:
-        if not isinstance(value, (str, Path)) or not str(value).strip():
-            raise ValueError("Excel 表格路径必须是非空字符串")
-        source = Path(value).expanduser().resolve()
-        if source.suffix.lower() not in {".xlsx", ".xlsm"}:
-            raise ValueError(f"仅支持 .xlsx 或 .xlsm Excel 表格：{source.name}")
-        if not source.is_file():
-            raise ValueError(f"Excel 表格不存在：{source.name}")
-        if not 0 < source.stat().st_size <= MAX_FILE_BYTES:
-            raise ValueError(f"Excel 表格必须非空且不超过 50 MiB：{source.name}")
+        source = _campaign_source(value)
         key = os.path.normcase(str(source))
         if key not in seen:
             files.append(source)
@@ -109,7 +116,7 @@ def validate_campaign_payload(payload: Any) -> CampaignWorkbookJob:
             if os.path.normcase(str(sku_price_file)) in seen:
                 raise ValueError("SKU 价格表请单独导入，不要同时作为活动表格处理")
     return CampaignWorkbookJob(
-        tuple(files), output_dir, mode, _threshold(payload.get("threshold", "0.95")),
+        tuple(files), output_dir, mode, threshold,
         sku_price_file, reprice_equal_prices,
     )
 
@@ -320,6 +327,8 @@ def _prices(sheet: Any, layout: dict[str, Any], row: int, job: CampaignWorkbookJ
 
 
 def _book(source: Path):
+    if source.suffix.lower() == ".xls":
+        return read_legacy_workbook(source, max_dimensions=(MAX_ROWS, MAX_COLUMNS))
     try:
         return load_workbook(source, keep_links=True, keep_vba=source.suffix.lower() == ".xlsm")
     except Exception as exc:
@@ -674,6 +683,12 @@ def run_campaign_batch(job: CampaignWorkbookJob, progress: Callable[[str], None]
     job = validate_campaign_payload({"source_files": job.source_files, "output_dir": job.output_dir,
                                      "mode": job.mode, "threshold": job.threshold, "sku_price_file": job.sku_price_file,
                                      "reprice_equal_prices": job.reprice_equal_prices})
+    return filter_campaign_workbooks(job, progress, create_archive=True)
+
+
+def filter_campaign_workbooks(job: CampaignWorkbookJob, progress: Callable[[str], None] | None, *,
+                              create_archive: bool) -> dict[str, Any]:
+    """Apply the validated settings and report unreadable sources individually."""
     # Load once for the entire batch; conflicts fail before any outputs exist.
     sku_prices = load_sku_prices(job.sku_price_file) if job.sku_price_file else None
     sku_reference = _sku_reference(job, sku_prices)
@@ -686,9 +701,13 @@ def run_campaign_batch(job: CampaignWorkbookJob, progress: Callable[[str], None]
     for index, source in enumerate(job.source_files, 1):
         if progress:
             progress(f"[{index}/{total}] 筛选 Excel 表格：{source.name}")
-        output = output_dir / f"{index:03d}_{source.stem}_已处理{source.suffix.lower()}"
+        suffix = source.suffix.lower()
+        output = output_dir / f"{index:03d}_{source.stem}_已处理{'.xlsx' if suffix == '.xls' else suffix}"
         removed_skus = []
         try:
+            source = _campaign_source(source, allow_xls=True)
+            if suffix == ".xls" and progress:
+                progress(f"{source.name}：{XLS_WARNING}")
             result = _process(source, output, job, audit, sku_prices, removed_skus)
         except Exception as exc:
             result = _base_result(source)
@@ -715,18 +734,18 @@ def run_campaign_batch(job: CampaignWorkbookJob, progress: Callable[[str], None]
     except Exception as exc:
         completion_errors.append(f"汇总与异常明细导出失败：{exc}")
     archive = output_dir / "Excel折扣筛选结果.zip"
-    temporary = archive.with_name(f".{archive.name}.tmp")
-    try:
-        if output_files:
+    if create_archive and output_files:
+        temporary = archive.with_name(f".{archive.name}.tmp")
+        try:
             with ZipFile(temporary, "w", ZIP_DEFLATED) as bundle:
                 for path in output_files:
                     bundle.write(path, Path(path).name)
             os.replace(temporary, archive)
             output_files.append(str(archive))
-    except Exception as exc:
-        completion_errors.append(f"ZIP 打包失败：{exc}")
-    finally:
-        temporary.unlink(missing_ok=True)
+        except Exception as exc:
+            completion_errors.append(f"ZIP 打包失败：{exc}")
+        finally:
+            temporary.unlink(missing_ok=True)
     success = sum(result["status"] == "success" for result in files)
     return {"is_complete": success == total and not completion_errors, "file_count": total, "success_count": success,
             "failed_count": total - success, **{key: sum(result[key] for result in files) for key in COUNTERS},

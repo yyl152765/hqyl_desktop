@@ -1,4 +1,4 @@
-"""按店名识别 Lazada 站点，逐店下载特邀活动或未报名活动的 Excel 模板。"""
+"""逐店下载 Lazada 活动模板，全部下载成功后按最低折扣率筛选。"""
 from __future__ import annotations
 
 import argparse
@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
@@ -20,7 +21,7 @@ if __name__ == "__main__" and not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.config_store import AppSettings, ConfigStore
-from backend.services import lazada_bill_page as login
+from backend.services import lazada_bill_page as login, lazada_campaign_workbook as workbooks
 from backend.services.lazada_balance_collector import COUNTRY_ALIASES, COUNTRY_DOMAINS
 from backend.services.lazada_campaign_agreement import DIALOG, agreement_dialog, confirm_required_agreements
 from backend.services.lazada_monthly_report import (
@@ -101,6 +102,8 @@ class DownloadOptions:
     output_dir: str
     timeout_minutes: int
     mode: str | None = None
+    processing_mode: str = "auto"
+    threshold: Decimal = workbooks.DEFAULT_THRESHOLD
 
 
 def store_targets(payload: dict) -> tuple[StoreTarget, ...]:
@@ -149,7 +152,11 @@ def download_options(payload: dict, settings: AppSettings) -> DownloadOptions:
     folder = Path(payload.get("output_dir") or default_output_dir(settings)).expanduser().resolve()
     if folder.exists() and not folder.is_dir():
         raise ValueError("保存目录指向了文件，请选择文件夹")
-    return DownloadOptions(stores=stores, **names, output_dir=str(folder), timeout_minutes=minutes, mode=mode)
+    processing_mode, threshold = workbooks.validate_processing_options(
+        payload.get("processing_mode", "auto"), payload.get("threshold", workbooks.DEFAULT_THRESHOLD)
+    )
+    return DownloadOptions(stores=stores, **names, output_dir=str(folder), timeout_minutes=minutes, mode=mode,
+                           processing_mode=processing_mode, threshold=threshold)
 
 
 @dataclass(frozen=True)
@@ -642,6 +649,44 @@ def _error_message(exc, config):
     return message
 
 
+def _filter_downloads(stores: list[dict], options: DownloadOptions, progress: Callable[[str], None]) -> dict:
+    progress(f"开始活动处理，最低折扣率 {options.threshold:%}，共 {len(stores)} 份模板")
+    root = Path(options.output_dir)
+    multiple_batches = len(stores) > workbooks.MAX_FILES
+    if multiple_batches:
+        root /= f"活动处理_{time.strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
+    location = ""
+    errors = []
+    for offset in range(0, len(stores), workbooks.MAX_FILES):
+        group = stores[offset:offset + workbooks.MAX_FILES]
+        sources = tuple(Path(store["output_file"]) for store in group)
+        job = workbooks.CampaignWorkbookJob(sources, root, options.processing_mode, options.threshold)
+        try:
+            batch = workbooks.filter_campaign_workbooks(job, progress, create_archive=False)
+        except Exception as exc:
+            for store in group:
+                store["processing_error"] = str(exc)
+            progress(f"第 {offset + 1} 至 {offset + len(group)} 份模板处理失败：{exc}")
+            errors.append(str(exc))
+            continue
+        location = str(root) if multiple_batches else batch["output_dir"]
+        if batch["completion_message"]:
+            errors.append(batch["completion_message"])
+        for store, result in zip(group, batch["files"], strict=True):
+            if result["ok"]:
+                store["processed_file"] = result["processed_file"]
+                progress(f"{store['store']} 已筛选，保留 {result['kept_rows']} 行：{result['processed_file']}")
+            else:
+                store["processing_error"] = result["error"]
+                progress(f"{store['store']} 活动处理失败：{result['error']}")
+    success = sum(bool(store.get("processed_file")) for store in stores)
+    if location:
+        progress(f"筛选结果目录：{location}")
+    message = f"活动处理成功 {success} 份，失败 {len(stores) - success} 份"
+    return {"success_count": success, "failed_count": len(stores) - success, "output_dir": location,
+            "is_complete": success == len(stores) and not errors, "message": "。".join([message, *errors])}
+
+
 def run_download(options: DownloadOptions, config: BrowserConfig, progress: Callable[[str], None] = LOG.info) -> dict:
     folder = Path(options.output_dir)
     folder.mkdir(parents=True, exist_ok=True)
@@ -674,15 +719,24 @@ def run_download(options: DownloadOptions, config: BrowserConfig, progress: Call
         runtime.shutdown()
 
     failed = len(results) - len(files)
-    summary = f"模板下载完成，成功 {len(files)} 家，失败 {failed} 家"
-    progress(summary)
+    download_summary = f"模板下载完成，成功 {len(files)} 家，失败 {failed} 家"
+    progress(download_summary)
+    processing = None
+    if files and not failed:
+        processing = _filter_downloads(results, options, progress)
+        processing_summary = processing["message"]
+    else:
+        processing_summary = "本批未全部下载成功，已跳过活动处理"
+    progress(processing_summary)
+    summary = f"{download_summary}。{processing_summary}"
+    complete = bool(processing and processing["is_complete"])
     single_file = files[0] if len(results) == 1 and files else None
     return {
-        "success": failed == 0, "success_store_count": len(files), "failed_store_count": failed,
-        "message": summary, "stores": results,
+        "success": complete, "success_store_count": len(files), "failed_store_count": failed,
+        "message": summary, "stores": results, "processing": processing,
         "output_file": str(single_file) if single_file else "",
         "output_dir": str(single_file.parent if single_file else folder) if files else "",
-        "is_complete": failed == 0, "completion_message": summary,
+        "is_complete": complete, "completion_message": summary,
     }
 
 
@@ -691,12 +745,18 @@ def main(argv=None):
     parser.add_argument("--store", dest="store_names", action="append", help="紫鸟店铺名称，可重复指定或每行一个")
     parser.add_argument("--site", help="兼容旧调用，仅用于指定单个店铺的站点")
     parser.add_argument("--mode", choices=CAMPAIGN_MODES, help="invited 为特邀活动，unregistered 为未报名活动，省略时沿用页面当前分类")
+    parser.add_argument("--processing-mode", choices=sorted(workbooks.MODES), default="auto", help="Excel 处理方式，默认自动识别")
+    parser.add_argument("--discount-percent", default="95", help="最低折扣率，按百分数填写，默认 95")
     prompts = {"campaign": "首页活动名称（例如 A+ Other）", "scene": "子活动完整名称（含前缀和日期）"}
     for key, title in prompts.items():
         parser.add_argument(f"--{key}", help=title)
     parser.add_argument("--output", dest="output_dir", help="保存目录（默认在桌面工具输出目录下的 Lazada活动模板）")
     parser.add_argument("--timeout-minutes", type=int, default=DEFAULT_TIMEOUT_MINUTES, help="最长生成等待分钟数，默认 30")
     args = vars(parser.parse_args(argv))
+    try:
+        args["threshold"] = Decimal(args.pop("discount_percent").strip().removesuffix("%")) / 100
+    except InvalidOperation:
+        parser.error("--discount-percent 请输入百分数，例如 95")
     if args["timeout_minutes"] <= 0:
         parser.error("--timeout-minutes 必须大于 0")
     if args["mode"] is None and sys.stdin.isatty() and not all(args[k] for k in ("store_names", "campaign", "scene")):

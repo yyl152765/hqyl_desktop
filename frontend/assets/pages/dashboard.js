@@ -75,7 +75,7 @@
     { key: "lazada_ads_data", name: "泰国 Lazada 广告数据", description: "采集指定日期的广告费与业绩，写入钉钉指定 Sheet 并保存本地结果。", vendor: "ziniao" },
     { key: "lazada_bill_detail", name: "Lazada 后台收支数据", description: "按国家和账单区间采集总金额、收入与扣减项，写入钉钉指定 Sheet 并保存截图。", vendor: "ziniao" },
     { key: "lazada_campaign_workbook", name: "Excel 折扣筛选", description: "批量导入表格，设置最低折扣率，导出筛选 Excel 与异常明细。", vendor: "local" },
-    { key: "lazada_campaign_download", name: "Lazada 活动模板下载", description: "按店铺、站点和子活动下载报名用的 Excel 模板。", vendor: "ziniao" },
+    { key: "lazada_campaign_download", name: "Lazada 活动模板下载", description: "按店铺下载子活动模板，全部下载成功后按最低折扣率筛选。", vendor: "ziniao" },
     { key: "bigseller_sync", name: "BigSeller 同步", description: "通过 BigSeller 接口同步产品或库存，支持在售、售完状态。", vendor: "bigseller" },
     { key: "bigseller_item_id_query", name: "BS 商品ID查询", description: "SKU（含子SKU）模糊搜索，取 Views 降序首条 Item ID 并导出 Excel。", vendor: "bigseller" },
     { key: "bigseller_claim_query", name: "新品认领时间查询", description: "导入 Excel，查询主 SKU 最早创建商品的店铺和两个时间。", vendor: "bigseller" },

@@ -19,6 +19,8 @@ from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from backend.core.legacy_excel import XLS_WARNING, read_legacy_workbook
+
 
 HEADER_SEARCH_ROWS = 10
 SKU_HEADERS = ("库存SKU编号", "库存SKU", "SKU")
@@ -28,7 +30,6 @@ DETAIL_HEADERS = ("SKU", "店铺", "指标值", "店铺数", "Item ID", "状态"
 SUMMARY_HEADERS = ("汇总项目", "结果")
 PENDING_HEADERS = ("SKU", "原因", "查询次数", "源行号")
 GENERATED_SHEET_AUTHOR = "HQYL BigSeller benchmark"
-XLS_WARNING = ".xls 输出会转换为 .xlsx，仅保留单元格值和基本格式；公式采用缓存值。需要完整保留公式和格式时，请先用 Excel 另存为 .xlsx。"
 
 
 @dataclass(frozen=True)
@@ -56,57 +57,9 @@ def _source_path(path: str | Path) -> Path:
     return source
 
 
-def _read_xls(source: Path) -> Workbook:
-    """Explicit, value-based legacy conversion; callers surface XLS_WARNING."""
-    import xlrd
-
-    original = xlrd.open_workbook(str(source), formatting_info=True)
-    book = Workbook()
-    book.remove(book.active)
-    try:
-        for old_sheet in original.sheets():
-            sheet = book.create_sheet(old_sheet.name)
-            if old_sheet.visibility:
-                sheet.sheet_state = "hidden" if old_sheet.visibility == 1 else "veryHidden"
-            for row_index in range(old_sheet.nrows):
-                for col_index in range(old_sheet.ncols):
-                    old_cell = old_sheet.cell(row_index, col_index)
-                    value = old_cell.value
-                    if old_cell.ctype in {xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK}:
-                        value = None
-                    elif old_cell.ctype == xlrd.XL_CELL_DATE:
-                        value = xlrd.xldate.xldate_as_datetime(value, original.datemode)
-                    elif old_cell.ctype == xlrd.XL_CELL_BOOLEAN:
-                        value = bool(value)
-                    elif old_cell.ctype == xlrd.XL_CELL_ERROR:
-                        value = xlrd.error_text_from_code.get(value, "#VALUE!")
-                    cell = sheet.cell(row_index + 1, col_index + 1, value)
-                    if old_cell.ctype == xlrd.XL_CELL_TEXT:
-                        cell.data_type = "s"
-                    xf = original.xf_list[old_cell.xf_index]
-                    number_format = original.format_map.get(xf.format_key)
-                    if number_format:
-                        cell.number_format = number_format.format_str
-                    old_font = original.font_list[xf.font_index]
-                    cell.font = Font(name=old_font.name, size=old_font.height / 20,
-                                     bold=bool(old_font.bold), italic=bool(old_font.italic))
-            for index, info in old_sheet.colinfo_map.items():
-                sheet.column_dimensions[get_column_letter(index + 1)].width = info.width / 256
-                sheet.column_dimensions[get_column_letter(index + 1)].hidden = bool(info.hidden)
-            for index, info in old_sheet.rowinfo_map.items():
-                sheet.row_dimensions[index + 1].height = info.height / 20
-                sheet.row_dimensions[index + 1].hidden = bool(info.hidden)
-            for low_row, high_row, low_col, high_col in old_sheet.merged_cells:
-                sheet.merge_cells(start_row=low_row + 1, end_row=high_row,
-                                  start_column=low_col + 1, end_column=high_col)
-    finally:
-        original.release_resources()
-    return book
-
-
 def _open_source(source: Path, *, data_only: bool = False) -> Workbook:
     if source.suffix.lower() == ".xls":
-        return _read_xls(source)
+        return read_legacy_workbook(source)
     return load_workbook(source, data_only=data_only, keep_links=True)
 
 

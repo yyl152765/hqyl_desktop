@@ -71,7 +71,7 @@ const HQYL = (() => {
       { id: "lazada_ads_monthly", href: "lazada-ads-monthly.html", name: "Lazada 广告月报", icon: "告", tag: "Lazada", category: "Lazada 广告", description: "六站点广告、联盟及优惠券月报导出", keywords: "Lazada 广告 联盟 优惠券 真实花费 月报 支出 Spend" },
       { id: "lazada_ads_data", href: "lazada-ads-data.html", name: "广告数据", icon: "广", tag: "Lazada", category: "Lazada 广告", description: "指定日期采集广告费与业绩并写入 Sheet", keywords: "泰国 钉钉 广告 支出 业绩 Sheet" },
       { id: "lazada_bill_detail", href: "lazada-bill-detail.html", name: "后台收支数据", icon: "账", tag: "Lazada", category: "Lazada 账单", description: "按国家采集店铺后台收支数据并写入指定 Sheet", keywords: "泰国 菲律宾 马来 印尼 越南 钉钉 总金额 收入 扣减项 截图 账单区间" },
-      { id: "lazada_campaign_download", href: "lazada-campaign-download.html", name: "活动模板下载", icon: "活", tag: "Lazada", category: "Lazada 活动", description: "下载指定子活动的 Excel 模板", keywords: "报名 模板 子活动 站点 下载 Excel" },
+      { id: "lazada_campaign_download", href: "lazada-campaign-download.html", name: "活动模板下载", icon: "活", tag: "Lazada", category: "Lazada 活动", description: "全部店铺下载成功后按最低折扣率筛选子活动模板", keywords: "报名 模板 子活动 站点 下载 Excel 折扣 筛选" },
     ] },
     { id: "tools", name: "通用工具", icon: "表", keywords: "本地 Excel 表格", items: [
       { id: "lazada_campaign_workbook", href: "lazada-campaign-workbook.html", name: "Excel 折扣筛选", icon: "表", tag: "Excel", category: "本地表格", description: "批量导入表格、按最低折扣率筛选并导出", keywords: "活动 导入 上传 模板 Excel xlsx xlsm 折扣 价格 筛选" },
@@ -852,7 +852,7 @@ const HQYL = (() => {
       async get_latest_task_status(tool) { return tasks[tool] || { ok: false, empty: true }; },
       async get_task_status(id) { return Object.values(tasks).find((task) => task.id === id) || { ok: false, error: "任务不存在" }; },
       async get_lazada_campaign_download_info() {
-        return { ok: true, output_dir: "C:\\Preview\\Lazada活动模板", timeout_minutes: 30,
+        return { ok: true, output_dir: "C:\\Preview\\Lazada活动模板", timeout_minutes: 30, default_threshold: "0.95",
           site_aliases: { 菲律宾: "PH", 马来西亚: "MY", 马来: "MY", 泰国: "TH", 印度尼西亚: "ID", 印尼: "ID", 越南: "VN", 新加坡: "SG" } };
       },
       async start_lazada_campaign_download() { return { ok: false, error: "请在桌面应用中运行活动模板下载" }; },

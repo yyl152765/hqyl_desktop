@@ -4,6 +4,7 @@ import io
 import tempfile
 import threading
 import unittest
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -95,9 +96,19 @@ def tab_group(tabs, selected):
     return '<div role="tablist">' + ''.join(controls) + '</div>' + ''.join(panels)
 
 
-def workbook_data(text):
+def fixture_workbook(text):
     workbook = Workbook()
-    workbook.active["A1"] = text
+    sheet = workbook.active
+    sheet.append([text])
+    sheet.append(["SKU", "原价", "活动价", "推荐价"])
+    sheet.append(["A", 100, 95, 92.75])
+    sheet.append(["B", 100, 94.99, 92.74])
+    sheet.append(["C", 100, 90, 96])
+    return workbook
+
+
+def workbook_data(text):
+    workbook = fixture_workbook(text)
     content = io.BytesIO()
     workbook.save(content)
     return base64.b64encode(content.getvalue()).decode()
@@ -119,12 +130,18 @@ function selectPanel(button) {
 class CampaignRoutes(unittest.TestCase):
     def test_mode_validation_and_older_requests(self):
         payload = {"store": "泰国测试", "campaign": "Demo", "scene": "Weekend offers"}
-        self.assertIsNone(campaign.download_options(payload, AppSettings()).mode)
+        defaults = campaign.download_options(payload, AppSettings())
+        self.assertIsNone(defaults.mode)
+        self.assertEqual((defaults.processing_mode, defaults.threshold), ("auto", Decimal("0.95")))
         for mode in ("invited", "unregistered"):
             self.assertEqual(campaign.download_options({**payload, "mode": mode}, AppSettings()).mode, mode)
         for invalid in ("", "registered", ["invited", "unregistered"]):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "活动模式"):
                 campaign.download_options({**payload, "mode": invalid}, AppSettings())
+        for invalid in ({"processing_mode": "unregistered"}, {"threshold": "95"}, {"threshold": 0},
+                        {"threshold": "NaN"}, {"threshold": None}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                campaign.download_options({**payload, **invalid}, AppSettings())
 
     def test_script_can_select_a_mode_interactively_or_by_argument(self):
         with patch.object(campaign.sys.stdin, "isatty", return_value=True), patch.object(
@@ -135,8 +152,11 @@ class CampaignRoutes(unittest.TestCase):
             args = ["--store", "泰国测试", "--campaign", "Demo"]
             campaign.main(args)
             self.assertEqual(run.call_args.args[0].mode, "unregistered")
-            campaign.main([*args, "--mode", "invited", "--scene", "Weekend offers"])
-            self.assertEqual(run.call_args.args[0].mode, "invited")
+            campaign.main([*args, "--mode", "invited", "--scene", "Weekend offers",
+                           "--processing-mode", "plain", "--discount-percent", "92.75%"])
+            options = run.call_args.args[0]
+            self.assertEqual((options.mode, options.processing_mode, options.threshold),
+                             ("invited", "plain", Decimal("0.9275")))
 
     def test_sites_from_multiline_names_and_country_aliases(self):
         targets = campaign.store_targets({"store_names": "  LZ泰国01 \r\n\nLZ菲律宾02\nlz泰国01\n"
@@ -157,17 +177,64 @@ class CampaignRoutes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             options = campaign.download_options({"store_names": stores, "campaign": "A+", "scene": TITLE,
                                                  "output_dir": folder}, AppSettings())
-            path = Path(folder) / stores[2] / "TH" / "template.xlsx"
+            path = Path(folder) / stores[1] / "TH" / "template.xlsx"
+            path.parent.mkdir(parents=True)
+            fixture_workbook("原始模板").save(path)
             with patch.object(campaign, "ZiniaoPlaywrightRuntime", return_value=runtime), patch.object(
-                campaign, "_download_store", side_effect=[RuntimeError("未找到子活动"), path]
-            ):
+                campaign, "_download_store", side_effect=[path, RuntimeError("未找到子活动")]
+            ), patch.object(campaign.workbooks, "filter_campaign_workbooks") as filter_files:
                 result = campaign.run_download(options, campaign.BrowserConfig("公司", "用户", "密码"))
+            filter_files.assert_not_called()
+            self.assertIsNone(result["processing"])
+            self.assertIn("已跳过活动处理", result["completion_message"])
             self.assertEqual(result["failed_store_count"], 2)
             self.assertEqual(result["success_store_count"], 1)
             self.assertIn("未唯一匹配", result["stores"][0]["error"])
-            self.assertIn("未找到子活动", result["stores"][1]["error"])
-            self.assertEqual(result["stores"][2]["output_file"], str(path))
+            self.assertIn("未找到子活动", result["stores"][2]["error"])
+            self.assertEqual(result["stores"][1]["output_file"], str(path))
+            self.assertTrue(path.is_file())
             self.assertEqual(result["output_dir"], folder)
+
+    def test_filter_errors_keep_downloads_and_use_only_this_runs_templates(self):
+        from tests.test_lz_warehouse_inventory import _xls_bytes
+
+        names = ["泰国一店", "菲律宾二店", "泰国三店"]
+        runtime = Mock()
+        runtime.list_browsers.return_value = [
+            {"browserName": name, "browserOauth": name, "platformName": "Lazada"} for name in names
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            options = campaign.download_options({"store_names": names, "campaign": "Demo", "scene": TITLE,
+                                                 "output_dir": folder}, AppSettings())
+            unused = root / "之前下载.xlsx"
+            fixture_workbook("历史文件").save(unused)
+            paths = [root / f"{name}.xlsx" for name in names]
+            fixture_workbook(paths[0].stem).save(paths[0])
+            paths[1] = paths[1].with_suffix(".xls")
+            paths[1].write_bytes(_xls_bytes([["A", 100, 95], ["B", 100, 94.99]], headers=["SKU", "原价", "活动价"]))
+            Workbook().save(paths[2])  # Valid download, missing campaign price columns.
+            originals = [path.read_bytes() for path in paths]
+            with patch.object(campaign, "ZiniaoPlaywrightRuntime", return_value=runtime), patch.object(
+                campaign, "_download_store", side_effect=paths
+            ), patch.object(campaign.workbooks, "MAX_FILES", 2):
+                messages = []
+                result = campaign.run_download(options, campaign.BrowserConfig("公司", "测试", "密码"), messages.append)
+            self.assertFalse(result["is_complete"])
+            self.assertEqual((result["success_store_count"], result["failed_store_count"]), (3, 0))
+            processing = result["processing"]
+            self.assertEqual((processing["success_count"], processing["failed_count"]), (2, 1))
+            self.assertIn("价格表头", result["stores"][2]["processing_error"])
+            output = Path(processing["output_dir"])
+            self.assertEqual(len(list(output.rglob("*_已处理.xlsx"))), 2)
+            self.assertEqual(len(list(output.rglob("Excel折扣筛选汇总与异常明细.xlsx"))), 2)
+            with Path(result["stores"][1]["processed_file"]).open("rb") as stream:
+                book = load_workbook(stream, read_only=True)
+                self.assertEqual(list(book.active.values)[1:], [("A", 100, 95)])
+                book.close()
+            self.assertTrue(any("公式采用缓存值" in message for message in messages))
+            self.assertEqual([path.read_bytes() for path in paths], originals)
+            self.assertTrue(unused.is_file())
 
     def test_same_cross_border_store_selects_requested_site(self):
         site = campaign.Site("sellercenter.lazada.co.th", "sellercenter-th.lazada-seller.cn")
@@ -253,7 +320,13 @@ class CampaignExportFlow(unittest.TestCase):
                 with output.open("rb") as stream:
                     result = load_workbook(stream, read_only=True)
                     self.assertEqual(result.active["A1"].value, TITLE)
+                    self.assertEqual(result.active.max_row, 5)
                     result.close()
+                with Path(row["processed_file"]).open("rb") as stream:
+                    filtered = load_workbook(stream, read_only=True)
+                    self.assertEqual(list(filtered.active.values)[2:], [("A", 100, 95, 92.75)])
+                    filtered.close()
+            self.assertEqual(batch["processing"]["success_count"], 2)
 
     def test_duplicate_scene_name_is_rejected_before_click(self):
         self.page.set_content("<button>sale</button><button>sale</button>")
@@ -636,12 +709,12 @@ class CampaignExportFlow(unittest.TestCase):
 
         def simulated_download(_runtime, browser, site, options, progress):
             progress("正在导出子活动的 Excel 模板")
-            if not finish.wait(15):
+            if site == "PH" and not finish.wait(25):
                 raise RuntimeError("测试等待超时")
             directory = Path(options.output_dir) / browser["browserName"] / site
             directory.mkdir(parents=True)
             path = directory / "活动模板.xlsx"
-            Workbook().save(path)
+            fixture_workbook(browser["browserName"]).save(path)
             return path
 
         pages = Path(__file__).resolve().parents[1] / "frontend" / "pages"
@@ -665,20 +738,36 @@ class CampaignExportFlow(unittest.TestCase):
             expect(mode_field.locator("option")).to_have_text(["特邀活动（特别邀请）", "未报名活动"])
             mode_field.select_option("unregistered")
             self.page.locator("#scene").fill(TITLE)
+            processing = self.page.get_by_label("处理方式")
+            percent = self.page.get_by_role("spinbutton", name="最低折扣率", exact=True)
+            expect(processing).to_have_value("auto")
+            expect(percent).to_have_value("95")
+            processing.select_option("invited")
+            for invalid in ("", "0", "100.01"):
+                percent.fill(invalid)
+                self.assertFalse(percent.evaluate("input => input.checkValidity()"))
+            percent.fill("92.75")
+            root = Path(directory.name) / "Lazada活动模板"
             try:
                 self.page.locator("#downloadBtn").click()
                 expect(self.page.locator("#taskBadge")).to_have_text("运行中")
+                expect(self.page.locator("#logBox")).to_contain_text(str(root / store_names[0] / "TH" / "活动模板.xlsx"))
+                self.assertEqual(list(root.glob("Excel折扣筛选*")), [])
                 self.page.reload()
                 expect(store_field).to_have_value("\n".join(store_names))
                 expect(self.page.locator("#siteHint")).to_contain_text("泰国（TH）1 家、菲律宾（PH）1 家")
                 expect(mode_field).to_have_value("unregistered")
                 expect(mode_field).to_be_disabled()
+                expect(processing).to_have_value("invited")
+                expect(percent).to_have_value("92.75")
+                expect(processing).to_be_disabled()
+                expect(percent).to_be_disabled()
+                expect(self.page.locator("#openProcessedBtn")).to_be_disabled()
                 expect(self.page.locator("#scene")).to_have_value(TITLE)
                 expect(self.page.locator("#downloadBtn")).to_be_disabled()
             finally:
                 finish.set()
             expect(self.page.locator("#taskBadge")).to_have_text("已完成")
-            root = Path(directory.name) / "Lazada活动模板"
             for name, site in zip(store_names, ["TH", "PH"]):
                 path = root / name / site / "活动模板.xlsx"
                 expect(self.page.locator("#logBox")).to_contain_text(str(path))
@@ -690,6 +779,22 @@ class CampaignExportFlow(unittest.TestCase):
             self.assertEqual(session.call_args.args[0].username, account.username)
             snapshot = bridge.get_latest_task_status("lazada_campaign_download")
             self.assertNotIn(account.password, str(snapshot))
+            self.assertEqual(snapshot["context"]["threshold"], "0.9275")
+            saved = snapshot["result"]["processing"]
+            self.assertEqual((saved["success_count"], saved["failed_count"]), (2, 0))
+            result_dir = Path(saved["output_dir"])
+            self.assertTrue((result_dir / "Excel折扣筛选汇总与异常明细.xlsx").is_file())
+            self.assertEqual(list(result_dir.glob("*.zip")), [])
+            for store in snapshot["result"]["stores"]:
+                with Path(store["processed_file"]).open("rb") as stream:
+                    book = load_workbook(stream, read_only=True)
+                    self.assertEqual(book.active["A1"].value, store["store"])
+                    self.assertEqual(list(book.active.values)[2:], [("A", 100, 92.75, 92.75), ("C", 100, 96, 96)])
+                    book.close()
+            self.page.reload()
+            expect(percent).to_have_value("92.75")
+            self.page.locator("#openProcessedBtn").click()
+            bridge.reveal_path.assert_called_with(str(result_dir))
 
 
 if __name__ == "__main__":

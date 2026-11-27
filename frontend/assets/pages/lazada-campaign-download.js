@@ -2,7 +2,12 @@
   const $ = HQYL.$;
   const tool = "lazada_campaign_download";
   let savedLocation = "";
+  let processedLocation = "";
   let siteAliases = [];
+
+  function showThreshold(ratio) {
+    $("discountThreshold").value = String(Number((Number(ratio) * 100).toFixed(2)));
+  }
 
   function updateSiteHint() {
     const seen = new Set();
@@ -44,6 +49,8 @@
       campaign: $("campaign").value.trim(),
       mode: $("mode").value,
       scene: $("scene").value.trim(),
+      processing_mode: $("processingMode").value,
+      threshold: String(Number(($("discountThreshold").valueAsNumber / 100).toFixed(4))),
       output_dir: $("outputDir").value.trim(),
       timeout_minutes: $("timeoutMinutes").valueAsNumber,
     };
@@ -75,8 +82,10 @@
       updateSiteHint();
       $("outputDir").value = info.output_dir;
       $("timeoutMinutes").value = info.timeout_minutes;
+      showThreshold(info.default_threshold ?? "0.95");
       $("chooseDirBtn").addEventListener("click", chooseDirectory);
       $("openFolderBtn").addEventListener("click", () => HQYL.openOutput(savedLocation));
+      $("openProcessedBtn").addEventListener("click", () => HQYL.openOutput(processedLocation));
       $("downloadForm").addEventListener("submit", (event) => {
         event.preventDefault();
         download();
@@ -85,22 +94,28 @@
     },
     setRunning(running) {
       for (const element of $("downloadForm").elements) {
-        if (element !== $("openFolderBtn")) element.disabled = running;
+        if (element !== $("openFolderBtn") && element !== $("openProcessedBtn")) element.disabled = running;
       }
     },
     resetResult() {
       savedLocation = "";
+      processedLocation = "";
       $("openFolderBtn").disabled = true;
+      $("openProcessedBtn").disabled = true;
     },
     applyResult(result) {
       savedLocation = result.output_file || result.output_dir || "";
+      processedLocation = result.processing?.output_dir || "";
       $("openFolderBtn").disabled = !savedLocation;
+      $("openProcessedBtn").disabled = !processedLocation;
     },
     onTaskRestored({ context }) {
       $("store").value = context.stores?.map((store) => store.name).join("\n") ?? context.store ?? "";
       updateSiteHint();
       $("campaign").value = context.campaign;
       $("mode").value = context.mode || "invited";
+      $("processingMode").value = context.processing_mode ?? "auto";
+      showThreshold(context.threshold ?? "0.95");
       $("scene").value = context.scene;
       $("outputDir").value = context.output_dir;
       $("timeoutMinutes").value = context.timeout_minutes;
