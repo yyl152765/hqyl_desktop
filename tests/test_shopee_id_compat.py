@@ -117,7 +117,7 @@ class ShopeeCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "内部账期"):
             income.validate_income_xlsx(path, "2026-10")
 
-    def test_missing_tax_is_visible_and_retry_rechecks_it_while_skipping_complete_store(self):
+    def test_missing_tax_requires_explicit_supplement_and_failed_retry_skips_it(self):
         stores = [{"store_id": str(i), "store_name": f"测试-印尼00{i}", "platform_name": "Shopee"} for i in (1, 2)]
         manifest = service.create_batch(self.root, "synthetic", "2026-10", stores)
         missing = True
@@ -135,12 +135,16 @@ class ShopeeCompatibilityTests(unittest.TestCase):
         self.assertFalse(result["is_complete"])
         self.assertEqual(result["status"], "complete_with_unavailable")
         self.assertEqual((result["success_count"], result["unavailable_count"], result["failed_count"]), (1, 1, 0))
-        self.assertTrue(result["can_retry"])
+        self.assertFalse(result["can_retry"])
+        self.assertTrue(result["can_supplement"])
         self.assertEqual(result["stores"][0]["master_invoice_count"], 1)
         old_files = list(result["output_files"])
         missing = False
         gateway.exported_stores.clear()
         result = service.run_batch(manifest, gateway)
+        self.assertEqual(gateway.exported_stores, [])
+        self.assertFalse(result["is_complete"])
+        result = service.run_batch(manifest, gateway, retry_mode="supplement")
         self.assertTrue(result["is_complete"])
         self.assertEqual(gateway.exported_stores, ["1"])
         self.assertTrue(all(Path(p).is_file() for p in old_files))

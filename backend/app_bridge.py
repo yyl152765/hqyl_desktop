@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import json
 import os
 import shutil
@@ -191,7 +193,7 @@ from backend.update_service import (
 )
 
 
-APP_VERSION = "1.0.11"
+APP_VERSION = "1.0.12"
 APP_NAME = "寰球云联自动化平台"
 
 
@@ -2443,12 +2445,8 @@ class AppBridge:
                 if self._shopee_id_invoice_active:
                     raise ValueError("已有 Shopee 印尼月度账单与税票下载任务正在运行，请完成后再匹配")
                 data = dict(payload or {})
-                raw_month = data.get("month")
-                month = (
-                    shopee_id_monthly_invoice.validate_month(shopee_id_monthly_invoice.default_month())
-                    if raw_month is None
-                    else shopee_id_monthly_invoice.validate_month(raw_month)
-                )
+                months = shopee_id_monthly_invoice.validate_months(data)
+                month = months[0]
                 selection = shopee_id_monthly_invoice.validate_store_selection(data)
                 request = self._payload_with_account(data, "ziniao")
                 profile = ziniao_account_profile(request)
@@ -2470,6 +2468,7 @@ class AppBridge:
                     "ok": True,
                     **result,
                     "month": month,
+                    "months": months,
                     "store_scope": selection["store_scope"],
                     "preview_token": token,
                     "profile": profile,
@@ -2506,6 +2505,7 @@ class AppBridge:
         *,
         month: str,
         retry: bool = False,
+        retry_mode: str = "failed",
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         profile = ziniao_account_profile(request)
@@ -2540,8 +2540,9 @@ class AppBridge:
                         path = shopee_id_monthly_invoice.create_batch(
                             options["output_dir"], profile, month, matched["stores"],
                             store_scope=options["store_scope"],
+                            months=options["months"], max_workers=options["max_workers"],
                         )
-                        progress(f"已确认 {len(matched['stores'])} 家印尼 Shopee 店铺，按顺序逐店处理；重试沿用本批名单")
+                        progress(f"已确认 {len(matched['stores'])} 家印尼 Shopee 店铺、{len(options['months'])} 个月份，最多同时 {options['max_workers']} 家；重试沿用本批名单和月份")
                         # TaskManager retains this context mapping; subsequent
                         # snapshots expose the manifest as soon as it exists.
                         context["manifest_path"] = str(path)
@@ -2551,10 +2552,20 @@ class AppBridge:
                         previous = {}
                     previous[profile] = str(path)
                     shopee_id_monthly_invoice.write_json(pointer, previous)
+
+                    @contextmanager
+                    def worker_gateway():
+                        # Independent maps, drivers and HTTP sessions; only the
+                        # coordinator above may restart the shared V6 client.
+                        with ZiniaoBrowser(request) as worker_browser:
+                            yield ShopeeIdInvoiceGateway(profile, browser=worker_browser, client_prepared=True)
+
                     return shopee_id_monthly_invoice.run_batch(
                         path,
                         ShopeeIdInvoiceGateway(profile, browser=browser),
                         progress,
+                        retry_mode=retry_mode,
+                        gateway_factory=worker_gateway,
                     )
             except Exception as exc:
                 if path is not None:
@@ -2566,7 +2577,8 @@ class AppBridge:
                 release()
 
         try:
-            title = "Shopee 印尼月度账单与税票下载重试" if retry else "Shopee 印尼月度账单与税票下载"
+            title = ("Shopee 印尼月度税票补查" if retry_mode == "supplement" else
+                     "Shopee 印尼月度账单与税票失败重试" if retry else "Shopee 印尼月度账单与税票下载")
             task = self.tasks.start(
                 title,
                 runner,
@@ -2617,13 +2629,20 @@ class AppBridge:
                 path = Path(str((payload or {}).get("manifest_path") or "")).resolve()
                 request = self._payload_with_account(payload, "ziniao")
                 record = shopee_id_monthly_invoice.load_batch(path, ziniao_account_profile(request))
-                if record["status"] == "complete":
-                    raise ValueError("此批次已全部完成，无需重试")
+                retry_mode = (payload or {}).get("retry_mode", "failed")
+                if retry_mode not in {"failed", "supplement"}:
+                    raise ValueError("重试范围无效")
+                # A saved running status may represent an interrupted process;
+                # the file lock below is authoritative for an active batch.
+                eligible = any(s["status"] == "unavailable" if retry_mode == "supplement"
+                               else s["status"] in shopee_id_monthly_invoice.RETRYABLE for s in record["stores"])
+                if not eligible:
+                    raise ValueError("没有待补查税票的店铺月份" if retry_mode == "supplement" else "没有失败或中断的店铺月份，无需重试")
                 with temu_export.batch_lock(path):
                     temu_export.writable_directory(path.parent)
                 self._shopee_id_invoice_active = True
                 return self._launch_shopee_id_monthly_invoice(
-                    path, request, month=record["month"], retry=True
+                    path, request, month=record["month"], retry=True, retry_mode=retry_mode
                 )
             except AccountRequiredError as exc:
                 return {"ok": False, "requires_account": True, "vendor": exc.vendor, "error": str(exc)}

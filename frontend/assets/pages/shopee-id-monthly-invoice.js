@@ -5,6 +5,50 @@
   let running = false, preparing = false, polling = false, revision = 0;
   let accountId = "", initialized = false;
   let outputSaveQueue = Promise.resolve();
+  const excludedMonths = new Set();
+
+  function monthRange() {
+    const start = $("invoiceMonth").value.trim();
+    const end = $("invoiceEndMonth").value.trim() || start;
+    const valid = value => /^\d{4}-(0[1-9]|1[0-2])$/.test(value) && Number(value.slice(0, 4)) > 0;
+    if (!valid(start) || !valid(end)) throw new Error("请选择有效的起始和结束月份。");
+    if (start > end) throw new Error("起始月份不能晚于结束月份。");
+    if ($("invoiceMonth").max && end > $("invoiceMonth").max) throw new Error("仅支持已结束的完整自然月。");
+    const ordinal = value => Number(value.slice(0, 4)) * 12 + Number(value.slice(5)) - 1;
+    const months = [];
+    for (let i = ordinal(start); i <= ordinal(end); i++) {
+      months.push(`${String(Math.floor(i / 12)).padStart(4, "0")}-${String(i % 12 + 1).padStart(2, "0")}`);
+    }
+    return months;
+  }
+  const selectedMonths = () => monthRange().filter(month => !excludedMonths.has(month));
+  const monthPayload = () => ({ month: selectedMonths()[0], months: selectedMonths() });
+
+  function renderMonthChoices() {
+    const choices = $("monthChoices");
+    choices.replaceChildren();
+    let months;
+    try { months = monthRange(); } catch (_) { return; }
+    months.forEach(month => {
+      const label = document.createElement("label");
+      label.style = "display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.style = "width:auto";
+      input.checked = !excludedMonths.has(month);
+      input.disabled = busy();
+      input.addEventListener("change", () => {
+        if (input.checked) excludedMonths.delete(month); else excludedMonths.add(month);
+        invalidate();
+      });
+      label.appendChild(input);
+      const text = document.createElement("span");
+      text.textContent = month;
+      label.appendChild(text);
+      choices.appendChild(label);
+    });
+    $("monthSummary").textContent = `已选 ${months.filter(month => !excludedMonths.has(month)).length} 个月，每店按月份依次下载`;
+  }
 
   const busy = () => running || preparing;
   const activeId = () => HQYL.activeAccount("ziniao")?.id || "";
@@ -33,14 +77,11 @@
 
   function validation() {
     const rawNames = $("storeNames").value;
-    const month = $("invoiceMonth").value.trim();
     const outDir = $("outputDir").value.trim();
-    if (!month || !outDir) {
-      return "请选择账单月份并设置输出目录。";
-    }
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
-      return "账单月份格式必须为 YYYY-MM。";
-    }
+    try { if (!selectedMonths().length) return "请至少勾选一个账单月份。"; }
+    catch (error) { return error.message; }
+    if (!outDir) return "请设置输出目录。";
+    if (![1, 2, 3, 4, 5].includes(Number($("maxWorkers").value))) return "请选择同时运行的店铺数（1–5）。";
     if (allStores()) return "";
     const lines = rawNames.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     if (!lines.length) {
@@ -54,7 +95,7 @@
 
   function controls() {
     const disabled = busy();
-    ["invoiceMonth", "storeScope", "storeNames", "outputDir", "chooseOutputBtn", "chooseClientBtn", "chooseDriverBtn"].forEach(id => {
+    ["invoiceMonth", "invoiceEndMonth", "maxWorkers", "storeScope", "storeNames", "outputDir", "chooseOutputBtn", "chooseClientBtn", "chooseDriverBtn"].forEach(id => {
       $(id).disabled = disabled;
     });
     $("namesPanel").hidden = allStores();
@@ -65,7 +106,9 @@
     $("previewBtn").disabled = disabled || !hasBasicInputs;
     $("startBtn").disabled = disabled || Boolean(validation());
     $("retryBtn").disabled = disabled || !activeId() || !snapshot?.can_retry || (Boolean(profile) && snapshot.profile !== profile);
+    $("supplementBtn").disabled = disabled || !activeId() || !snapshot?.can_supplement || (Boolean(profile) && snapshot.profile !== profile);
     $("openDirectoryBtn").disabled = !snapshot?.output_dir;
+    renderMonthChoices();
   }
 
   function showIssue(message) {
@@ -125,6 +168,7 @@
     if (!result || typeof result !== "object") return;
     snapshot = result;
     $("storeCount").textContent = String(result.store_count || 0);
+    $("batchScope").textContent = `${(result.months || [result.month]).filter(Boolean).length} 个月 · 共 ${result.task_count || result.store_count || 0} 个店铺月份 · 最多并发 ${result.max_workers || 5} 家`;
     $("completedCount").textContent = String(result.completed_count || 0);
     $("noDataCount").textContent = `无账单 ${result.empty_month_count || 0} · 待补税票 ${result.unavailable_count || 0} · 失败 ${result.failed_count || 0}`;
     $("recordCount").textContent = Number(result.file_count || 0).toLocaleString();
@@ -133,7 +177,7 @@
     $("batchLabel").textContent = result.run_id || "尚无批次";
     $("resultMessage").textContent =
       result.status === "running"
-        ? "正在逐店下载收入 Excel、账单和税票 PDF，下方展示各店铺最新状态。"
+        ? `最多同时运行 ${result.max_workers || 5} 家店铺，每店依次处理所选月份；下方按店铺和月份显示进度。`
         : result.status === "interrupted"
           ? "上次批次已中断，已下载的文件已保留，可点击重试继续未完成店铺。"
           : (result.completion_message || "批次已结束");
@@ -165,6 +209,10 @@
       sub.textContent = `${req}ID ${store.store_id}`;
       nameCell.appendChild(sub);
       row.appendChild(nameCell);
+
+      const monthCell = document.createElement("td");
+      monthCell.textContent = store.month || result.month || "—";
+      row.appendChild(monthCell);
 
       const statusCell = document.createElement("td");
       statusCell.textContent = labels[store.status] || store.status || "—";
@@ -203,7 +251,7 @@
       if (store.error) {
         noteCell.textContent = store.error;
       } else if (store.status === "empty_month") {
-        noteCell.textContent = `${result.month || ""} 收入报表、服务费账单和税票均已核对为空`;
+        noteCell.textContent = `${store.month || result.month || ""} 收入报表、服务费账单和税票均已核对为空`;
       } else if (store.status === "no_data") {
         noteCell.textContent = "旧批次仅确认无税票，请重试核对收入报表";
       } else if (store.status === "success") {
@@ -218,7 +266,7 @@
     if (!body.childNodes.length) {
       const row = document.createElement("tr");
       const cell = document.createElement("td");
-      cell.colSpan = 8;
+      cell.colSpan = 9;
       cell.textContent = "尚未运行";
       row.appendChild(cell);
       body.appendChild(row);
@@ -234,7 +282,7 @@
       showPreview("");
       const payload = {
         ...accountPayload(),
-        month: $("invoiceMonth").value.trim(),
+        ...monthPayload(),
         ...selectionPayload(),
       };
       const version = revision;
@@ -287,9 +335,10 @@
     const payload = {
       ...accountPayload(),
       ...(retry
-        ? { manifest_path: snapshot?.manifest_path }
+        ? { manifest_path: snapshot?.manifest_path, retry_mode: retry === "supplement" ? "supplement" : "failed" }
         : {
-            month: $("invoiceMonth").value.trim(),
+            ...monthPayload(),
+            max_workers: Number($("maxWorkers").value),
             ...selectionPayload(),
             output_dir: $("outputDir").value.trim(),
           }),
@@ -297,7 +346,7 @@
     const version = ++revision;
     showIssue("");
     $("connectionNotice").textContent = retry
-      ? "正在恢复本批名单，只继续未完成店铺…"
+      ? (retry === "supplement" ? "只补查本批平台未提供税票的店铺月份…" : "只恢复本批失败或中断的店铺月份，跳过成功、无账单和平台未提供税票项…")
       : "正在核对紫鸟账号下的 Shopee 印尼店铺并启动下载…";
     await HQYL.startTask(
       async () => {
@@ -309,7 +358,7 @@
           );
           if (version === revision && payload.account_id === activeId()) {
             profile = task.context?.profile || profile;
-            $("connectionNotice").textContent = "任务已启动，将逐店下载收入 Excel、服务费账单与税票 PDF，成功店铺可在重试时跳过。";
+            $("connectionNotice").textContent = "任务已启动，按店铺并行、按月份依次下载；失败重试和补查税票分别处理。";
           }
           return task;
         } catch (error) {
@@ -334,6 +383,7 @@
       profile = result.profile || "";
       if (!$("invoiceMonth").value) $("invoiceMonth").value = result.default_month || "";
       $("invoiceMonth").max = result.default_month || "";
+      $("invoiceEndMonth").max = result.default_month || "";
       if (!$("clientPath").value) $("clientPath").value = result.client_path || "";
       if (!$("driverPath").value) $("driverPath").value = result.webdriver_path || "";
       if (!$("outputDir").value.trim()) $("outputDir").value = result.output_dir || "";
@@ -355,12 +405,16 @@
     async init() {
       accountId = activeId();
       if (!$("storeScope").value) $("storeScope").value = "all_indonesia";
+      if (!$("maxWorkers").value) $("maxWorkers").value = "5";
       $("storeScope").addEventListener("change", invalidate);
       $("exportForm").addEventListener("submit", event => {
         event.preventDefault();
         void start(false);
       });
-      ["invoiceMonth", "storeNames"].forEach(id => {
+      ["invoiceMonth", "invoiceEndMonth"].forEach(id => {
+        $(id).addEventListener("input", () => { excludedMonths.clear(); invalidate(); });
+      });
+      ["storeNames", "maxWorkers"].forEach(id => {
         $(id).addEventListener("input", invalidate);
       });
       $("outputDir").addEventListener("input", () => {
@@ -405,6 +459,7 @@
       $("previewBtn").addEventListener("click", () => void previewStores());
       $("openDirectoryBtn").addEventListener("click", () => openPath(snapshot?.output_dir));
       $("retryBtn").addEventListener("click", () => void start(true));
+      $("supplementBtn").addEventListener("click", () => void start("supplement"));
       initialized = true;
       await loadInfo();
       controls();
@@ -432,6 +487,7 @@
       snapshot = null;
       $("storeResults").replaceChildren();
       $("storeCount").textContent = "0";
+      $("batchScope").textContent = "最多同时运行 5 家店铺";
       $("completedCount").textContent = "0";
       $("recordCount").textContent = "0";
       $("noDataCount").textContent = "无账单 0 · 待补税票 0 · 失败 0";

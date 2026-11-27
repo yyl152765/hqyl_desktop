@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import copy
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
 import re
 import shutil
+import threading
+from queue import Empty, Queue
 from typing import Any, Callable, Mapping
 import unicodedata
 from uuid import uuid4
@@ -27,12 +31,40 @@ from backend.services.temu_on_sale_export import (
 from backend.services.shopee_id_income_report import INCOME_REPORT_TYPE, validate_income_xlsx, validate_empty_income_evidence
 
 
-SCHEMA = "shopee_id_monthly_invoice_v4"
+SCHEMA = "shopee_id_monthly_invoice_v5"
+V4_SCHEMA = "shopee_id_monthly_invoice_v4"
 V3_SCHEMA = "shopee_id_monthly_invoice_v3"
 PREVIOUS_SCHEMA = "shopee_id_monthly_invoice_v2"
 LEGACY_SCHEMA = "shopee_id_monthly_invoice_v1"
 TERMINAL = {"success", "unavailable", "empty_month"}
 STORE_SCOPES = {"named", "all_indonesia"}
+MAX_WORKERS = 5
+RETRYABLE = {"pending", "running", "failed", "no_data"}
+
+
+def validate_months(payload: Mapping[str, Any], *, today: date | None = None) -> list[str]:
+    """Accept a month list, an inclusive range, or the legacy single month."""
+    if "months" in payload:
+        raw = payload["months"]
+        if not isinstance(raw, list) or not raw:
+            raise ValueError("请至少选择一个账单月份")
+        return sorted({validate_month(value, today=today) for value in raw})
+    if "start_month" in payload or "end_month" in payload:
+        start = validate_month(payload.get("start_month"), today=today)
+        end = validate_month(payload.get("end_month"), today=today)
+        if start > end:
+            raise ValueError("起始月份不能晚于结束月份")
+        first = int(start[:4]) * 12 + int(start[5:]) - 1
+        last = int(end[:4]) * 12 + int(end[5:]) - 1
+        return [f"{index // 12:04d}-{index % 12 + 1:02d}" for index in range(first, last + 1)]
+    raw_month = payload.get("month")
+    return [validate_month(default_month(today) if raw_month is None else raw_month, today=today)]
+
+
+def validate_workers(value: Any = MAX_WORKERS) -> int:
+    if type(value) is not int or not 1 <= value <= MAX_WORKERS:
+        raise ValueError("同时运行的店铺数须为 1 到 5")
+    return value
 
 _OTHER_COUNTRY_CN_RE = re.compile(
     r"泰国|菲律宾|越南|马来(?:西亚)?|新加坡|台湾|巴西|墨西哥|哥伦比亚|智利"
@@ -142,18 +174,16 @@ def validate_request(
 ) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("请求参数必须是对象")
-    raw_month = payload.get("month")
-    if raw_month is None:
-        month = validate_month(default_month(today), today=today)
-    else:
-        month = validate_month(raw_month, today=today)
+    months = validate_months(payload, today=today)
 
     selection = validate_store_selection(payload)
 
     raw_output = str(payload.get("output_dir") or default_output_dir or "").strip()
     output_dir = writable_directory(raw_output)
     return {
-        "month": month,
+        "month": months[0],
+        "months": months,
+        "max_workers": validate_workers(payload.get("max_workers", MAX_WORKERS)),
         **selection,
         "output_dir": str(output_dir),
     }
@@ -403,16 +433,23 @@ def create_batch(
     stores: list[dict[str, Any]],
     *,
     store_scope: str = "named",
+    months: list[str] | None = None,
+    max_workers: int = MAX_WORKERS,
 ) -> Path:
     if not isinstance(store_scope, str) or store_scope not in STORE_SCOPES:
         raise ValueError("店铺范围无效")
     if not stores:
         raise ValueError("批次没有可处理的店铺")
-    validated_month = validate_month(month)
+    selected_months = validate_months({"months": months} if months is not None else {"month": month})
+    max_workers = validate_workers(max_workers)
+    if len({str(s["store_id"]) for s in stores}) != len(stores):
+        raise ValueError("批次包含重复店铺 ID")
+    validated_month = selected_months[0]
     root_dir = writable_directory(output_dir)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_id = uuid4().hex[:10]
-    batch_dir = root_dir / validated_month / f"{stamp}_{run_id[:6]}"
+    period = validated_month if len(selected_months) == 1 else f"{validated_month}_{selected_months[-1]}"
+    batch_dir = root_dir / period / f"{stamp}_{run_id[:6]}"
     batch_dir.mkdir(parents=True, exist_ok=False)
     (batch_dir / "invoices").mkdir()
     (batch_dir / "logs").mkdir()
@@ -423,12 +460,15 @@ def create_batch(
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "profile": profile,
         "month": validated_month,
+        "months": selected_months,
+        "max_workers": max_workers,
         "store_scope": store_scope,
         "status": "pending",
         "error": "",
         "stores": [
             {
                 "store_id": str(store["store_id"]),
+                "month": selected_month,
                 "store_name": str(store["store_name"]),
                 "requested_name": str(store.get("requested_name") or store["store_name"]),
                 "platform_name": str(store.get("platform_name") or "Shopee"),
@@ -445,6 +485,7 @@ def create_batch(
                 "error": "",
             }
             for store in stores
+            for selected_month in selected_months
         ],
     }
     write_json(manifest_path, record)
@@ -459,12 +500,17 @@ def load_batch(path: str | Path, profile: str | None = None) -> dict[str, Any]:
         record = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ValueError(f"无法读取税票批次清单：{exc}") from None
-    if not isinstance(record, dict) or record.get("schema") not in {SCHEMA, V3_SCHEMA, PREVIOUS_SCHEMA, LEGACY_SCHEMA}:
+    if not isinstance(record, dict) or record.get("schema") not in {SCHEMA, V4_SCHEMA, V3_SCHEMA, PREVIOUS_SCHEMA, LEGACY_SCHEMA}:
         raise ValueError("不是有效的 Shopee 印尼月度税票批次清单")
     if profile is not None and record.get("profile") != profile:
         raise ValueError("所选紫鸟账号与此批次不一致，请切换回原账号或重新开始下载")
     if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", str(record.get("month") or "")):
         raise ValueError("批次月份格式无效")
+    months = validate_months({"months": record.get("months", [record["month"]])})
+    if record["month"] != months[0]:
+        raise ValueError("批次首月与月份清单不一致")
+    record["months"] = months
+    record["max_workers"] = validate_workers(record.get("max_workers", MAX_WORKERS))
     stores = record.get("stores")
     if not isinstance(stores, list) or not stores:
         raise ValueError("批次店铺清单无效")
@@ -473,14 +519,22 @@ def load_batch(path: str | Path, profile: str | None = None) -> dict[str, Any]:
         raise ValueError("批次店铺范围无效")
     record["store_scope"] = scope
     invoices_root = (manifest_path.parent / "invoices").resolve()
-    seen_ids: set[str] = set()
+    seen_ids: set[tuple[str, str]] = set()
+    identities: dict[str, tuple[str, str]] = {}
     for store in stores:
         if not isinstance(store, dict) or not store.get("store_id") or not store.get("store_name"):
             raise ValueError("批次缺少稳定店铺 ID 或完整店铺名称")
         store_id = str(store["store_id"])
-        if store_id in seen_ids:
-            raise ValueError("批次包含重复店铺 ID")
-        seen_ids.add(store_id)
+        store["store_id"] = store_id
+        store.setdefault("month", record["month"])
+        key = (store_id, store["month"])
+        if store["month"] not in months or key in seen_ids:
+            raise ValueError("批次包含无效月份或重复店铺月份")
+        identity = (store["store_name"], store.get("platform_name", ""))
+        if store_id in identities and identities[store_id] != identity:
+            raise ValueError("同一店铺的跨月份身份不一致")
+        identities[store_id] = identity
+        seen_ids.add(key)
         if store.get("status") not in {"pending", "running", "success", "no_data", "failed", "unavailable", "empty_month"}:
             raise ValueError("批次店铺状态无效")
         for file_entry in store.get("files") or []:
@@ -497,7 +551,7 @@ def load_batch(path: str | Path, profile: str | None = None) -> dict[str, Any]:
             store["income_report_count"] = 0
             if store["status"] in {"success", "no_data"}:
                 store.update(status="failed", error="旧版批次尚未下载整月收入 Excel")
-    elif record["schema"] in {PREVIOUS_SCHEMA, V3_SCHEMA}:
+    elif record["schema"] in {PREVIOUS_SCHEMA, V3_SCHEMA, V4_SCHEMA}:
         record.update(migrated_from=record["schema"], schema=SCHEMA)
     return record
 
@@ -536,37 +590,41 @@ def public_result(path: str | Path, record: dict[str, Any] | None = None) -> dic
         try:
             for store in stores:
                 _validate_completeness(store.get("files") or [], int(store.get("row_count") or 0),
-                                       store.get("evidence") or {}, record["month"])
+                                       store.get("evidence") or {}, store.get("month", record["month"]))
                 if store["status"] == "empty_month" and store.get("files"):
                     raise ValueError("无账单店铺存在文件")
         except (ValueError, TypeError, KeyError):
             complete = False
 
     if complete:
-        message = f"全部 {completed_count} 个店铺已处理：收入 Excel {income_count} 份，账单和税票 PDF {master_count + tax_count} 份"
+        message = f"全部 {completed_count} 个店铺月份已处理：收入 Excel {income_count} 份，账单和税票 PDF {master_count + tax_count} 份"
         if empty_month_count:
             message += f"（{empty_month_count} 家当月无账单，已跳过）"
         if no_data_count:
             message += f"（其中 {no_data_count} 家当月无税票，收入 Excel 已保存）"
     elif record.get("status") in {"pending", "running"}:
-        message = f"正在逐店下载：已完成 {completed_count}/{len(stores)} 个店铺"
+        message = f"正在下载：已处理 {completed_count}/{len(stores)} 个店铺月份"
     else:
         message = (
             record.get("error")
-            or f"已处理 {completed_count}/{len(stores)} 个店铺（完整 {success_count}，当月无账单 {empty_month_count}，平台未提供税票 {unavailable_count}，失败 {failed_count}）；可重试失败项并补查税票"
+            or f"已处理 {completed_count}/{len(stores)} 个店铺月份（完整 {success_count}，当月无账单 {empty_month_count}，平台未提供税票 {unavailable_count}，失败 {failed_count}）；失败重试与补查税票可分别执行"
         )
 
     return {
         "run_id": record["run_id"],
         "profile": record["profile"],
         "month": record["month"],
+        "months": record.get("months", [record["month"]]),
+        "max_workers": record.get("max_workers", MAX_WORKERS),
         "store_scope": record.get("store_scope", "named"),
         "status": record["status"],
         "manifest_path": str(manifest_path),
         "output_dir": str(manifest_path.parent),
         "stores": stores,
         "output_files": output_files,
-        "store_count": len(stores),
+        "store_count": len({s["store_id"] for s in stores}),
+        "task_count": len(stores),
+        "running_count": count("running"),
         "success_count": success_count,
         "empty_month_count": empty_month_count,
         "no_data_count": no_data_count,
@@ -581,7 +639,8 @@ def public_result(path: str | Path, record: dict[str, Any] | None = None) -> dic
         "pdf_count": master_count + tax_count,
         "is_complete": complete,
         "completion_message": message,
-        "can_retry": not complete and record.get("status") != "running",
+        "can_retry": any(s["status"] in RETRYABLE for s in stores) and record.get("status") != "running",
+        "can_supplement": unavailable_count > 0 and record.get("status") != "running",
     }
 
 
@@ -706,141 +765,211 @@ def run_batch(
     path: str | Path,
     gateway: Any,
     progress: Callable[[str], None] | None = None,
+    *,
+    retry_mode: str = "failed",
+    gateway_factory: Callable | None = None,
 ) -> dict[str, Any]:
+    """Schedule whole stores; months within a store always share one worker.
+
+    Each worker owns an independent browser. All manifest changes and log writes
+    are serialized, while page operations and file validation run concurrently.
+    Legacy/injected single gateways remain sequential.
+    """
+    if retry_mode not in {"failed", "supplement"}:
+        raise ValueError("重试范围无效")
     manifest_path = Path(path).resolve()
     with batch_lock(manifest_path):
         record = load_batch(manifest_path, gateway.profile)
-        if record.get("migrated_from") == LEGACY_SCHEMA:
-            backup = manifest_path.with_name("manifest.tax_only_v1.json")
+        backup_names = {LEGACY_SCHEMA: "manifest.tax_only_v1.json", PREVIOUS_SCHEMA: "manifest.v2.json",
+                        V3_SCHEMA: "manifest.v3.json", V4_SCHEMA: "manifest.v4.json"}
+        if record.get("migrated_from") in backup_names:
+            backup = manifest_path.with_name(backup_names[record["migrated_from"]])
             if not backup.exists():
                 shutil.copyfile(manifest_path, backup)
-        elif record.get("migrated_from") == PREVIOUS_SCHEMA:
-            backup = manifest_path.with_name("manifest.v2.json")
-            if not backup.exists():
-                shutil.copyfile(manifest_path, backup)
-        elif record.get("migrated_from") == V3_SCHEMA:
-            backup = manifest_path.with_name("manifest.v3.json")
-            if not backup.exists():
-                shutil.copyfile(manifest_path, backup)
+        state_lock = threading.RLock()
+        log_lock = threading.Lock()
+        launch_lock = threading.Lock()
+        stop_event = threading.Event()
+        stop_reason = ""
 
         def save() -> None:
+            # Every caller holds state_lock, including progress transitions.
             record["updated_at"] = datetime.now().isoformat(timespec="seconds")
             write_json(manifest_path, record)
 
         def log(message: str) -> None:
-            with (manifest_path.parent / "logs" / "run.log").open("a", encoding="utf-8") as stream:
-                stream.write(f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
+            with log_lock:
+                with (manifest_path.parent / "logs" / "run.log").open("a", encoding="utf-8") as stream:
+                    stream.write(f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
             if progress:
-                progress(message)
-
-        if hasattr(gateway, "progress"):
-            gateway.progress = log
-        record.update(status="running", error="")
-        for store in record["stores"]:
-            if store["status"] in {"success", "empty_month"}:
                 try:
-                    _verify_saved_store_files(manifest_path.parent, store, record["month"])
-                except Exception as exc:
-                    store.update(status="failed", error=f"历史税票文件无法复用：{exc}")
-                else:
-                    store.update(**_file_counts(store.get("files") or []))
-            elif store["status"] == "no_data":
-                store.update(status="failed", error="尚未确认整月收入 Excel，请重试补下载")
-            elif store["status"] == "unavailable":
-                store.update(status="pending", error="补查平台是否已提供税票")
-        save()
+                    progress(message)
+                except Exception:
+                    # The persisted log/manifest remains authoritative even if
+                    # the UI callback disconnects while downloads are running.
+                    pass
 
-        try:
-            gateway.preflight(record["stores"])
-        except Exception as exc:
+        def halt(reason: str) -> None:
+            nonlocal stop_reason
+            stop_event.set()
+            with state_lock:
+                stop_reason = stop_reason or reason
+                record["error"] = stop_reason
+
+        with state_lock:
             for store in record["stores"]:
-                if store["status"] not in TERMINAL:
-                    store.update(status="failed", error=str(exc))
-            record["error"] = str(exc)
-            log(f"运行前检查失败：{exc}")
-        else:
-            for index, store in enumerate(record["stores"], 1):
-                if store["status"] in TERMINAL:
-                    continue
-                attempts = int(store.get("attempts") or 0) + 1
-                store.update(
-                    status="running",
-                    attempts=attempts,
-                    row_count=None,
-                    file_count=0,
-                    income_report_count=0,
-                    master_invoice_count=0,
-                    tax_invoice_count=0,
-                    files=[],
-                    rows=[],
-                    evidence={},
-                    error="",
-                )
-                slug = safe_slug(store["store_name"], 24)
-                attempt_dir = (
-                    manifest_path.parent
-                    / "invoices"
-                    / f"{index:03d}_{slug}"
-                    / f"attempt_{attempts}"
-                )
-                save()
-                log(f"[{index}/{len(record['stores'])}] {store['store_name']}：开始下载 {record['month']} 收入账单与税票")
-                result: dict[str, Any] = {}
-                try:
-                    attempt_dir.mkdir(parents=True, exist_ok=False)
-                    result = gateway.export(store, record["month"], attempt_dir)
-                    row_count = int(result.get("row_count") or 0)
-                    evidence = copy.deepcopy(result.get("evidence") or {})
-                    normalized_files = _normalize_store_files(
-                        manifest_path.parent, attempt_dir, result.get("files") or [], record["month"]
-                    )
-                    _validate_completeness(normalized_files, row_count, evidence, record["month"])
-                    store.update(
-                        status=("empty_month" if not normalized_files else "unavailable" if evidence.get("unavailable_documents") else "success"), row_count=row_count,
-                        **_file_counts(normalized_files), files=normalized_files,
-                        rows=[{
-                            "row_index": int(r.get("row_index") or 0),
-                            "description": str(r.get("description") or ""),
-                            "amount": str(r.get("amount") or ""),
-                            "date": str(r.get("date") or ""),
-                        } for r in (result.get("rows") or [])],
-                        evidence=evidence, error="",
-                    )
-                    missing_count = len(evidence.get("unavailable_documents") or [])
-                    if missing_count:
-                        store["error"] = f"平台未提供 {missing_count} 份 Tax Invoice，已保存可用文件；可稍后补查税票"
-                    if store["status"] == "empty_month":
-                        log(f"{store['store_name']}：{record['month']} 当月无账单，已跳过（收入报表、账单和税票均已核对）")
+                if retry_mode == "failed" and store["status"] in {"success", "empty_month"}:
+                    try:
+                        _verify_saved_store_files(manifest_path.parent, store, store["month"])
+                    except Exception as exc:
+                        store.update(status="failed", error=f"历史文件无法复用：{exc}")
                     else:
-                        log(f"{store['store_name']}：已保存收入 Excel {store['income_report_count']} 份、账单和税票 PDF {store['master_invoice_count'] + store['tax_invoice_count']} 份"
-                            + (f"；{store['error']}" if missing_count else ""))
-                except Exception as exc:
-                    candidates = exc.partial_files if isinstance(exc, InvoiceExportError) else result.get("files") or []
-                    partial_files: list[dict[str, Any]] = []
-                    # Retain each independently validated file even if another entry failed validation.
-                    for item in candidates:
-                        try:
-                            normalized = _normalize_store_files(
-                                manifest_path.parent, attempt_dir, [item], record["month"]
-                            )[0]
-                            if not any(f["path"] == normalized["path"] for f in partial_files):
-                                partial_files.append(normalized)
-                        except Exception:
-                            continue
-                    store.update(status="failed", **_file_counts(partial_files), files=partial_files, error=str(exc))
-                    log(f"{store['store_name']}：失败 — {exc}")
+                        store.update(**_file_counts(store.get("files") or []))
+                elif retry_mode == "failed" and store["status"] == "no_data":
+                    store.update(status="failed", error="尚未确认整月收入 Excel，请重试补下载")
+            selected = [(index, store) for index, store in enumerate(record["stores"], 1)
+                        if (store["status"] == "unavailable" if retry_mode == "supplement"
+                            else store["status"] in RETRYABLE)]
+            record.update(status="running", error="")
+            save()
 
+        grouped: dict[str, list[tuple[int, dict]]] = {}
+        for index, store in selected:
+            grouped.setdefault(store["store_id"], []).append((index, store))
+        for group in grouped.values():
+            group.sort(key=lambda item: item[1]["month"])
+        queue: Queue = Queue()
+        for group in grouped.values():
+            queue.put(group)
+        worker_count = min(record["max_workers"] if gateway_factory else 1, len(grouped))
+        log(f"本次处理 {len(grouped)} 家店铺、{len(selected)} 个店铺月份，最多同时 {worker_count} 家；"
+            f"跳过 {len(record['stores']) - len(selected)} 个非本次范围项")
+
+        def execute_month(local_gateway, index: int, store: dict) -> None:
+            month = store["month"]
+            prefix = f"{store['store_name']} [{month}]"
+            with state_lock:
+                attempts = int(store.get("attempts") or 0) + 1
+                # Preserve earlier file records until a replacement has been validated.
+                previous_files = copy.deepcopy(store.get("files") or [])
+                store.update(status="running", attempts=attempts, error="")
                 save()
-                if getattr(gateway, "auth_failed", False) or getattr(gateway, "halted", False) is True:
-                    reason = getattr(gateway, "halt_reason", "紫鸟会话已停止，请恢复后重试")
-                    for pending in record["stores"]:
-                        if pending["status"] not in TERMINAL and pending is not store:
-                            pending.update(status="failed", error=reason)
-                    break
+            slug = safe_slug(store["store_name"], 24)
+            attempt_dir = (manifest_path.parent / "invoices" / f"{index:03d}_{slug}"
+                           / month / f"attempt_{attempts}")
+            log(f"[{index}/{len(record['stores'])}] {prefix}：开始下载收入账单与税票")
+            result: dict[str, Any] = {}
+            local_gateway.progress = lambda message: log(f"{prefix}：{message}")
+            try:
+                attempt_dir.mkdir(parents=True, exist_ok=False)
+                result = local_gateway.export(store, month, attempt_dir)
+                row_count = int(result.get("row_count") or 0)
+                evidence = copy.deepcopy(result.get("evidence") or {})
+                files = _normalize_store_files(manifest_path.parent, attempt_dir, result.get("files") or [], month)
+                _validate_completeness(files, row_count, evidence, month)
+                missing = len(evidence.get("unavailable_documents") or [])
+                update = dict(
+                    status=("empty_month" if not files else "unavailable" if missing else "success"),
+                    row_count=row_count, **_file_counts(files), files=files,
+                    rows=[{key: int(row.get(key) or 0) if key == "row_index" else str(row.get(key) or "")
+                           for key in ("row_index", "description", "amount", "date")}
+                          for row in (result.get("rows") or [])],
+                    evidence=evidence,
+                    error=f"平台未提供 {missing} 份 Tax Invoice，已保存可用文件；可稍后补查税票" if missing else "",
+                )
+                log(f"{prefix}：" + ("当月无账单，已跳过" if not files else
+                    f"已保存收入 Excel {update['income_report_count']} 份、PDF {update['master_invoice_count'] + update['tax_invoice_count']} 份")
+                    + (f"；{update['error']}" if missing else ""))
+            except Exception as exc:
+                candidates = exc.partial_files if isinstance(exc, InvoiceExportError) else result.get("files") or []
+                partial = []
+                for item in candidates:
+                    try:
+                        entry = _normalize_store_files(manifest_path.parent, attempt_dir, [item], month)[0]
+                        if not any(f["path"] == entry["path"] for f in partial):
+                            partial.append(entry)
+                    except Exception:
+                        continue
+                # Keep prior valid files of types/rows not replaced in this attempt.
+                replaced = {(f["row_index"], f["invoice_type"]) for f in partial}
+                for entry in previous_files:
+                    if (entry["row_index"], entry["invoice_type"]) in replaced:
+                        continue
+                    try:
+                        file_path = manifest_path.parent / entry["path"]
+                        verified = (validate_income_xlsx(file_path, month) if entry["invoice_type"] == INCOME_REPORT_TYPE
+                                    else validate_pdf(file_path))
+                        if verified["sha256"] == entry.get("sha256"):
+                            partial.append(entry)
+                    except Exception:
+                        continue
+                update = dict(status="failed", **_file_counts(partial), files=partial, error=str(exc))
+                log(f"{prefix}：失败 — {exc}")
+            with state_lock:
+                store.update(update)
+                save()
+            if getattr(local_gateway, "auth_failed", False) or getattr(local_gateway, "halted", False) is True:
+                halt(getattr(local_gateway, "halt_reason", "紫鸟会话已停止，请恢复后重试"))
 
-        complete = all(store["status"] in TERMINAL for store in record["stores"])
-        record["status"] = ("complete_with_unavailable" if any(s["status"] == "unavailable" for s in record["stores"]) else "complete") if complete else "incomplete"
-        save()
-        final_result = public_result(manifest_path, record)
-        log(final_result["completion_message"])
-        return final_result
+        def worker() -> None:
+            active_group = []
+            active_store = None
+            try:
+                with gateway_factory() if gateway_factory else nullcontext(gateway) as local_gateway:
+                    local_gateway.progress = log
+                    local_gateway.stop_event = stop_event
+                    local_gateway.launch_lock = launch_lock
+                    local_gateway.preflight([store for _, store in selected])
+                    while not stop_event.is_set():
+                        try:
+                            active_group = queue.get_nowait()
+                        except Empty:
+                            return
+                        active_store = active_group[0][1]
+                        session = getattr(local_gateway, "store_session", None)
+                        try:
+                            with session(active_store) if callable(session) else nullcontext():
+                                for index, store in active_group:
+                                    if stop_event.is_set():
+                                        break
+                                    active_store = store
+                                    execute_month(local_gateway, index, store)
+                        except Exception as exc:
+                            # Includes open/close errors; previously downloaded files stay recorded.
+                            if stop_event.is_set():
+                                halt(str(exc))
+                            with state_lock:
+                                active_store.update(status="failed", error=str(exc))
+                                for _, store in active_group:
+                                    if store is not active_store and store["status"] not in TERMINAL:
+                                        store.update(status="failed", error=str(exc))
+                                save()
+                            log(f"{active_store['store_name']}：店铺会话失败 — {exc}")
+                        if getattr(local_gateway, "auth_failed", False) or getattr(local_gateway, "halted", False) is True:
+                            halt(getattr(local_gateway, "halt_reason", "紫鸟会话已停止，请恢复后重试"))
+                        active_group = []
+            except Exception as exc:
+                halt(f"运行前检查或会话清理失败：{exc}")
+                log(stop_reason)
+
+        if worker_count:
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="shopee-id") as pool:
+                futures = [pool.submit(worker) for _ in range(worker_count)]
+                for future in futures:
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        # Join every worker before the final manifest is written.
+                        halt(f"任务状态记录失败：{exc}")
+        with state_lock:
+            if stop_event.is_set():
+                for _, store in selected:
+                    if store["status"] not in TERMINAL and store["status"] != "failed":
+                        store.update(status="failed", error=stop_reason)
+            complete = all(store["status"] in TERMINAL for store in record["stores"])
+            record["status"] = (("complete_with_unavailable" if any(s["status"] == "unavailable" for s in record["stores"])
+                                 else "complete") if complete and not stop_event.is_set() else "incomplete")
+            save()
+            result = public_result(manifest_path, record)
+        log(result["completion_message"])
+        return result

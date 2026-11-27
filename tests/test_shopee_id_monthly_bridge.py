@@ -152,6 +152,36 @@ class ShopeeIdMonthlyBridgeTests(TestCase):
         self.browser.open_store.assert_not_called()
         self.assertFalse(self.bridge._shopee_id_invoice_active)
 
+    def test_months_and_concurrency_persist_and_retry_modes_filter_before_browser_start(self):
+        payload = {"account_id": self.account.id, "store_scope": "all_indonesia",
+                   "months": ["2026-06", "2026-01"], "max_workers": 3}
+        started = self.bridge.start_shopee_id_monthly_invoice(payload)
+        self.assertTrue(started["ok"], started)
+        runner = self.bridge.tasks.start.call_args.args[1]
+        context = self.bridge.tasks.start.call_args.kwargs["context"]
+        with patch.object(app_bridge.shopee_id_monthly_invoice, "run_batch", return_value={}) as run:
+            runner(lambda _: None)
+        record = load_batch(context["manifest_path"])
+        self.assertEqual(record["months"], ["2026-01", "2026-06"])
+        self.assertEqual(record["max_workers"], 3)
+        self.assertEqual(len(record["stores"]), 4)
+        self.assertTrue(callable(run.call_args.kwargs["gateway_factory"]))
+        for store in record["stores"]:
+            store["status"] = "unavailable"
+        record["status"] = "complete_with_unavailable"
+        app_bridge.shopee_id_monthly_invoice.write_json(context["manifest_path"], record)
+        self.factory.reset_mock()
+        self.bridge.tasks.start.reset_mock()
+        rejected = self.bridge.retry_shopee_id_monthly_invoice(context)
+        self.assertFalse(rejected["ok"])
+        self.bridge.tasks.start.assert_not_called()
+        self.factory.assert_not_called()
+        supplement = self.bridge.retry_shopee_id_monthly_invoice({**context, "retry_mode": "supplement"})
+        self.assertTrue(supplement["ok"], supplement)
+        with patch.object(app_bridge.shopee_id_monthly_invoice, "run_batch", return_value={}) as run:
+            self.bridge.tasks.start.call_args.args[1](lambda _: None)
+        self.assertEqual(run.call_args.kwargs["retry_mode"], "supplement")
+
     def test_bound_account_shorthand_exclusive_task_and_scoped_output_dir(self) -> None:
         scoped_dir = str(self.root / "shopee-id-invoices")
         self.settings.tool_output_dirs[directory_scope_key("shopee_id_monthly_invoice")] = scoped_dir
@@ -337,7 +367,7 @@ function element() {
 }
 const e = id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); };
 global.document = { createElement: element };
-let page, account = 'ziniao-1', sentStart, sentPreview, savedDir;
+let page, account = 'ziniao-1', sentStart, sentPreview, sentRetry, savedDir;
 global.HQYL = {
   $: e,
   activeAccount: () => ({ id: account }),
@@ -357,6 +387,10 @@ global.HQYL = {
     start_shopee_id_monthly_invoice: async p => {
       sentStart = p;
       return { ok: true, context: { account_id: p.account_id, profile: 'p1', manifest_path: 'D:/m/manifest.json' } };
+    },
+    retry_shopee_id_monthly_invoice: async p => {
+      sentRetry = p;
+      return { ok: true, context: { account_id: p.account_id, profile: 'p1' } };
     },
     open_path: async () => ({ ok: true }),
     get_shopee_id_monthly_invoice_progress: async () => ({ ok: true, result: { profile: 'p1', stores: [] } })
@@ -404,12 +438,14 @@ vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
   e('exportForm').listeners.submit({ preventDefault() {} });
   await new Promise(r => setTimeout(r, 0));
   assert.equal(sentStart.month, '2026-10');
+  assert.deepEqual(sentStart.months, ['2026-10']);
+  assert.equal(sentStart.max_workers, 5);
   assert.equal(sentStart.store_scope, 'named');
   assert.equal(sentStart.store_names, '印尼046');
   assert.deepEqual(savedDir, { tool: 'shopee_id_monthly_invoice', output_dir: 'D:/ShopeeIDInvoices' });
   page.applyResult({
     manifest_path: 'D:/m/manifest.json', profile: 'p1', month: '2026-10',
-    run_id: 'run-1', status: 'incomplete', is_complete: false, can_retry: true,
+    run_id: 'run-1', status: 'incomplete', is_complete: false, can_retry: true, can_supplement: true,
     store_count: 2, completed_count: 1, no_data_count: 1, failed_count: 1,
     file_count: 3, income_report_count: 2, master_invoice_count: 1, tax_invoice_count: 0,
     output_dir: 'D:/m',
@@ -422,8 +458,34 @@ vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
   assert.equal(e('storeResults').childNodes.length, 2);
   assert.equal(e('recordCount').textContent, '3');
   assert.equal(e('invoiceBreakdown').textContent, '收入 Excel 2 · Master 1 · Tax 0');
-  assert.equal(e('storeResults').childNodes[0].childNodes.length, 8);
-  assert.match(e('storeResults').childNodes[0].childNodes[7].textContent, /当月无税票/);
+  assert.equal(e('storeResults').childNodes[0].childNodes.length, 9);
+  assert.match(e('storeResults').childNodes[0].childNodes[8].textContent, /当月无税票/);
+  e('retryBtn').listeners.click();
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(sentRetry.retry_mode, 'failed');
+  e('supplementBtn').listeners.click();
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(sentRetry.retry_mode, 'supplement');
+  assert.equal(sentRetry.manifest_path, 'D:/m/manifest.json');
+  e('invoiceMonth').value = '2026-01';
+  e('invoiceEndMonth').value = '2026-06';
+  e('invoiceEndMonth').listeners.input();
+  assert.equal(e('monthChoices').childNodes.length, 6);
+  const third = e('monthChoices').childNodes[2].childNodes[0];
+  third.checked = false;
+  third.listeners.change();
+  e('exportForm').listeners.submit({ preventDefault() {} });
+  await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(sentStart.months, ['2026-01', '2026-02', '2026-04', '2026-05', '2026-06']);
+  page.setRunning(true);
+  assert.equal(e('invoiceEndMonth').disabled, true);
+  assert.equal(e('maxWorkers').disabled, true);
+  assert.equal(e('supplementBtn').disabled, true);
+  assert.equal(e('monthChoices').childNodes[0].childNodes[0].disabled, true);
+  page.setRunning(false);
+  e('invoiceEndMonth').value = '2026-11';
+  e('invoiceEndMonth').listeners.input();
+  assert.equal(e('startBtn').disabled, true);
   account = 'ziniao-2';
   page.onAccountsChanged();
   await new Promise(r => setTimeout(r, 0));

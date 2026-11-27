@@ -1,6 +1,7 @@
 """ZiNiao WebDriver gateway for Shopee Indonesia monthly My Tax Invoices."""
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -477,6 +478,7 @@ class ShopeeIdInvoiceGateway:
         verify_wait_timeout: float = 8.0,
         max_verify_attempts: int = 3,
         poll_interval: float = 0.25,
+        client_prepared: bool = False,
     ) -> None:
         if browser is None or getattr(browser, "profile", None) != profile:
             raise ValueError("请使用本次所选紫鸟账号创建浏览器会话")
@@ -495,7 +497,11 @@ class ShopeeIdInvoiceGateway:
         self.verify_wait_timeout = verify_wait_timeout
         self.max_verify_attempts = max(int(max_verify_attempts), 1)
         self.poll_interval = max(float(poll_interval), 0.01)
+        self.client_prepared = client_prepared
         self.current_stores: dict[str, dict[str, Any]] = {}
+        self._session_store_id: str | None = None
+        self.stop_event = None
+        self.launch_lock = None
 
     @property
     def auth_failed(self) -> bool:
@@ -514,7 +520,10 @@ class ShopeeIdInvoiceGateway:
     def preflight(self, stores: list[dict[str, Any]]) -> None:
         if all(store.get("status") in {"success", "empty_month"} for store in stores):
             return
-        self.browser.ready()
+        # Worker sessions must fail if the coordinator's client disappears;
+        # they must never restart a shared client underneath other stores.
+        if not self.client_prepared:
+            self.browser.ready()
         self.current_stores = {
             store["store_id"]: store for store in self.browser.list_stores()
         }
@@ -838,6 +847,10 @@ class ShopeeIdInvoiceGateway:
         return str(live_action["selector"])
 
     def export(self, store: dict[str, Any], month: str, store_dir: str | Path) -> dict[str, Any]:
+        if self._session_store_id is not None:
+            if self._session_store_id != str(store["store_id"]):
+                raise ValueError("当前工作会话已绑定其他店铺")
+            return self._export(store, month, Path(store_dir).resolve())
         result = None
         failure = None
         try:
@@ -863,7 +876,7 @@ class ShopeeIdInvoiceGateway:
     def _navigate_to_invoice_page(self, store_id: str) -> None:
         _navigate_url(self.browser, store_id, INVOICE_URL)
 
-    def _export(self, store: dict[str, Any], month: str, store_dir: Path) -> dict[str, Any]:
+    def _validate_store(self, store: dict[str, Any]) -> str:
         store_id = str(store.get("store_id") or "").strip()
         actual = self.current_stores.get(store_id)
         if (
@@ -876,8 +889,41 @@ class ShopeeIdInvoiceGateway:
             )
         ):
             raise ValueError("该店的紫鸟权限、名称或 Shopee 平台信息发生变化，请重新匹配")
+        return store_id
 
-        self.browser.open_store(store, url=MY_REPORTS_INCOME_URL)
+    @contextmanager
+    def store_session(self, store: dict[str, Any]):
+        """Open once for a store's selected months, and verify closure once."""
+        store_id = self._validate_store(store)
+        if self._session_store_id is not None:
+            raise ValueError("店铺会话不能嵌套")
+        try:
+            # Only startup is serialized; independent stores download in parallel.
+            with self.launch_lock if self.launch_lock is not None else nullcontext():
+                if self.stop_event is not None and self.stop_event.is_set():
+                    raise ValueError("批次已暂停，未打开后续店铺")
+                try:
+                    self.browser.open_store(store, url=MY_REPORTS_INCOME_URL)
+                except Exception:
+                    if self.halted and self.stop_event is not None:
+                        self.stop_event.set()
+                    raise
+            self._session_store_id = store_id
+            yield
+        finally:
+            self._session_store_id = None
+            try:
+                if getattr(self.browser, "cleanup_failed", False) is not True:
+                    self.browser.close_store(store_id)
+            except Exception:
+                if self.stop_event is not None:
+                    self.stop_event.set()
+                raise
+
+    def _export(self, store: dict[str, Any], month: str, store_dir: Path) -> dict[str, Any]:
+        store_id = self._validate_store(store)
+        if self._session_store_id is None:
+            self.browser.open_store(store, url=MY_REPORTS_INCOME_URL)
 
         downloaded_files: list[dict[str, Any]] = []
         row_records: list[dict[str, Any]] = []

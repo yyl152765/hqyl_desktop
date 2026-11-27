@@ -17,8 +17,8 @@
         </header>
         <p class="temu-export-note">按完整自然月下载 <strong>Income → Released 收入账单 Excel</strong>，并从 My Tax Invoices 下载全部 <strong>Master Invoice</strong>（服务费账单 PDF）与 <strong>Tax Invoice</strong>（Faktur Pajak 税票 PDF）；不下载 Income Statements（收入对账单）及 Itemised Billing Excel。</p>
         <section class="overview-grid">
-          <article class="overview-card accent-green"><span>本批店铺</span><strong id="storeCount">0</strong><small>按名单顺序逐店执行</small></article>
-          <article class="overview-card"><span>已处理店铺</span><strong id="completedCount">0</strong><small id="noDataCount">无账单 0 · 待补税票 0 · 失败 0</small></article>
+          <article class="overview-card accent-green"><span>本批店铺</span><strong id="storeCount">0</strong><small id="batchScope">最多同时运行 5 家店铺</small></article>
+          <article class="overview-card"><span>已处理店铺月份</span><strong id="completedCount">0</strong><small id="noDataCount">无账单 0 · 待补税票 0 · 失败 0</small></article>
           <article class="overview-card"><span>已保存文件</span><strong id="recordCount">0</strong><small id="invoiceBreakdown">收入 Excel 0 · Master 0 · Tax 0</small></article>
           <article class="overview-card file-card"><span>批次状态</span><strong id="outputFile">未生成</strong><small id="statusText">等待任务启动</small></article>
         </section>
@@ -30,9 +30,12 @@
               <span class="flow-account-copy"><small>本次运行账号</small><strong data-active-account-name data-vendor="ziniao">尚未绑定紫鸟账号</strong></span>
               <a class="account-link-button" href="settings.html?focus=ziniao">管理账号</a>
             </div>
-            <p id="connectionNotice" class="temu-export-note" role="status">开始后自动使用所选紫鸟账号核对 Shopee 印尼店铺，并逐店下载所选月份的收入 Excel、Master Invoice 与 Tax Invoice。</p>
+            <p id="connectionNotice" class="temu-export-note" role="status">使用所选紫鸟账号核对店铺，最多同时运行 5 家；每店复用窗口，按月份依次下载收入 Excel、Master Invoice 与 Tax Invoice。</p>
             <div class="form-grid">
-              <label><span>账单月份 <small>仅支持已结束自然月</small></span><input id="invoiceMonth" type="month" required /></label>
+              <label><span>起始月份 <small>仅支持已结束自然月</small></span><input id="invoiceMonth" type="month" required /></label>
+              <label><span>结束月份 <small>留空只下载起始月份</small></span><input id="invoiceEndMonth" type="month" /></label>
+              <div class="store-field"><span>下载月份 <small id="monthSummary">可取消不需要的月份</small></span><div id="monthChoices" role="group" aria-label="勾选下载月份"></div></div>
+              <label><span>同时运行店铺数</span><select id="maxWorkers"><option value="5" selected>5 家</option><option value="4">4 家</option><option value="3">3 家</option><option value="2">2 家</option><option value="1">1 家</option></select></label>
               <label><span>店铺范围</span><select id="storeScope"><option value="all_indonesia" selected>全部印尼 Shopee 店铺</option><option value="named">只处理指定店铺</option></select></label>
               <label><span>紫鸟客户端</span><div class="input-action"><input id="clientPath" readonly /><button id="chooseClientBtn" class="secondary" type="button">选择</button></div></label>
               <label><span>驱动目录</span><div class="input-action"><input id="driverPath" readonly /><button id="chooseDriverBtn" class="secondary" type="button">选择</button></div></label>
@@ -48,13 +51,14 @@
             <p class="temu-export-note">先检查完整导出历史：已有整月收入报表就直接下载，正在生成则等待；没有才选择月初至月末并提交一次 Export。下载页面提供的账单与税票；平台未提供 Tax Invoice 时先保存可用文件，并标明待补税票。收入报表与税票均确认无数据时，自动标记“当月无账单”并继续下一家。所有文件保留原名并校验 SHA-256。</p>
           </form>
           <div class="right-stack">
-            <section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>逐店打开、密码校验、历史核对、收入报表生成与文件下载进度。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section>
+            <section class="surface log-surface"><div class="section-head tight"><div><h2>运行日志</h2><p>显示店铺、月份、历史核对、收入报表生成与文件下载进度。</p></div><button id="copyLogBtn" class="secondary compact-btn" type="button">复制日志</button></div><pre id="logBox" class="log-box" tabindex="0"></pre></section>
           </div>
         </section>
         <section class="surface">
           <div class="section-head"><div><h2>批次结果</h2><p id="resultMessage" aria-live="polite">尚未运行。选择月份、店铺范围和输出目录后开始；已成功店铺在重试时跳过。</p></div><span id="batchLabel" class="section-badge">尚无批次</span></div>
-          <div class="actions"><button id="openDirectoryBtn" type="button" class="secondary" disabled>打开批次目录</button><button id="retryBtn" type="button" class="secondary" disabled>重试失败 / 补查税票</button></div>
-          <div class="collection-table-wrap"><table><thead><tr><th>店铺名</th><th>状态</th><th>收入 Excel</th><th>税票行数</th><th>Master Invoice</th><th>Tax Invoice</th><th>保存目录</th><th>说明 / 失败原因</th></tr></thead><tbody id="storeResults"><tr><td colspan="8">尚未运行</td></tr></tbody></table></div>
+          <div class="actions"><button id="openDirectoryBtn" type="button" class="secondary" disabled>打开批次目录</button><button id="retryBtn" type="button" class="secondary" disabled>重试失败 / 继续中断</button><button id="supplementBtn" type="button" class="secondary" disabled>补查税票</button></div>
+          <p class="temu-export-note">重试只处理失败或中断的店铺月份；成功、无账单和平台未提供税票项会跳过。需要再次查询平台缺失税票时，单独点击“补查税票”。</p>
+          <div class="collection-table-wrap"><table><thead><tr><th>店铺名</th><th>月份</th><th>状态</th><th>收入 Excel</th><th>税票行数</th><th>Master Invoice</th><th>Tax Invoice</th><th>保存目录</th><th>说明 / 失败原因</th></tr></thead><tbody id="storeResults"><tr><td colspan="9">尚未运行</td></tr></tbody></table></div>
         </section>
       </main>
     </div>
