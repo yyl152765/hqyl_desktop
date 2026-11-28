@@ -106,6 +106,13 @@ from backend.services.bigseller_sku_benchmark import (
     validate_bigseller_benchmark_payload,
 )
 from backend.services.bigseller_claim_workbook import inspect_claim_workbook
+from backend.services.erp_sku_earliest_store_checkpoint import CheckpointError as ErpSkuCheckpointError
+from backend.services.erp_sku_earliest_store_repository import SkuQueryError
+from backend.services.erp_sku_earliest_store_service import (
+    run_erp_sku_earliest_store,
+    validate_payload as validate_erp_sku_earliest_payload,
+)
+from backend.services.erp_sku_earliest_store_workbook import inspect_workbook as inspect_erp_sku_workbook
 from backend.services.bigseller_claim_query import (
     run_bigseller_claim_query,
     validate_bigseller_claim_payload,
@@ -193,7 +200,7 @@ from backend.update_service import (
 )
 
 
-APP_VERSION = "1.0.12"
+APP_VERSION = "1.0.16"
 APP_NAME = "寰球云联自动化平台"
 
 
@@ -465,6 +472,13 @@ class AppBridge:
                     "description": "导入 Excel，按主 SKU 查询 Shopee 在售商品，回填最早创建商品的店铺、创建时间和平台创建时间。",
                     "status": "ready",
                     "vendor": "bigseller",
+                },
+                {
+                    "key": "erp_sku_earliest_store",
+                    "name": "ERP SKU 创建时间第一店铺",
+                    "description": "直连 ERP 只读库，按 SKU 精确匹配 Shopee 全部状态商品，找出平台创建时间最早的店铺。",
+                    "status": "ready",
+                    "vendor": "local",
                 },
                 {
                     "key": "bigseller_link_query",
@@ -1445,6 +1459,8 @@ class AppBridge:
                 "output_file": str(result.output_file),
                 "output_dir": str(result.output_dir),
                 "failed_months": list(result.failed_months),
+                "is_complete": not result.failed_months,
+                "completion_message": "部分月份导出失败，请查看导出说明并重试失败月份" if result.failed_months else "",
                 "category_count": len(job.category_ids),
                 "warehouse_count": len(job.warehouse_ids),
                 "months": [
@@ -3720,6 +3736,66 @@ class AppBridge:
             context={"source_file": str(job.source_file), "sheet_name": job.sheet_name,
                      "site": job.site, "listing_scope": job.listing_scope,
                      "output_dir": str(job.output_dir),
+                     "resume_checkpoint": str(job.resume_checkpoint or "")},
+        )
+
+    def inspect_erp_sku_file(self, source_file: str) -> dict[str, Any]:
+        try:
+            source = str(source_file or "").strip()
+            info = inspect_erp_sku_workbook(source)
+            if not info.get("sheet_name"):
+                return {"ok": False, "error": "未找到包含“库存SKU编号”“库存SKU”或“SKU”表头和有效数据的工作表"}
+            return {"ok": True, **info}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            return {"ok": False, "error": "读取 Excel 失败，请确认文件可访问、未加密且格式正确"}
+
+    def choose_erp_sku_file(self) -> dict[str, Any]:
+        try:
+            import webview
+
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=False,
+                file_types=("Excel 文件 (*.xlsx;*.xls)",),
+            )
+            if not result:
+                return {"ok": False, "cancelled": True}
+            selected = result[0] if isinstance(result, (list, tuple)) else result
+            return self.inspect_erp_sku_file(str(selected))
+        except Exception:
+            return {"ok": False, "error": "打开文件选择器失败，请直接输入 Excel 完整路径"}
+
+    def choose_erp_sku_checkpoint(self) -> dict[str, Any]:
+        try:
+            import webview
+
+            result = webview.windows[0].create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=False,
+                file_types=("ERP SKU 对标进度 (*.sqlite3)",),
+            )
+            if not result:
+                return {"ok": False, "cancelled": True}
+            selected = result[0] if isinstance(result, (list, tuple)) else result
+            return {"ok": True, "path": str(Path(selected).resolve())}
+        except Exception:
+            return {"ok": False, "error": "打开文件选择器失败，请直接输入进度文件完整路径"}
+
+    def start_erp_sku_earliest_store(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Read-only ERP query; connection and authorised scope come from trusted configuration only."""
+        try:
+            job = validate_erp_sku_earliest_payload(payload or {})
+            self.config_store.save({"output_dir": str(job.output_dir)})
+        except (SkuQueryError, ErpSkuCheckpointError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            return {"ok": False, "error": "读取参数或 Excel 失败，请检查输入文件和数据库配置"}
+        return self.tasks.start(
+            "ERP SKU 创建时间第一店铺", lambda progress: run_erp_sku_earliest_store(job, progress),
+            tool="erp_sku_earliest_store",
+            context={"source_file": str(job.input.source_path or ""), "sheet_name": job.input.sheet_name,
+                     "sku_count": len(job.input.skus), "countries": list(job.countries),
+                     "shop_ids": list(job.shop_ids), "output_dir": str(job.output_dir),
                      "resume_checkpoint": str(job.resume_checkpoint or "")},
         )
 

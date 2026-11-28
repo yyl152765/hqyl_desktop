@@ -393,7 +393,9 @@ class _WindowsProcesses:
         if errors:
             raise errors[0]
         if not result:
-            raise C.WinError(C.get_last_error())
+            error = C.get_last_error()
+            if error:
+                raise C.WinError(error)
 
     def terminate(self, record):
         handle = self._matching_handle(record, access=1)

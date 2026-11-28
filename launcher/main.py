@@ -42,6 +42,7 @@ PAGE_ENTRIES = {
     "bigseller-sku-benchmark": "bigseller-sku-benchmark.html",
     "bigseller-claim-query": "bigseller-claim-query.html",
     "bigseller-link-query": "bigseller-link-query.html",
+    "erp-sku-earliest-store": "erp-sku-earliest-store.html",
     "lazada-monthly-report": "lazada-monthly-report.html",
     "lazada-ads-monthly": "lazada-ads-monthly.html",
     "lazada-ads-data": "lazada-ads-data.html",
@@ -435,6 +436,54 @@ def self_check() -> int:
                 raise RuntimeError("BigSeller claim frozen workbook preservation check failed")
         finally:
             claim_book.close()
+
+        from backend.services.erp_sku_earliest_store_checkpoint import (
+            create_checkpoint as create_erp_sku_checkpoint,
+            empty_row as empty_erp_sku_row,
+            read_checkpoint as read_erp_sku_checkpoint,
+        )
+        from backend.services.erp_sku_earliest_store_workbook import (
+            export_workbook as export_erp_sku_workbook,
+            load_input as load_erp_sku_input,
+        )
+
+        erp_source = check_dir / "erp-sku-input.xlsx"
+        erp_book = Workbook()
+        erp_book.active.title = "动销总表"
+        erp_book.active.append(["库存SKU编号", "备注"])
+        erp_book.active.append(["00001", "保留内容"])
+        erp_book.active["A2"].number_format = "@"
+        erp_book.save(erp_source)
+        erp_book.close()
+        erp_input = load_erp_sku_input(erp_source, "动销总表")
+        erp_row = {
+            **empty_erp_sku_row("00001", "", "matched"),
+            "candidate_shop_id": "293688122",
+            "candidate_shop_name": "Self-check ERP shop",
+            "region": "PH",
+            "item_id": "54166445713",
+            "model_id": "401400266476",
+            "matched_sku": "00001",
+            "create_time": "2026-08-22 12:32:43",
+            "item_status": "NORMAL",
+            "match_source": "model_sku",
+            "matched_item_count": 1,
+            "matched_shop_count": 1,
+            "tied_shop_count": 1,
+            "queried_at": "2026-11-27 12:00:00",
+        }
+        erp_identity = {"skus": ["00001"], "source_sha256": erp_input.source_sha256}
+        erp_cp = create_erp_sku_checkpoint(check_dir / "erp-cp", erp_identity)
+        try:
+            erp_cp.save_results([erp_row])
+            erp_cp_path = erp_cp.path
+        finally:
+            erp_cp.close()
+        if read_erp_sku_checkpoint(erp_cp_path, erp_identity) != {"00001": erp_row}:
+            raise RuntimeError("ERP SKU earliest store checkpoint check failed")
+        erp_out = export_erp_sku_workbook(erp_input, [erp_row], check_dir / "erp-out")
+        if not erp_out.is_file():
+            raise RuntimeError("ERP SKU earliest store workbook export check failed")
 
     return 0
 

@@ -5,9 +5,9 @@
 （``shopLabelIds[]``）和仓库（``stockWarehouseId[]``）两组筛选控件，
 同维度多选取并集、不同维度之间取交集。
 
-导出走 ``reports.exportProductAll``（``types=warehouseReports``）。马帮在大数据量
-时会**静默截断到一页 2000 行**，而且截断文件仍然带「合计」行，用合计校验不出来，
-所以每导一个月都要用报表页的「共 N 条」复核行数。
+仅分类/仅仓库使用官方 CSV 并与完整分页明细逐项复核；两维交集直接使用
+原生筛选的分页明细，避免导出接口的缺列和按 SKU 交集造成的串数。
+item_id/NCM 由同分类国家报表补充，所有金额仍保留仓库报表原生口径。
 """
 
 from __future__ import annotations
@@ -25,18 +25,23 @@ from typing import Any, Callable, Sequence
 import xlsxwriter
 from bs4 import BeautifulSoup
 
-from backend.core.mabang_client import MabangApiError, MabangClient, decode_html_page
+from backend.core.mabang_client import MabangApiError, MabangClient
+from backend.core.mabang_sales_report import (
+    fetch_modern_filter_options,
+    modern_query_sales_report_summary,
+)
 from backend.services.group_sales_report import (
     BASE_FORM_DATA,
     TARGET_SALES_HEADERS,
     convert_cell,
     csv_text_for_workbook,
+    decode_csv_content,
     normalize_sales_csv,
+    read_complete_sales_csv,
     safe_sheet_name,
     safe_text,
     validate_sales_csv,
 )
-
 
 ProgressCallback = Callable[[str], None]
 
@@ -49,9 +54,9 @@ PLATFORM_OR_SHOP = "warehouse"
 CATEGORY_FIELD = "shopLabelIds[]"
 WAREHOUSE_FIELD = "stockWarehouseId[]"
 DEFAULT_EXPORT_ROWS_PER_PAGE = "2000"
-PAGE_SIZE_HINT = 2000
 MAX_EXPORT_ATTEMPTS = 4
 RETRY_DELAYS = (10, 30, 60)
+METADATA_BATCH_SIZE = 500
 TOTAL_PATTERN = re.compile(r"共\s*([\d,]+)\s*条")
 MONTH_PATTERN = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
 TEXT_FORCE_COLUMNS = {"item_id"}
@@ -136,12 +141,14 @@ def fetch_report_options(username: str, password: str) -> tuple[tuple[FilterOpti
 
 
 def _fetch_report_options(client: MabangClient) -> tuple[tuple[FilterOption, ...], tuple[FilterOption, ...]]:
-    response = client.client.get(
-        f"{BASE_URL}{REPORT_REFERER}",
-        headers={"Referer": f"{BASE_URL}/index.php"},
-    )
-    response.raise_for_status()
-    return parse_report_options(decode_html_page(response))
+    if client.uses_modern_sales_report():
+        options = fetch_modern_filter_options(client)
+        categories = tuple(FilterOption(id=item.id, name=item.name) for item in options.categories)
+        warehouses = tuple(FilterOption(id=item.id, name=item.name) for item in options.warehouses)
+        if not categories and not warehouses:
+            raise MabangApiError("未能读取新版商品仓库报表的分类与仓库，请确认账号有报表权限后重试")
+        return categories, warehouses
+    return parse_report_options(client.fetch_report_page_html(REPORT_REFERER))
 
 
 def get_report_option_payload(username: str | None = None, password: str | None = None) -> dict[str, Any]:
@@ -292,21 +299,20 @@ def build_report_form(
     return pairs
 
 
-def query_report_total(client: MabangClient, form: list[tuple[str, str]], context: str) -> int | None:
-    payload = client.post_form_json(
-        "/index.php",
-        params=REPORT_PARAMS,
-        form_data=form,
-        context=f"{context} 总数复核",
-        referer=REPORT_REFERER,
-    )
-    if payload.get("success") is not True:
-        return None
-    text = BeautifulSoup(str(payload.get("pageHtml") or ""), "html.parser").get_text(" ", strip=True)
-    match = TOTAL_PATTERN.search(text)
-    if not match:
-        return None
-    return int(match.group(1).replace(",", ""))
+def query_report_total(client: MabangClient, form: list[tuple[str, str]], context: str) -> int:
+    from backend.core.mabang_sales_report_classic import report_total
+
+    if client.uses_modern_sales_report():
+        payload = modern_query_sales_report_summary(
+            client, form_data=form, report_type=REPORT_TYPE, platform_or_shop=PLATFORM_OR_SHOP,
+        )
+        total = payload.get("total")
+        if payload.get("success") is not True or type(total) is not int:
+            raise MabangApiError(f"{context}缺少有效分页总数")
+        return total
+    payload = client.post_form_json("/index.php", params=REPORT_PARAMS, form_data=form,
+                                    context=f"{context} 总数复核", referer=REPORT_REFERER)
+    return report_total(payload, context)
 
 
 def count_detail_rows(content: bytes) -> int:
@@ -325,6 +331,106 @@ def count_detail_rows(content: bytes) -> int:
 
 
 # --------------------------------------------------------------------------- 导出
+
+
+def require_full_sales_columns(content: bytes, context: str) -> None:
+    read_complete_sales_csv(content, context)
+
+
+def _add_product_metadata(client, rows, job, start, end, progress=None):
+    """Only countryReports supplies item_id/NCM; never use it for warehouse metrics."""
+    if not rows:
+        return
+    needed = sorted({row["SKU"].strip() for row in rows})
+    if any(not sku or "\n" in sku or "\r" in sku for sku in needed):
+        raise MabangApiError("商品 SKU 无法用于逐行批量查询")
+    metadata_form = [(key, "country" if key in {"platformOrShop", "table"} else value)
+                     for key, value in build_report_form(job.category_ids, (), start, end)]
+    required = {"SKU", "item_id", "NCM"}
+    metadata = {}
+    for offset in range(0, len(needed), METADATA_BATCH_SIZE):
+        batch = needed[offset:offset + METADATA_BATCH_SIZE]
+        # These are the classic page's actual batch-search controls. Limiting
+        # the official export avoids downloading every SKU in the tenant.
+        form = metadata_form + [("formType", "2"), ("selectTypeMore", "stockSkuIn"),
+                                ("selectValueMore", "\n".join(batch))]
+        _emit(progress, f"正在补齐商品资料: {offset + 1}~{offset + len(batch)}/{len(needed)}")
+        exported = client.download_product_sales_report_csv(
+            url=REPORT_URL, params={"mod": "reports.countryReports"}, form_data=form,
+            report_type="countryReports", platform_or_shop="country",
+            referer=f"{BASE_URL}/index.php?mod=reports.countryReports", fields=("salesSkuNewId",),
+        )
+        reader = csv.DictReader(io.StringIO(decode_csv_content(exported.content)))
+        if (not reader.fieldnames or not required.issubset(reader.fieldnames)
+                or len(reader.fieldnames) != len(set(reader.fieldnames))):
+            raise MabangApiError("国家报表缺少或重复商品资料列，不能补全仓库报表")
+        for item in reader:
+            sku = str(item.get("SKU") or "").strip()
+            if sku in {"合计", "总计", "total"} or not any(item.values()):
+                continue
+            if sku not in batch:
+                raise MabangApiError("商品资料批量筛选未生效，返回范围外 SKU")
+            if any(item.get(key) is None for key in required) or None in item:
+                raise MabangApiError("商品资料明细列不完整")
+            pair = (item["item_id"], item["NCM"])
+            if sku in metadata and metadata[sku] != pair:
+                raise MabangApiError("商品资料存在同 SKU 多个 item_id/NCM，不能猜选")
+            metadata[sku] = pair
+        if any(sku not in metadata for sku in batch):
+            raise MabangApiError("商品资料导出被截断或不完整，不能生成仓库报表")
+    for row in rows:
+        if row["SKU"].strip() not in metadata:
+            raise MabangApiError("商品资料导出被截断或不完整，不能生成仓库报表")
+        row["item_id"], row["NCM"] = metadata[row["SKU"].strip()]
+
+
+def _rows_to_complete_csv(rows, expected_days):
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=TARGET_SALES_HEADERS, lineterminator="\n", extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    content = ("\ufeff" + stream.getvalue()).encode("utf-8")
+    read_complete_sales_csv(content, "商品仓库报表")
+    return normalize_sales_csv(content, expected_days)
+
+
+def export_intersection_csv(
+    client: MabangClient,
+    job: WarehouseSalesExportJob,
+    start: date,
+    end: date,
+    expected_days: int,
+    progress: ProgressCallback | None = None,
+) -> bytes:
+    """Read the actual category/warehouse intersection, with all selected IDs.
+
+    Classic export drops financial columns for this combination. Use its
+    filtered table for all metrics; the category export supplies item_id/NCM
+    only, after checking that each SKU has unambiguous product metadata.
+    No local summation of per-warehouse averages, ratios or attributes occurs.
+    """
+    from backend.core.mabang_sales_report_classic import (
+        iter_report_pages,
+        table_sales_row,
+    )
+
+    form = build_report_form(job.category_ids, job.warehouse_ids, start, end, rows_per_page=2000)
+    if client.uses_modern_sales_report():
+        export = client.download_product_sales_report_csv(
+            url=REPORT_URL, params=REPORT_PARAMS, form_data=form, report_type=REPORT_TYPE,
+            platform_or_shop=PLATFORM_OR_SHOP, referer=f"{BASE_URL}{REPORT_REFERER}",
+        )
+        read_complete_sales_csv(export.content, "新版仓库交集")
+        return normalize_sales_csv(export.content, expected_days)
+
+    rows = []
+    for _, page_rows in iter_report_pages(client, url=REPORT_URL, params=REPORT_PARAMS,
+                                         form_data=form, referer=f"{BASE_URL}{REPORT_REFERER}",
+                                         context="商品仓库报表交集"):
+        rows.extend(table_sales_row(row) for row in page_rows)
+    _add_product_metadata(client, rows, job, start, end, progress)
+    _emit(progress, f"分类+仓库交集: {len(rows)} 行（原生筛选）")
+    return _rows_to_complete_csv(rows, expected_days)
 
 
 def _emit(progress: ProgressCallback | None, message: str) -> None:
@@ -349,6 +455,13 @@ def export_month(
 
     for attempt in range(1, MAX_EXPORT_ATTEMPTS + 1):
         try:
+            if job.category_ids and job.warehouse_ids:
+                content = export_intersection_csv(client, job, start, end, expected_days, progress)
+                rows = count_detail_rows(content)
+                csv_path.write_bytes(content)
+                _emit(progress, f"{label}: 分类+仓库交集 {rows} 行")
+                return MonthExport(label=label, record_count=rows, csv_path=csv_path)
+
             form = build_report_form(
                 job.category_ids,
                 job.warehouse_ids,
@@ -369,26 +482,16 @@ def export_month(
             if not content:
                 raise MabangApiError(f"{context} 导出结果为空")
             validate_sales_csv(content, context)
-            rows = count_detail_rows(content)
-            if rows <= 0:
-                raise MabangApiError(f"{context} 导出结果没有明细行")
+            detail = read_complete_sales_csv(content, context, allow_missing=("item_id", "NCM"))
+            rows = len(detail)
+            if export_file.metadata.get("source") != "modern-product-sale-reports":
+                from backend.core.mabang_sales_report_classic import verify_csv_rows
 
-            # 马帮按 2000 条一页拼装导出，截断必然落在整页边界上。
-            if rows % PAGE_SIZE_HINT == 0:
-                total = query_report_total(
-                    client,
-                    build_report_form(job.category_ids, job.warehouse_ids, start, end, page=1, rows_per_page=100),
-                    context,
-                )
-                if total is None:
-                    raise MabangApiError(f"{context} 无法读取报表总数，不能确认导出完整性")
-                if total != rows:
-                    raise MabangApiError(f"{context} 导出被截断：文件 {rows} 行，报表共 {total} 条")
-
-            try:
-                content = normalize_sales_csv(content, expected_days)
-            except MabangApiError as exc:
-                _emit(progress, f"{label}: 标准列整理跳过（{exc}），按原始列导出")
+                verify_csv_rows(client, detail, url=REPORT_URL, params=REPORT_PARAMS,
+                                form_data=form, referer=f"{BASE_URL}{REPORT_REFERER}", context=context)
+            if any("item_id" not in row or "NCM" not in row for row in detail):
+                _add_product_metadata(client, detail, job, start, end, progress)
+            content = _rows_to_complete_csv(detail, expected_days)
             validate_sales_csv(content, f"{context} 整理后")
             csv_path.write_bytes(content)
             _emit(progress, f"{label}: 已导出 {rows} 行")
@@ -418,11 +521,7 @@ def run_warehouse_sales_export(
     with MabangClient(BASE_URL, timeout_seconds=900, verify_ssl=False) as client:
         _emit(progress, "正在登录马帮…")
         client.login(job.username, job.password)
-        try:
-            categories, warehouses = _fetch_report_options(client)
-        except Exception as exc:  # noqa: BLE001 - 清单只用于展示名称，失败不阻塞导出
-            _emit(progress, f"读取分类/仓库名称失败（{exc}），继续导出")
-            categories, warehouses = (), ()
+        categories, warehouses = _fetch_report_options(client)
 
         category_names = _resolve_names(job.category_ids, categories)
         warehouse_names = _resolve_names(job.warehouse_ids, warehouses)
@@ -471,7 +570,9 @@ def run_warehouse_sales_export(
 
 def _resolve_names(ids: Sequence[str], options: Sequence[FilterOption]) -> tuple[str, ...]:
     mapping = {item.id: item.name for item in options}
-    return tuple(mapping.get(item_id, item_id) for item_id in ids)
+    if any(item_id not in mapping for item_id in ids):
+        raise MabangApiError("所选分类或仓库不存在或当前账号不可见，请重新加载选项")
+    return tuple(mapping[item_id] for item_id in ids)
 
 
 def _preview(names: Sequence[str], limit: int = 4) -> str:

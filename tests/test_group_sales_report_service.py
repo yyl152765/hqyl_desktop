@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import httpx
+from tests.sales_report_fixtures import ClassicClient, sales_row, sales_csv, page_payload
 from openpyxl import load_workbook
 
 from backend.config_store import BoundAccount, ConfigStore, DEFAULT_UPDATE_MANIFEST_URL
@@ -90,20 +90,7 @@ class GroupSalesReportServiceTests(unittest.TestCase):
             normalize_sales_csv(b"SKU\n", 0)
 
     def test_export_group_csv_recalculates_average_without_pagination(self) -> None:
-        class ExportOnlyClient:
-            def __init__(self) -> None:
-                self.download_calls = 0
-
-            def download_product_sales_report_csv(self, **_kwargs):
-                self.download_calls += 1
-                return SimpleNamespace(
-                    content=(
-                        "SKU,销售数量,平均单天销量\n"
-                        "hqsG2001,3421,110.35\n"
-                    ).encode("utf-8")
-                )
-
-        client = ExportOnlyClient()
+        client = ClassicClient([sales_row("hqsG2001", quantity="3421", income="38284.7828")])
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
             output_path = export_group_csv(
@@ -115,7 +102,7 @@ class GroupSalesReportServiceTests(unittest.TestCase):
                 date(2026, 7, 30),
             )
 
-            self.assertEqual(client.download_calls, 1)
+            self.assertEqual(client.export_calls, 1)
             self.assertEqual(self._sales_row(output_path.read_bytes())["平均单天销量"], "114.03\t")
 
     def test_validate_group_sales_payload_accepts_known_group(self) -> None:
@@ -135,20 +122,16 @@ class GroupSalesReportServiceTests(unittest.TestCase):
             )
         self.assertEqual(job.groups[0].id, group["id"])
 
-    def test_live_options_include_every_platform_and_group_from_report_page(self) -> None:
-        html = '''<html>
-          <label><input name="shopLabelIds[]" value="new-ph"><span>菲S-新增小组</span></label>
-          <label><input name="shopLabelIds[]" value="new-tk"><span>tk菲律宾</span></label>
-          <label><input name="shopLabelIds[]" value="new-my"><span>lazada马来</span></label>
-          <label><input name="shopLabelIds[]" value="new-ph"><span>重复分类</span></label>
-          <label><input name="shopLabelIds[]" value=""><span>全部</span></label>
-          <label><input name="shopIdMultiple[]" value="shop"><span>店铺</span></label>
-        </html>'''
-        with patch("backend.services.group_sales_report.MabangClient") as factory:
+    def test_live_options_include_every_platform_and_group_from_modern_directory(self) -> None:
+        modern_options = SimpleNamespace(categories=(
+            SimpleNamespace(id="new-ph", name="菲S-新增小组"),
+            SimpleNamespace(id="new-tk", name="tk菲律宾"),
+            SimpleNamespace(id="new-my", name="lazada马来"),
+        ))
+        with patch("backend.services.group_sales_report.MabangClient") as factory, patch(
+            "backend.services.group_sales_report.fetch_modern_filter_options", return_value=modern_options
+        ):
             client = factory.return_value.__enter__.return_value
-            client.client.get.return_value = httpx.Response(
-                200, text=html, request=httpx.Request("GET", "https://example.test/index.php")
-            )
             options = get_group_options("bound-user", "bound-password")
         client.login.assert_called_once_with("bound-user", "bound-password")
         self.assertEqual([item["id"] for item in options], ["new-ph", "new-tk", "new-my"])
@@ -218,9 +201,10 @@ class GroupSalesReportServiceTests(unittest.TestCase):
                 clock.now.return_value = datetime(2026, 11, 10, 12, 0, 0)
                 client = factory.return_value.__enter__.return_value
                 client.download_product_sales_report_csv.side_effect = [
-                    SimpleNamespace(content="SKU,销售数量,平均单天销量\nfirst,9,1\n".encode("utf-8")),
-                    SimpleNamespace(content="SKU,销售数量,平均单天销量\nsecond,18,2\n".encode("utf-8")),
+                    SimpleNamespace(content=sales_csv([sales_row("first", quantity="9")]), metadata={}),
+                    SimpleNamespace(content=sales_csv([sales_row("second", quantity="18")]), metadata={}),
                 ]
+                client._post_sales_report.side_effect = [page_payload([sales_row("first", quantity="9")]), page_payload([sales_row("second", quantity="18")])]
                 first = run_group_sales_report(job)
                 first_workbook = first.output_file.read_bytes()
                 second = run_group_sales_report(job)

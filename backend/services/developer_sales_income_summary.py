@@ -17,15 +17,17 @@ from bs4 import BeautifulSoup
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-from backend.core.mabang_client import MabangApiError, MabangClient, decode_html_page
-
+from backend.core.mabang_client import MabangApiError, MabangClient
+from backend.core.mabang_sales_report import fetch_modern_filter_options
 
 BASE_URL = "https://900853.private.mabangerp.com"
 REPORT_PAGE_PATH = "/index.php?mod=reports.countryReports"
 REPORT_URL = f"{BASE_URL}/index.php"
 REPORT_PARAMS = {"mod": "reports.countryReports"}
 DEFAULT_ROWS_PER_PAGE = "2000"
-ALL_PEOPLE_CONCURRENCY = 20
+# The MAS report API is shared with interactive users. Four independently
+# authenticated workers were exercised during the real SPA acceptance run.
+ALL_PEOPLE_CONCURRENCY = 4
 DEVELOPER_INPUT_NAME = "developid[]"
 SALESPERSON_INPUT_NAME = "saleid[]"
 SUMMARY_EXPORT_FIELDS = (
@@ -54,6 +56,8 @@ UNASSIGNED_SALESPERSON = "未分配销售员"
 UNASSIGNED_DEVELOPER = "未分配开发员"
 MONEY_HEADER = "收入-订单金额（USD）"
 MONEY_QUANTUM = Decimal("0.0001")
+INCOME_PAGE_SIZE = 2000
+MAX_INCOME_PAGES = 200
 
 ProgressCallback = Callable[[str], None]
 
@@ -243,11 +247,19 @@ def validate_developer_sales_income_payload(payload: dict[str, Any]) -> Develope
 
 
 def fetch_report_person_options(client: MabangClient) -> tuple[list[PersonOption], list[PersonOption]]:
-    response = client.client.get(client._url(REPORT_PAGE_PATH))
-    response.raise_for_status()
-    page_html = decode_html_page(response)
-    developers = parse_person_options(page_html, DEVELOPER_INPUT_NAME)
-    salespeople = parse_person_options(page_html, SALESPERSON_INPUT_NAME)
+    if client.uses_modern_sales_report():
+        options = fetch_modern_filter_options(client)
+        # -2 is the SPA's departed-people aggregate, not a distinct person.
+        developers = [PersonOption(id=item.id, name=clean_person_label(item.name)) for item in options.developers if item.id != "-2"]
+        salespeople = [PersonOption(id=item.id, name=clean_person_label(item.name)) for item in options.salespeople if item.id != "-2"]
+        for option_list, fallback_name in ((developers, UNASSIGNED_DEVELOPER), (salespeople, UNASSIGNED_SALESPERSON)):
+            for index, option in enumerate(option_list):
+                if option.id == "0" and not option.name:
+                    option_list[index] = PersonOption(id="0", name=fallback_name)
+    else:
+        page_html = client.fetch_report_page_html(REPORT_PAGE_PATH)
+        developers = parse_person_options(page_html, DEVELOPER_INPUT_NAME)
+        salespeople = parse_person_options(page_html, SALESPERSON_INPUT_NAME)
     if not developers:
         raise MabangApiError("未从商品销量报表获取到开发员选项，请确认账号权限")
     if not salespeople:
@@ -286,7 +298,7 @@ def decode_csv_content(content: bytes) -> str:
 def parse_money(value: object, *, context: str) -> Decimal:
     text = safe_text(value).rstrip("\t").replace(",", "").replace("$", "")
     if not text:
-        return Decimal("0")
+        raise MabangApiError(f"{context} 收入-订单金额为空")
     try:
         amount = Decimal(text)
     except InvalidOperation as exc:
@@ -316,10 +328,10 @@ def parse_income_detail_rows(content: bytes, *, context: str) -> list[IncomeDeta
         if not sku or sku.casefold() in TOTAL_SKU_LABELS:
             continue
         developer = clean_person_label(row.get("开发员"))
-        if not developer or developer in {"--", "无开发员"}:
+        if not developer or developer in {"-", "--", "无开发员"}:
             developer = UNASSIGNED_DEVELOPER
         salesperson = clean_person_label(row.get("销售员"))
-        if not salesperson or salesperson in {"--", "无销售员"}:
+        if not salesperson or salesperson in {"-", "--", "无销售员"}:
             salesperson = UNASSIGNED_SALESPERSON
         amount = parse_money(row.get("收入-订单金额"), context=f"{context} SKU={sku}")
         rows.append(IncomeDetailRow(developer=developer, salesperson=salesperson, amount=amount))
@@ -355,8 +367,62 @@ def parse_table_foot_order_income(table_foot: object, *, context: str) -> Decima
     soup = BeautifulSoup(safe_text(table_foot), "html.parser")
     income_cells = soup.find_all(attrs={"data-field": "income"})
     if not income_cells:
-        return Decimal("0")
+        raise MabangApiError(f"{context} 缺少收入-订单金额合计字段")
     return parse_money(income_cells[0].get_text(" ", strip=True), context=context)
+
+
+def parse_order_income_rows(table_html: object, *, context: str) -> list[Decimal]:
+    """Read 收入-订单金额 from one report page.
+
+    The table footer is not a stable total: the same filter returned different
+    amounts across reads, so per-person totals must be summed from the rows.
+    """
+    soup = BeautifulSoup(safe_text(table_html), "html.parser")
+    amounts: list[Decimal] = []
+    for row in soup.find_all("tr"):
+        cells = row.find_all("td")
+        if not cells:
+            continue
+        income = row.find("td", attrs={"data-field": "income"})
+        if income is None:
+            raise MabangApiError(f"{context} 明细缺少收入-订单金额字段")
+        amounts.append(parse_money(income.get_text(" ", strip=True), context=context))
+    return amounts
+
+
+def _fetch_person_income_rows_total(
+    client: MabangClient,
+    target: PersonIncomeTarget,
+    start_date: date,
+    end_date: date,
+) -> tuple[Decimal, int]:
+    from backend.core.mabang_sales_report_classic import (
+        decimal_cell,
+        field_text,
+        iter_report_pages,
+    )
+
+    form_data = build_report_form_data(None, start_date, end_date)
+    form_data.update({target.input_name: target.option.id, "rowsPerPage": str(INCOME_PAGE_SIZE), "page": "1"})
+    payload = client._post_sales_report(url=REPORT_URL, params=REPORT_PARAMS,
+                                      form_data=form_data, referer=f"{BASE_URL}{REPORT_PAGE_PATH}")
+    if payload.get("source") == "modern-product-sale-reports":
+        if (payload.get("success") is not True or payload.get("currency") != "USD"
+                or type(payload.get("total")) is not int or payload["total"] < 0):
+            raise MabangApiError("新版人员收入汇总结构或币种无效")
+        amount = decimal_cell(payload.get("orderIncomeTotal"), "新版人员收入合计")
+        if payload["total"] == 0 and amount != 0:
+            raise MabangApiError("新版人员收入空明细与合计不一致")
+        return amount, payload["total"]
+    total, row_count = Decimal("0"), 0
+    for _, rows in iter_report_pages(client, url=REPORT_URL, params=REPORT_PARAMS,
+                                    form_data=form_data, referer=f"{BASE_URL}{REPORT_PAGE_PATH}",
+                                    context=f"{target.role}收入查询", page_size=INCOME_PAGE_SIZE,
+                                    max_pages=MAX_INCOME_PAGES, first_payload=payload):
+        for row in rows:
+            total += decimal_cell(field_text(row, "income", "人员收入明细"), "人员收入-订单金额")
+        row_count += len(rows)
+    return total, row_count
 
 
 def fetch_person_income_total(
@@ -367,26 +433,8 @@ def fetch_person_income_total(
 ) -> Decimal:
     if target.input_name not in {DEVELOPER_INPUT_NAME, SALESPERSON_INPUT_NAME}:
         raise ValueError(f"不支持的人员筛选字段: {target.input_name}")
-    form_data = build_report_form_data(None, start_date, end_date)
-    form_data.update(
-        {
-            target.input_name: target.option.id,
-            "page": "1",
-            "rowsPerPage": "100",
-        }
-    )
-    payload = client._post_sales_report(
-        url=REPORT_URL,
-        params=REPORT_PARAMS,
-        form_data=form_data,
-        referer=f"{BASE_URL}{REPORT_PAGE_PATH}",
-    )
-    if not payload.get("success"):
-        raise MabangApiError(f"{target.role}{target.option.name}收入查询失败: {payload}")
-    return parse_table_foot_order_income(
-        payload.get("tableFoot"),
-        context=f"{target.role}={target.option.name}",
-    )
+    total, _ = _fetch_person_income_rows_total(client, target, start_date, end_date)
+    return total
 
 
 def collect_all_people_income_totals(
@@ -400,8 +448,8 @@ def collect_all_people_income_totals(
     progress: ProgressCallback | None = None,
     max_workers: int = ALL_PEOPLE_CONCURRENCY,
 ) -> tuple[list[DeveloperIncomeSummary], dict[str, Decimal]]:
-    developers = list(developer_options)
-    salespeople = list(salesperson_options)
+    developers = _distinct_person_labels(developer_options)
+    salespeople = _distinct_person_labels(salesperson_options)
     _unique_option_names(developers, role="开发员")
     _unique_option_names(salespeople, role="销售员")
     targets = [
@@ -420,10 +468,10 @@ def collect_all_people_income_totals(
         client = getattr(thread_state, "client", None)
         if client is None:
             client = MabangClient(BASE_URL, timeout_seconds=180, verify_ssl=False)
-            client.login(username, password)
-            thread_state.client = client
             with clients_lock:
                 clients.append(client)
+            client.login(username, password)
+            thread_state.client = client
         return target, fetch_person_income_total(client, target, start_date, end_date)
 
     amounts_by_target: dict[tuple[str, str], Decimal] = {}
@@ -545,6 +593,17 @@ def _unique_option_names(options: Iterable[PersonOption], *, role: str) -> dict[
     return names
 
 
+def _distinct_person_labels(options: Iterable[PersonOption]) -> list[PersonOption]:
+    """The SPA can return identical names for separate IDs, without >1."""
+    options = list(options)
+    counts: dict[str, int] = defaultdict(int)
+    for option in options:
+        counts[clean_person_label(option.name).casefold()] += 1
+    return [PersonOption(option.id, f"{option.name} [ID={option.id}]"
+                         if counts[clean_person_label(option.name).casefold()] > 1 else option.name)
+            for option in options]
+
+
 def _decimal_cell_value(value: Decimal) -> float:
     return float(value.quantize(MONEY_QUANTUM))
 
@@ -581,6 +640,7 @@ def build_summary_workbook(
     require_equal_totals: bool = True,
 ) -> Path:
     developer_rows = list(developer_summaries)
+    developer_labels = {option.id: option.name for option in _distinct_person_labels(row.developer for row in developer_rows)}
     developer_total = sum((row.amount for row in developer_rows), Decimal("0"))
     salesperson_total = sum(salesperson_totals.values(), Decimal("0"))
     if require_equal_totals and developer_total != salesperson_total:
@@ -594,7 +654,7 @@ def build_summary_workbook(
     developer_sheet.title = "开发员"
     developer_sheet.append(["开发员", MONEY_HEADER])
     for summary in developer_rows:
-        developer_sheet.append([summary.developer.name, _decimal_cell_value(summary.amount)])
+        developer_sheet.append([developer_labels[summary.developer.id], _decimal_cell_value(summary.amount)])
     developer_sheet.append(["合计", _decimal_cell_value(developer_total)])
 
     salesperson_sheet = workbook.create_sheet("销售员")

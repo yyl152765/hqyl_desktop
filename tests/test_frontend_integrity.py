@@ -20,6 +20,7 @@ PAGE_SCRIPTS = {
     FRONTEND / "pages" / "bigseller-sku-benchmark.html": FRONTEND / "assets" / "pages" / "bigseller-sku-benchmark.js",
     FRONTEND / "pages" / "bigseller-claim-query.html": FRONTEND / "assets" / "pages" / "bigseller-claim-query.js",
     FRONTEND / "pages" / "bigseller-link-query.html": FRONTEND / "assets" / "pages" / "bigseller-link-query.js",
+    FRONTEND / "pages" / "erp-sku-earliest-store.html": FRONTEND / "assets" / "pages" / "erp-sku-earliest-store.js",
     FRONTEND / "pages" / "dashboard.html": FRONTEND / "assets" / "pages" / "dashboard.js",
     FRONTEND / "pages" / "mabang-arrival-query.html": FRONTEND / "assets" / "pages" / "mabang-arrival-query.js",
     FRONTEND / "pages" / "group-sales.html": FRONTEND / "assets" / "pages" / "group-sales.js",

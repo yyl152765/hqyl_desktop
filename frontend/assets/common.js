@@ -86,6 +86,9 @@ const HQYL = (() => {
       { id: "bigseller_claim_query", href: "bigseller-claim-query.html", name: "新品认领时间查询", icon: "新", tag: "Shopee", category: "Shopee 商品", description: "导入 SKU 查询最早创建商品", keywords: "新品 认领 主SKU 创建时间 上架时间 店铺 Excel" },
       { id: "bigseller_link_query", href: "bigseller-link-query.html", name: "BS 抓取链接", icon: "链", tag: "Shopee", category: "Shopee 商品", description: "查询最早上架链接和店铺", keywords: "SKU 子SKU 店铺名 商品链接 上架时间 最早 Excel" },
     ] },
+    { id: "erp", name: "ERP 数据库", icon: "E", keywords: "ERP 数据库 只读 Shopee SKU", items: [
+      { id: "erp_sku_earliest_store", href: "erp-sku-earliest-store.html", name: "ERP SKU 创建时间第一店铺", icon: "第", tag: "Shopee", category: "ERP 只读查询", description: "按 SKU 查找平台创建时间最早的店铺", keywords: "SKU 创建时间 第一店铺 最早 ERP 数据库 精确匹配 全部状态 归档 Excel" },
+    ] },
   ];
   const SIDEBAR_MODULES = SIDEBAR_GROUPS.flatMap((group) => group.items.map((item) => ({ ...item, group })));
   let sidebarController = null;
@@ -848,7 +851,7 @@ const HQYL = (() => {
       return { ...defaults, ...saved };
     };
     return {
-      async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "1.0.12" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, warehouse_sales_export: { month_range: { start_month: "2026-06", end_month: "2026-11" }, categories: [], warehouses: [], output_dir: previewScopedDirs("warehouse_sales_export").output_dir }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
+      async get_app_info() { return { ok: true, app: { name: "寰球云联自动化平台", version: "1.0.16" }, date_range: { start_date: "2026-06-01", end_date: "2026-06-23" }, settings: { output_dir: "C:\\Users\\Demo\\Desktop", vietnam_last_manifest_path: previewVietnamManifest ? previewManifestPath : "", rows_per_page: 500, update_manifest_url: "", captcha_username: "preview-user", captcha_password_configured: true, dingtalk: { app_key_configured: true, app_key_masked: "din****key", app_secret_configured: true, user_count: 1, operator_names: ["王小妹"] }, sales_group_ids: ["preview-group"], income_expense_category_ids: [], income_expense_warehouse_keys: [] }, account_state: accountState(), group_sales_report: { groups: [{ id: "preview-group", name: "示例小组" }] }, warehouse_sales_export: { month_range: { start_month: "2026-06", end_month: "2026-11" }, categories: [], warehouses: [], output_dir: previewScopedDirs("warehouse_sales_export").output_dir }, mabang_income_expense_report: { date_range: { start_date: "2026-07-01", end_date: "2026-07-31" }, categories: [{ id: "1038955", name: "lazada菲律宾", mabang_name: "lazada菲律宾" }], warehouses: [{ key: "1091307", name: "实速通", warehouse_ids: ["1091307"], mabang_names: ["莫斯科五号仓-实速通"], note: "" }, { key: "1100204", name: "印尼雅仓海外仓", warehouse_ids: ["1100204"], mabang_names: ["ID8803-雅仓海外仓"], note: "" }, { key: "1100500", name: "菲律宾雅仓海外仓", warehouse_ids: ["1100500"], mabang_names: ["PH8807-雅仓海外仓"], note: "" }, { key: "1096191", name: "马来雅仓海外仓", warehouse_ids: ["1096191"], mabang_names: ["MY8805-雅仓海外仓"], note: "" }] } }; },
       async get_latest_task_status(tool) { return tasks[tool] || { ok: false, empty: true }; },
       async get_task_status(id) { return Object.values(tasks).find((task) => task.id === id) || { ok: false, error: "任务不存在" }; },
       async get_lazada_campaign_download_info() {
@@ -1386,6 +1389,30 @@ const HQYL = (() => {
         task.error = task.result.completion_message;
         task.context = { ...payload, sku_count: 4 };
         task.logs = ["演示模式未读取实际 Excel、未登录 BigSeller，也未生成文件。", "[BS认领进度 3/4] 演示结果已展示"];
+        return task;
+      },
+      async choose_erp_sku_file() { return { ok: true, path: "C:\\Preview\\动销总表.xlsx", sheets: ["动销总表"], sheet_name: "动销总表", warnings: [] }; },
+      async inspect_erp_sku_file(sourceFile) { return sourceFile ? { ok: true, path: sourceFile, sheets: ["动销总表"], sheet_name: "动销总表", warnings: [] } : { ok: false, error: "请选择来源 Excel" }; },
+      async choose_erp_sku_checkpoint() { return { ok: false, error: "演示模式不读取进度文件，请在桌面平台中恢复查询" }; },
+      async start_erp_sku_earliest_store(payload) {
+        if (payload.resume_checkpoint) return { ok: false, error: "演示模式不支持恢复查询" };
+        const blank = { candidate_shop_id: "", candidate_shop_name: "", region: "", item_id: "", create_time: "", item_status: "" };
+        const rows = [
+          { ...blank, sku: "DEMO-SKU-001", status: "matched", candidate_shop_id: "100000001", candidate_shop_name: "演示店铺 A", region: "PH", item_id: "100000000001", create_time: "2026-01-03 09:00:00", item_status: "NORMAL", message: "演示数据" },
+          { ...blank, sku: "DEMO-SKU-002", status: "not_found", message: "演示数据：ERP 留存范围内未找到" },
+          { ...blank, sku: "DEMO-SKU-003", status: "incomplete", message: "演示数据：数据待核验，未回填第一店铺" },
+          { ...blank, sku: "DEMO-SKU-004", status: "failed", message: "演示数据：查询失败，可补查" },
+        ];
+        const task = startPreviewTask("erp_sku_earliest_store", {
+          is_preview: true, is_complete: false, completion_message: "演示结果包含待核验与失败项，未连接 ERP",
+          source_file: payload.source_file || "", sheet_name: payload.sheet_name || "", total_rows: 4, sku_count: 4,
+          matched_count: 1, not_found_count: 1, incomplete_count: 1, failed_count: 1, not_run_count: 0, confirmed_count: 3,
+          rows, preview_limited: false, output_file: "", output_dir: "", checkpoint_file: "",
+        });
+        task.status = "failed";
+        task.error = task.result.completion_message;
+        task.context = { ...payload, sku_count: 4 };
+        task.logs = ["演示模式未连接 ERP，也未生成文件。", "[ERP进度 3/4] 演示结果已展示"];
         return task;
       },
       async start_bigseller_link_query(payload) {

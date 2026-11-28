@@ -71,6 +71,9 @@ class MabangLoginError(MabangApiError):
         "verification_required": "马帮登录需要验证码或安全验证，请先在马帮官网确认并处理验证要求。",
         "account_locked": "马帮账号已被锁定，请按马帮提示解锁或稍后再试。",
         "invalid_response": "马帮登录返回格式异常，请稍后重试。",
+        "entry_forbidden": "马帮登录入口拒绝访问（HTTP 403），尚未提交账号密码；请稍后重试或检查马帮访问限制。",
+        "login_forbidden": "马帮登录请求被拒绝（HTTP 403），无法判断账号密码；请检查马帮访问限制。",
+        "finalize_forbidden": "马帮登录确认页拒绝访问（HTTP 403），会话尚未建立；请稍后重试。",
         "unknown": "马帮拒绝登录，未返回可识别的原因，请检查当前账号的登录状态。",
     }
 
@@ -138,7 +141,12 @@ class MabangClient:
 
     def login(self, username: str, password: str) -> None:
         self._logged_in = False
+        self._modern_sales_report_available = None
+        self._modern_report_session = None
+        self._sales_stock_referer = None
         login_page = self.client.get(self._url(LOGIN_PAGE_PATH))
+        if login_page.status_code == 403:
+            raise MabangLoginError("entry_forbidden")
         login_page.raise_for_status()
         response = self.client.post(
             self._url(LOGIN_PATH),
@@ -158,6 +166,8 @@ class MabangClient:
                 "X-Requested-With": "XMLHttpRequest",
             },
         )
+        if response.status_code == 403:
+            raise MabangLoginError("login_forbidden")
         response.raise_for_status()
         try:
             payload = response.json()
@@ -168,6 +178,8 @@ class MabangClient:
         if not payload.get("success"):
             raise MabangLoginError(_login_rejection_reason(payload))
         finalize_response = self.client.get(self._url(LOGIN_FINALIZE_PATH))
+        if finalize_response.status_code == 403:
+            raise MabangLoginError("finalize_forbidden")
         finalize_response.raise_for_status()
         self._logged_in = True
 
@@ -229,8 +241,30 @@ class MabangClient:
         fields: Sequence[str] | None = None,
         init_rows_per_page: int = DEFAULT_SALES_REPORT_EXPORT_INIT_ROWS_PER_PAGE,
     ) -> MabangExportFile:
-        """Download Mabang sales report CSV through reports.exportProductAll."""
+        """Download Mabang sales report CSV.
+
+        The channel is chosen from the account's real report entry: accounts on
+        the MAS product-sale-reports SPA use the modern reader, while tenants
+        that still serve the classic table page keep using
+        ``reports.exportProductAll`` (verified to return the full column set).
+        """
         normalized_report_type = _resolve_sales_report_type(report_type=report_type, params=params, url=url)
+        if self.uses_modern_sales_report():
+            try:
+                from backend.core.mabang_sales_report import modern_download_product_sales_report_csv
+
+                return modern_download_product_sales_report_csv(
+                    self,
+                    form_data=form_data,
+                    report_type=normalized_report_type,
+                    platform_or_shop=platform_or_shop,
+                    fields=fields,
+                )
+            except MabangApiError:
+                raise
+            except Exception as exc:
+                raise MabangApiError(f"新版销量报表导出失败: {type(exc).__name__}") from exc
+
         request_form = _clone_form_payload(form_data)
         request_form = _set_form_payload_value(request_form, "page", "1")
         request_form = _set_form_payload_value(
@@ -255,7 +289,7 @@ class MabangClient:
             referer=referer_url,
         )
         if not search_payload.get("success"):
-            raise MabangApiError(f"销售报表导出搜索初始化失败: {search_payload}")
+            raise MabangApiError("销售报表导出搜索初始化失败")
 
         selected_fields = list(fields or DEFAULT_SALES_REPORT_EXPORT_FIELDS)
         export_params: list[tuple[str, str]] = [
@@ -296,6 +330,23 @@ class MabangClient:
         form_data: Any,
         referer: str | None,
     ) -> dict[str, Any]:
+        normalized_report_type = _resolve_sales_report_type(report_type=None, params=params, url=url)
+        if self.uses_modern_sales_report():
+            platform_or_shop = _get_form_payload_first(form_data, "platformOrShop")
+            try:
+                from backend.core.mabang_sales_report import modern_query_sales_report_summary
+
+                return modern_query_sales_report_summary(
+                    self,
+                    form_data=form_data,
+                    report_type=normalized_report_type,
+                    platform_or_shop=_safe_text(platform_or_shop),
+                )
+            except MabangApiError:
+                raise
+            except Exception as exc:
+                raise MabangApiError(f"新版销量报表查询失败: {type(exc).__name__}") from exc
+
         headers = {"X-Requested-With": "XMLHttpRequest"}
         if referer:
             headers["Referer"] = referer
@@ -311,6 +362,25 @@ class MabangClient:
             )
         response.raise_for_status()
         return _response_json_dict(response, context="销售报表")
+
+    def uses_modern_sales_report(self) -> bool:
+        """Detect once whether this account is served by the MAS report SPA."""
+        cached = getattr(self, "_modern_sales_report_available", None)
+        if cached is not None:
+            return bool(cached)
+        from backend.core.mabang_sales_report import probe_modern_report_entry
+
+        available = probe_modern_report_entry(self)
+        self._modern_sales_report_available = available
+        return available
+
+    def fetch_report_page_html(self, page_path: str) -> str:
+        """Return the classic report page HTML used for filter options."""
+        if not self._logged_in:
+            raise MabangApiError("马帮客户端当前尚未登录")
+        response = self.client.get(self._url(page_path))
+        response.raise_for_status()
+        return decode_html_page(response)
 
 
 def _build_http_timeout(timeout_seconds: int | float) -> httpx.Timeout:
@@ -340,15 +410,14 @@ def decode_html_page(response: httpx.Response) -> str:
 def _response_json_dict(response: httpx.Response, *, context: str) -> dict[str, Any]:
     try:
         payload = response.json()
-    except ValueError as exc:
-        snippet = " ".join(decode_html_page(response).split())[:500]
+    except ValueError:
         content_type = response.headers.get("Content-Type") or "-"
         raise MabangApiError(
             f"{context} 返回非 JSON 响应: status={response.status_code}, "
-            f"content_type={content_type}, url={response.url}, body={snippet}"
-        ) from exc
+            f"content_type={content_type}, bytes={len(response.content)}"
+        ) from None
     if not isinstance(payload, dict):
-        raise MabangApiError(f"{context} 返回 JSON 结构无效: {payload}")
+        raise MabangApiError(f"{context} 返回 JSON 结构无效")
     return payload
 
 

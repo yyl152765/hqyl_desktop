@@ -5,19 +5,23 @@ import unittest
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import load_workbook
 
 from backend.core.mabang_client import MabangApiError
+from backend.services import developer_sales_income_summary as dev_module
 from backend.services.developer_sales_income_summary import (
     DeveloperIncomeSummary,
     IncomeDetailRow,
+    PersonIncomeTarget,
     PersonOption,
     UNASSIGNED_SALESPERSON,
     build_report_form_data,
     build_summary_workbook,
     parse_developer_names,
     parse_income_rows,
+    parse_order_income_rows,
     parse_person_options,
     parse_table_foot_order_income,
     resolve_developer_options,
@@ -55,6 +59,77 @@ class DeveloperSalesIncomeSummaryTests(unittest.TestCase):
         amount = parse_table_foot_order_income(html, context="黄茵茵-开发>1")
 
         self.assertEqual(amount, Decimal("5576.0500"))
+
+    def test_table_foot_missing_income_field_fails_instead_of_zero(self) -> None:
+        with self.assertRaisesRegex(MabangApiError, "缺少收入-订单金额合计字段"):
+            parse_table_foot_order_income('<tr><th data-field="incomeTotal">0</th></tr>', context="全部人员")
+
+    def test_order_income_rows_read_first_income_cell_per_row(self) -> None:
+        html = (
+            '<tr><td data-field="salesSkuNewId">A</td><td data-field="income">1,234.5000</td>'
+            '<td data-field="income">9.0000</td></tr>'
+            '<tr><td data-field="salesSkuNewId">B</td><td data-field="income">-2.2500</td></tr>'
+        )
+
+        self.assertEqual(
+            parse_order_income_rows(html, context="测试"),
+            [Decimal("1234.5000"), Decimal("-2.2500")],
+        )
+
+    def test_person_total_sums_every_page_instead_of_table_foot(self) -> None:
+        class PagedClient:
+            def __init__(self) -> None:
+                self.pages: list[str] = []
+
+            def _post_sales_report(self, *, form_data, **_kwargs):
+                page = str(form_data.get("page"))
+                self.pages.append(page)
+                rows = 2 if page == "1" else 1
+                body = "".join(
+                    f'<tr><td><a data-stock-id="S{page}{i}">S{page}{i}</a></td>'
+                    f'<td data-field="income">10.0000</td></tr>'
+                    for i in range(rows)
+                )
+                return {"success": True, "pageHtml": "共 3 条", "updateDateStr": "stable", "tableContent": body, "tableFoot": '<th data-field="income">999999</th>'}
+
+        client = PagedClient()
+        target = PersonIncomeTarget("开发员", "developid[]", PersonOption("0", "未分配开发员"))
+        with patch.object(dev_module, "INCOME_PAGE_SIZE", 2):
+            total, rows = dev_module._fetch_person_income_rows_total(client, target, date(2026, 7, 1), date(2026, 7, 31))
+
+        self.assertEqual(client.pages, ["1", "2"])
+        self.assertEqual(total, Decimal("30.0000"))
+        self.assertEqual(rows, 3)
+
+    def test_person_total_returns_zero_rows_as_zero(self) -> None:
+        class EmptyClient:
+            def _post_sales_report(self, **_kwargs):
+                return {"success": True, "pageHtml": "共 0 条", "tableContent": "", "tableFoot": ""}
+
+        target = PersonIncomeTarget("开发员", "developid[]", PersonOption("9", "无数据"))
+        total, rows = dev_module._fetch_person_income_rows_total(EmptyClient(), target, date(2026, 7, 1), date(2026, 7, 31))
+
+        self.assertEqual((total, rows), (Decimal("0"), 0))
+
+    def test_all_people_mode_keeps_developer_and_salesperson_dimensions(self) -> None:
+        with patch.object(dev_module, "fetch_person_income_total", side_effect=[Decimal("10"), Decimal("20"), Decimal("5"), Decimal("6")]), patch.object(
+            dev_module, "MabangClient"
+        ) as factory:
+            factory.return_value.__enter__ = lambda self: self
+            factory.return_value.__exit__ = lambda *args: False
+            summaries, totals = dev_module.collect_all_people_income_totals(
+                username="u",
+                password="p",
+                developer_options=[PersonOption("1", "开发甲"), PersonOption("2", "开发乙")],
+                salesperson_options=[PersonOption("10", "销售丙"), PersonOption("11", "销售丁")],
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 2),
+                max_workers=2,
+            )
+
+        self.assertEqual([(x.developer.name, x.amount) for x in summaries],
+                         [("开发甲", Decimal("10")), ("开发乙", Decimal("20"))])
+        self.assertEqual(totals, {"销售丙": Decimal("5"), "销售丁": Decimal("6")})
 
     def test_missing_developer_names_are_returned_without_dropping_matches(self) -> None:
         selected, missing = resolve_developer_options(

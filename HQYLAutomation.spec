@@ -10,11 +10,12 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 project_root = Path(SPECPATH)
 sys.path.insert(0, str(project_root))
-from scripts.builtin_ads_database import release_connection_data
+from scripts.builtin_ads_database import release_connection_data, release_erp_sku_connection_data
 
 # Private builds receive the authorized connection from an explicit, untracked
 # file outside this source export. The public source contains no connection value.
 ads_database_data = release_connection_data(os.environ.get("HQYL_ADS_DATABASE_RESOURCE", ""), project_root)
+erp_database_data = release_erp_sku_connection_data(os.environ.get("HQYL_ERP_SKU_DATABASE_RESOURCE", ""), project_root)
 mabang_process_root = project_root / "runtime" / "mabang_process"
 mabang_util_root = mabang_process_root / "util"
 superbrowser_process_root = project_root / "build/runtime/superbrowser_source"
@@ -116,6 +117,7 @@ a = Analysis(
     binaries=[*playwright_binaries],
     datas=[
         *ads_database_data,
+        *erp_database_data,
         *playwright_datas,
         ("frontend", "frontend"),
         (str(project_root / "packaging" / "HQYLAutomation.ico"), "."),

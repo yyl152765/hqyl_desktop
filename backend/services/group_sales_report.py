@@ -5,7 +5,7 @@ import csv
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, DecimalException, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, DecimalException, InvalidOperation
 from io import StringIO
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -14,17 +14,19 @@ from bs4 import BeautifulSoup
 from openpyxl import Workbook
 
 from backend.config_store import ensure_output_directory
-from backend.core.mabang_client import MabangApiError, MabangClient, decode_html_page
-
+from backend.core.mabang_client import MabangApiError, MabangClient
+from backend.core.mabang_sales_report import fetch_modern_filter_options
 
 BASE_URL = "https://900853.private.mabangerp.com"
 REPORT_URL = f"{BASE_URL}/index.php"
+REPORT_PAGE_PATH = "/index.php?mod=reports.countryReports"
 REPORT_PARAMS = {"mod": "reports.countryReports"}
 DEFAULT_ROWS_PER_PAGE = "2000"
 TEXT_COLUMNS = {
     "SKU",
     "商品中文名",
     "商品英文名",
+    "item_id",
     "NCM",
     "主SKU",
     "状态",
@@ -164,9 +166,13 @@ def get_group_options(username: str | None = None, password: str | None = None) 
             raise ValueError("请先绑定并选择马帮账号")
         with MabangClient(BASE_URL) as client:
             client.login(username, password)
-            response = client.client.get(REPORT_URL, params=REPORT_PARAMS)
-            response.raise_for_status()
-            groups = parse_group_options(decode_html_page(response))
+            if client.uses_modern_sales_report():
+                options = fetch_modern_filter_options(client)
+                groups = tuple(SalesGroup(name=item.name, shop_label_id=item.id) for item in options.categories)
+                if not groups:
+                    raise MabangApiError("未能读取新版马帮自定义分类，请确认账号有销量报表权限后重新加载")
+            else:
+                groups = parse_group_options(client.fetch_report_page_html(REPORT_PAGE_PATH))
     return [{"id": group.id, "name": group.name, "shop_label_id": group.shop_label_id} for group in groups]
 
 
@@ -333,6 +339,37 @@ def row_dict_from_csv(header: list[str], row: list[str]) -> dict[str, str]:
     return {name: row[index] if index < len(row) else "" for index, name in enumerate(adjusted)}
 
 
+def read_complete_sales_csv(content: bytes, context: str, *, allow_missing: tuple[str, ...] = ()) -> list[dict[str, str]]:
+    """Validate the source schema before normalization can fill derived columns."""
+    from backend.core.mabang_sales_report_classic import decimal_cell
+
+    reader = csv.reader(StringIO(decode_csv_content(content)))
+    header = [cell.lstrip("\ufeff").strip() for cell in next(reader, [])]
+    required = set(TARGET_SALES_HEADERS) - {"平均单天销量", "平均销售价格"} - set(allow_missing)
+    missing = required - set(header)
+    if missing or len(header) != len(set(header)):
+        raise MabangApiError(f"{context}导出列不完整或重复，缺少: {', '.join(sorted(missing))}")
+    rows = []
+    numeric = required - TEXT_COLUMNS - {"item_id"}
+    for index, raw in enumerate(reader, start=2):
+        if not raw or not any(cell.strip() for cell in raw):
+            continue
+        if raw[0].strip() in {"合计", "总计", "total"}:
+            continue
+        adjusted = adjusted_header_for_row(header, raw)
+        if len(adjusted) != len(raw):
+            raise MabangApiError(f"{context}明细列数不一致: row={index}")
+        row = dict(zip(adjusted, raw))
+        if not row.get("SKU", "").strip():
+            raise MabangApiError(f"{context}商品标识为空: row={index}")
+        for column in numeric:
+            decimal_cell(row[column], f"{context} row={index} {column}")
+        if row.get("平均销售价格", "").strip():
+            decimal_cell(row["平均销售价格"], f"{context} row={index} 平均销售价格")
+        rows.append(row)
+    return rows
+
+
 def normalize_status(value: str) -> str:
     text = str(value or "").strip()
     return "正常" if text == "正常销售" else text
@@ -359,13 +396,15 @@ def normalize_sales_csv(content: bytes, expected_days: int) -> bytes:
         if not row or not any(str(cell or "").strip() for cell in row):
             continue
         values = row_dict_from_csv(header, row)
+        if values.get("SKU", "").strip() in {"合计", "总计", "total"} and not values.get("销售数量", "").strip():
+            continue
         row_context = f"SKU={(values.get('SKU') or '-').strip()}"
         quantity_decimal = parse_required_decimal(values.get("销售数量"), "销售数量", row_context)
-        quantity = float(quantity_decimal)
-        order_income = parse_number(values.get("收入-订单金额"))
+        order_income = parse_required_decimal(values.get("收入-订单金额") or "0", "收入-订单金额", row_context)
         daily_average_value = format_daily_average(quantity_decimal, expected_days)
         average_price_value = values.get("平均销售价格") or (
-            f"{format_decimal(order_income / quantity)}\t" if quantity else "0\t"
+            f"{(order_income / quantity_decimal).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP):.4f}\t"
+            if quantity_decimal else "0\t"
         )
         normalized = []
         for column in TARGET_SALES_HEADERS:
@@ -423,6 +462,12 @@ def export_group_csv(
     )
     content = export_file.content
     validate_sales_csv(content, context)
+    rows = read_complete_sales_csv(content, context)
+    if export_file.metadata.get("source") != "modern-product-sale-reports":
+        from backend.core.mabang_sales_report_classic import verify_csv_rows
+
+        verify_csv_rows(client, rows, url=REPORT_URL, params=REPORT_PARAMS,
+                        form_data=form_data, referer=f"{BASE_URL}{REPORT_PAGE_PATH}", context=context)
 
     expected_days = (end_date - start_date).days + 1
     content = normalize_sales_csv(content, expected_days)

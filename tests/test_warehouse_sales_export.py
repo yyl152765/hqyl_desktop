@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import tempfile
 import unittest
 from datetime import date
@@ -12,19 +13,26 @@ import openpyxl
 
 from backend.app_bridge import AccountRequiredError, AppBridge
 from backend.core.mabang_client import MabangApiError, MabangExportFile
+from backend.services.group_sales_report import TARGET_SALES_HEADERS
 from backend.services.warehouse_sales_export import (
-    FilterOption,
     MonthExport,
     WarehouseSalesExportJob,
     build_report_form,
     build_workbook,
     count_detail_rows,
     default_month_range,
+    export_intersection_csv,
     export_month,
     month_bounds,
     month_sequence,
     parse_report_options,
+    require_full_sales_columns,
     validate_export_payload,
+)
+from tests.sales_report_fixtures import (
+    ClassicClient,
+    sales_csv,
+    sales_row,
 )
 
 OPTIONS_HTML = """
@@ -38,18 +46,34 @@ OPTIONS_HTML = """
 </body></html>
 """
 
-SALES_HEADER = "SKU,商品中文名,销售数量,平均单天销量,收入-订单金额\n"
+QUANTITY_INDEX = TARGET_SALES_HEADERS.index("销售数量")
+ORDER_INCOME_INDEX = TARGET_SALES_HEADERS.index("收入-订单金额")
+
+
+def _sales_row(sku: str, quantity: str = "10", income: str = "100.00") -> list[str]:
+    values = ["0"] * len(TARGET_SALES_HEADERS)
+    values[0] = sku
+    values[1] = f"商品{sku}"
+    values[QUANTITY_INDEX] = quantity
+    values[ORDER_INCOME_INDEX] = income
+    return values
 
 
 def _csv_content(rows: int) -> bytes:
-    body = "".join(f"hqsT{index:05d},测试商品{index},10,1.00,100.00\n" for index in range(rows))
-    return ("\ufeff" + SALES_HEADER + body + "合计,,0,0,0\n").encode("utf-8")
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream, lineterminator="\n")
+    writer.writerow(TARGET_SALES_HEADERS)
+    for index in range(rows):
+        writer.writerow(_sales_row(f"hqsT{index:05d}"))
+    writer.writerow(["合计"] + [""] * (len(TARGET_SALES_HEADERS) - 1))
+    return ("\ufeff" + stream.getvalue()).encode("utf-8")
 
 
-class FakeClient:
+class FakeClient(ClassicClient):
     """Constructed export client:每页最多返回 ``page_cap`` 行，模拟马帮截断。"""
 
     def __init__(self, *, page_cap: int, total: int) -> None:
+        super().__init__([sales_row(f"hqsT{i:05d}", quantity="10", income="100.00", 毛利="0") for i in range(total)])
         self.page_cap = page_cap
         self.total = total
         self.export_calls = 0
@@ -121,7 +145,7 @@ class MonthSequenceTests(unittest.TestCase):
 class PayloadValidationTests(unittest.TestCase):
     def _payload(self, **overrides) -> dict:
         payload = {
-            "username": "fixture-mabang-user-1",
+            "username": "synthetic-user",
             "password": "secret",
             "category_ids": ["1042621"],
             "warehouse_ids": [],
@@ -187,7 +211,7 @@ class ReportFormTests(unittest.TestCase):
 class ExportIntegrityTests(unittest.TestCase):
     def _job(self, output_dir: Path) -> WarehouseSalesExportJob:
         return WarehouseSalesExportJob(
-            username="fixture-mabang-user-1",
+            username="synthetic-user",
             password="secret",
             category_ids=("1042621",),
             warehouse_ids=("330978",),
@@ -196,27 +220,70 @@ class ExportIntegrityTests(unittest.TestCase):
             output_dir=output_dir,
         )
 
-    def test_full_export_skips_total_check_when_rows_not_on_page_boundary(self) -> None:
+    def test_full_export_checks_total_even_off_page_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             client = FakeClient(page_cap=37, total=37)
             with patch("backend.services.warehouse_sales_export.time.sleep"):
-                result = export_month(client, Path(temporary), self._job(Path(temporary)), 2026, 4)
+                job = self._job(Path(temporary))
+                from dataclasses import replace
+                job = replace(job, warehouse_ids=())
+                result = export_month(client, Path(temporary), job, 2026, 4)
 
             self.assertEqual(result.record_count, 37)
-            self.assertEqual(client.total_queries, 0)
+            self.assertEqual(client.total_queries, 1)
             self.assertTrue(result.csv_path.exists())
 
     def test_truncated_export_is_retried_and_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             client = FakeClient(page_cap=2000, total=5345)
+            job = WarehouseSalesExportJob(
+                username="synthetic-user", password="secret",
+                category_ids=(), warehouse_ids=("330978",),
+                start_month="2026-04", end_month="2026-04", output_dir=Path(temporary),
+            )
             with patch("backend.services.warehouse_sales_export.time.sleep"):
                 with self.assertRaises(MabangApiError) as captured:
-                    export_month(client, Path(temporary), self._job(Path(temporary)), 2026, 4)
+                    export_month(client, Path(temporary), job, 2026, 4)
 
             self.assertIn("截断", str(captured.exception))
             self.assertEqual(client.export_calls, 4)
             self.assertEqual(client.total_queries, 4)
             self.assertFalse(any(Path(temporary).glob("*.csv")))
+
+
+class PartialColumnTests(unittest.TestCase):
+    def test_three_column_export_is_rejected(self) -> None:
+        """实测分类+仓库时官方导出只回 3 列，必须拒绝而不是写出残缺表。"""
+        content = "SKU,商品中文名,商品英文名\nhqkyy921A,笔,Pen\n".encode("utf-8-sig")
+        with self.assertRaisesRegex(MabangApiError, "导出列不完整"):
+            require_full_sales_columns(content, "2026-11 商品仓库报表")
+
+    def test_full_export_passes_column_check(self) -> None:
+        require_full_sales_columns(_csv_content(2), "ok")
+
+
+class IntersectionExportTests(unittest.TestCase):
+    def test_intersection_uses_both_filter_arrays_and_preserves_server_metrics(self):
+        rows = [sales_row("sku-b", quantity="5", income="50", **{"平均销售价格": "", "毛利": "10", "毛利率%": "20"})]
+        client = ClassicClient(rows, csv_content=sales_csv(rows, classic_layout=True))
+        with tempfile.TemporaryDirectory() as temporary:
+            job = WarehouseSalesExportJob("u", "p", ("c1", "c2"), ("w1", "w2"), "2026-04", "2026-04", Path(temporary))
+            content = export_intersection_csv(client, job, date(2026, 4, 1), date(2026, 4, 30), 30)
+        body = next(csv.DictReader(StringIO(content.decode("utf-8-sig"))))
+        self.assertEqual(body["销售数量"], "5")
+        self.assertEqual(body["平均单天销量"], "0.17\t")
+        self.assertEqual(body["平均销售价格"], "10.0000\t")
+        self.assertEqual(body["毛利"], "10")
+        self.assertEqual(body["毛利率%"], "20")
+        self.assertEqual([v for k, v in client.calls[0] if k == "shopLabelIds[]"], ["c1", "c2"])
+        self.assertEqual([v for k, v in client.calls[0] if k == "stockWarehouseId[]"], ["w1", "w2"])
+
+    def test_empty_intersection_is_valid(self):
+        client = ClassicClient([])
+        job = WarehouseSalesExportJob("u", "p", ("c1",), ("w1",), "2026-04", "2026-04", Path("."))
+        content = export_intersection_csv(client, job, date(2026, 4, 1), date(2026, 4, 30), 30)
+        self.assertEqual(count_detail_rows(content), 0)
+        self.assertEqual(client.export_calls, 0)
 
 
 class WorkbookTests(unittest.TestCase):
@@ -230,7 +297,7 @@ class WorkbookTests(unittest.TestCase):
                 months.append(MonthExport(label=label, record_count=index + 2, csv_path=path))
             output = run_dir / "汇总.xlsx"
             job = WarehouseSalesExportJob(
-                username="fixture-mabang-user-1",
+                username="synthetic-user",
                 password="secret",
                 category_ids=("1042621",),
                 warehouse_ids=("330978",),
@@ -272,7 +339,7 @@ class BridgeTests(unittest.TestCase):
         bridge = self._bridge()
         payload = {
             "account_id": "acc-1",
-            "username": "fixture-mabang-user-1",
+            "username": "synthetic-user",
             "password": "secret",
             "category_ids": ["1042621"],
             "warehouse_ids": ["330978"],
@@ -305,7 +372,7 @@ class BridgeTests(unittest.TestCase):
     def test_invalid_selection_is_rejected_before_starting_task(self) -> None:
         bridge = self._bridge()
         payload = {
-            "username": "fixture-mabang-user-1",
+            "username": "synthetic-user",
             "password": "secret",
             "category_ids": [],
             "warehouse_ids": [],

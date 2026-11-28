@@ -40,6 +40,7 @@ settings.json
 *.pem
 *.key
 backend/resources/ads_database.json
+backend/resources/erp_sku_database.json
 !frontend/assets/logo.png
 docs/requirements/**/*.xlsx
 docs/requirements/**/*.xls

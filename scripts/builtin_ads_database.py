@@ -5,14 +5,14 @@ import subprocess
 from backend.ads_database import builtin_connection_settings
 
 
-def release_connection_data(source_path: str, project_root: Path) -> list[tuple[str, str]]:
+def _external_resource(source_path: str, project_root: Path, resource_name: str) -> Path | None:
     if not source_path:
-        return []
+        return None
     source = Path(source_path)
     if not source.is_absolute() or source.is_symlink() or not source.is_file():
         raise ValueError("The authorized database resource must be an existing absolute file path")
     source = source.resolve()
-    if source.name != "ads_database.json" or source.is_relative_to(project_root.resolve()):
+    if source.name != resource_name or source.is_relative_to(project_root.resolve()):
         raise ValueError("The private database resource must be outside the exported source directory")
     repository = subprocess.run(
         ["git", "-C", str(source.parent), "rev-parse", "--show-toplevel"],
@@ -30,6 +30,24 @@ def release_connection_data(source_path: str, project_root: Path) -> list[tuple[
             raise ValueError("A database connection resource must not be tracked in Git")
         if tracked.returncode != 1:
             raise ValueError("Unable to verify the private database resource's Git status")
+    return source
+
+
+def release_connection_data(source_path: str, project_root: Path) -> list[tuple[str, str]]:
+    source = _external_resource(source_path, project_root, "ads_database.json")
+    if source is None:
+        return []
     if not builtin_connection_settings(source):
         raise ValueError("The authorized database resource is missing")
+    return [(str(source), "backend/resources")]
+
+
+def release_erp_sku_connection_data(source_path: str, project_root: Path) -> list[tuple[str, str]]:
+    from backend.services.erp_sku_earliest_store_repository import builtin_database_settings
+
+    source = _external_resource(source_path, project_root, "erp_sku_database.json")
+    if source is None:
+        return []
+    if builtin_database_settings(source) is None:
+        raise ValueError("The authorized ERP database resource is missing")
     return [(str(source), "backend/resources")]
