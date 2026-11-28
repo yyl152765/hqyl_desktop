@@ -42,11 +42,13 @@
                   <option value="auto">自动识别</option>
                   <option value="plain">按已有活动价筛选</option>
                   <option value="invited">按推荐价填充并筛选</option>
+                  <option value="reprice_equal_prices">原价提报（自定义折扣）</option>
                 </select>
               </label>
               <label for="discountThreshold"><span>最低折扣率</span>
                 <span class="campaign-percent-field"><input id="discountThreshold" type="number" min="0.01" max="100" step="0.01" value="95" required /><span aria-hidden="true">%</span></span>
               </label>
+              <p id="repriceHint" class="form-note store-field" hidden>沿用的活动价等于原价时，按原价 × 最低折扣率改价。按推荐价填充的商品直接用填充值筛选。</p>
               <div class="output-field">
                 <label for="outputDir"><span>保存目录</span></label>
                 <div class="input-action"><input id="outputDir" required /><button id="chooseDirBtn" type="button" class="secondary">选择目录</button></div>
@@ -71,6 +73,6 @@
     </div>
     <div id="toast" class="toast hidden"></div>
     <script src="../assets/common.js"></script>
-    <script src="../assets/pages/lazada-campaign-download.js?v=20261126-campaign-filter"></script>
+    <script src="../assets/pages/lazada-campaign-download.js?v=20261127-reprice"></script>
   </body>
 </html>

@@ -37,6 +37,7 @@ ACTIVITY_WAIT_MS = 30_000
 SCENE_CLICK_DELAY_MS = 5_000
 SCENE_RETRY_AFTER_SECONDS = 10
 DEFAULT_TIMEOUT_MINUTES = 30
+REPRICE_EQUAL_PRICES = "reprice_equal_prices"
 MENU = r"(?:用|通过)?\s*Excel\s*提交|Submit by Excel|Excel Submission|ส่งด้วย Excel"
 INVITED_TAB = r"特别邀请|特邀活动|特殊邀请|Special Invitations?"
 HISTORY = r"(?:导入\s*/\s*导出(?:历史|记录)|Import\s*/\s*Export (?:History|Records))(?:\s*>)?"
@@ -106,6 +107,12 @@ class DownloadOptions:
     threshold: Decimal = workbooks.DEFAULT_THRESHOLD
 
 
+def _workbook_settings(processing_mode: str) -> tuple[str, bool]:
+    if processing_mode == REPRICE_EQUAL_PRICES:
+        return "auto", True
+    return processing_mode, False
+
+
 def store_targets(payload: dict) -> tuple[StoreTarget, ...]:
     raw = payload.get("store_names", payload.get("store", ""))
     if isinstance(raw, (list, tuple)) and all(isinstance(item, str) for item in raw):
@@ -152,8 +159,10 @@ def download_options(payload: dict, settings: AppSettings) -> DownloadOptions:
     folder = Path(payload.get("output_dir") or default_output_dir(settings)).expanduser().resolve()
     if folder.exists() and not folder.is_dir():
         raise ValueError("保存目录指向了文件，请选择文件夹")
-    processing_mode, threshold = workbooks.validate_processing_options(
-        payload.get("processing_mode", "auto"), payload.get("threshold", workbooks.DEFAULT_THRESHOLD)
+    processing_mode = payload.get("processing_mode", "auto")
+    template_mode, _ = _workbook_settings(processing_mode)
+    _, threshold = workbooks.validate_processing_options(
+        template_mode, payload.get("threshold", workbooks.DEFAULT_THRESHOLD)
     )
     return DownloadOptions(stores=stores, **names, output_dir=str(folder), timeout_minutes=minutes, mode=mode,
                            processing_mode=processing_mode, threshold=threshold)
@@ -651,6 +660,9 @@ def _error_message(exc, config):
 
 def _filter_downloads(stores: list[dict], options: DownloadOptions, progress: Callable[[str], None]) -> dict:
     progress(f"开始活动处理，最低折扣率 {options.threshold:%}，共 {len(stores)} 份模板")
+    template_mode, reprice_equal_prices = _workbook_settings(options.processing_mode)
+    if reprice_equal_prices:
+        progress(f"已启用原价提报，沿用的活动价等于原价时按原价 × {options.threshold:%} 改价")
     root = Path(options.output_dir)
     multiple_batches = len(stores) > workbooks.MAX_FILES
     if multiple_batches:
@@ -660,7 +672,8 @@ def _filter_downloads(stores: list[dict], options: DownloadOptions, progress: Ca
     for offset in range(0, len(stores), workbooks.MAX_FILES):
         group = stores[offset:offset + workbooks.MAX_FILES]
         sources = tuple(Path(store["output_file"]) for store in group)
-        job = workbooks.CampaignWorkbookJob(sources, root, options.processing_mode, options.threshold)
+        job = workbooks.CampaignWorkbookJob(sources, root, mode=template_mode, threshold=options.threshold,
+                                            reprice_equal_prices=reprice_equal_prices)
         try:
             batch = workbooks.filter_campaign_workbooks(job, progress, create_archive=False)
         except Exception as exc:
@@ -745,7 +758,8 @@ def main(argv=None):
     parser.add_argument("--store", dest="store_names", action="append", help="紫鸟店铺名称，可重复指定或每行一个")
     parser.add_argument("--site", help="兼容旧调用，仅用于指定单个店铺的站点")
     parser.add_argument("--mode", choices=CAMPAIGN_MODES, help="invited 为特邀活动，unregistered 为未报名活动，省略时沿用页面当前分类")
-    parser.add_argument("--processing-mode", choices=sorted(workbooks.MODES), default="auto", help="Excel 处理方式，默认自动识别")
+    parser.add_argument("--processing-mode", choices=sorted(workbooks.MODES | {REPRICE_EQUAL_PRICES}), default="auto",
+                        help="Excel 处理方式，默认自动识别。reprice_equal_prices 按自定义折扣调整原价提报商品")
     parser.add_argument("--discount-percent", default="95", help="最低折扣率，按百分数填写，默认 95")
     prompts = {"campaign": "首页活动名称（例如 A+ Other）", "scene": "子活动完整名称（含前缀和日期）"}
     for key, title in prompts.items():

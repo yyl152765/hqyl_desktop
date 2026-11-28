@@ -96,11 +96,11 @@ def tab_group(tabs, selected):
     return '<div role="tablist">' + ''.join(controls) + '</div>' + ''.join(panels)
 
 
-def fixture_workbook(text):
+def fixture_workbook(text, headers=("SKU", "原价", "活动价", "推荐价")):
     workbook = Workbook()
     sheet = workbook.active
     sheet.append([text])
-    sheet.append(["SKU", "原价", "活动价", "推荐价"])
+    sheet.append(headers)
     sheet.append(["A", 100, 95, 92.75])
     sheet.append(["B", 100, 94.99, 92.74])
     sheet.append(["C", 100, 90, 96])
@@ -152,11 +152,13 @@ class CampaignRoutes(unittest.TestCase):
             args = ["--store", "泰国测试", "--campaign", "Demo"]
             campaign.main(args)
             self.assertEqual(run.call_args.args[0].mode, "unregistered")
-            campaign.main([*args, "--mode", "invited", "--scene", "Weekend offers",
-                           "--processing-mode", "plain", "--discount-percent", "92.75%"])
-            options = run.call_args.args[0]
-            self.assertEqual((options.mode, options.processing_mode, options.threshold),
-                             ("invited", "plain", Decimal("0.9275")))
+            for processing_mode in ("plain", "reprice_equal_prices"):
+                with self.subTest(processing_mode=processing_mode):
+                    campaign.main([*args, "--mode", "invited", "--scene", "Weekend offers",
+                                   "--processing-mode", processing_mode, "--discount-percent", "92.75%"])
+                    options = run.call_args.args[0]
+                    self.assertEqual((options.mode, options.processing_mode, options.threshold),
+                                     ("invited", processing_mode, Decimal("0.9275")))
 
     def test_sites_from_multiline_names_and_country_aliases(self):
         targets = campaign.store_targets({"store_names": "  LZ泰国01 \r\n\nLZ菲律宾02\nlz泰国01\n"
@@ -682,6 +684,16 @@ class CampaignExportFlow(unittest.TestCase):
                 self.context.unroute(ORIGIN + DETAIL)
 
     def test_desktop_form_starts_and_restores_its_download(self):
+        self._check_desktop_download("invited", [
+            ("A", 100, 92.75, 92.75), ("C", 100, 96, 96), ("D", 132, 132, None), ("E", 100, 100, 100),
+        ])
+
+    def test_desktop_original_price_mode_applies_the_custom_discount(self):
+        self._check_desktop_download("reprice_equal_prices", [
+            ("A", 100, 95, 92.75), ("B", 100, 94.99, 92.74), ("D", 132, 122.43, None), ("E", 100, 100, 100),
+        ])
+
+    def _check_desktop_download(self, processing_mode, expected_rows):
         bridge = AppBridge()
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -704,6 +716,7 @@ class CampaignExportFlow(unittest.TestCase):
         })};""")
         finish = threading.Event()
         store_names = ["LZ跨境泰国示例", "LZ跨境菲律宾示例"]
+        originals = {}
         runtime = Mock()
         runtime.list_browsers.return_value = [{"browserName": name, "browserOauth": name} for name in store_names]
 
@@ -714,7 +727,12 @@ class CampaignExportFlow(unittest.TestCase):
             directory = Path(options.output_dir) / browser["browserName"] / site
             directory.mkdir(parents=True)
             path = directory / "活动模板.xlsx"
-            fixture_workbook(browser["browserName"]).save(path)
+            book = fixture_workbook(browser["browserName"], headers=("SKU", "售价", "大促价（必填）", "推荐价"))
+            book.active.append(["D", 132, 132, None])
+            book.active.append(["E", 100, None, 100])
+            book.save(path)
+            book.close()
+            originals[path] = path.read_bytes()
             return path
 
         pages = Path(__file__).resolve().parents[1] / "frontend" / "pages"
@@ -742,7 +760,11 @@ class CampaignExportFlow(unittest.TestCase):
             percent = self.page.get_by_role("spinbutton", name="最低折扣率", exact=True)
             expect(processing).to_have_value("auto")
             expect(percent).to_have_value("95")
-            processing.select_option("invited")
+            expect(processing.get_by_role("option", name="原价提报（自定义折扣）")).to_have_count(1)
+            hint = self.page.locator("#repriceHint")
+            expect(hint).to_be_hidden()
+            processing.select_option(processing_mode)
+            expect(hint).to_have_js_property("hidden", processing_mode != "reprice_equal_prices")
             for invalid in ("", "0", "100.01"):
                 percent.fill(invalid)
                 self.assertFalse(percent.evaluate("input => input.checkValidity()"))
@@ -758,7 +780,8 @@ class CampaignExportFlow(unittest.TestCase):
                 expect(self.page.locator("#siteHint")).to_contain_text("泰国（TH）1 家、菲律宾（PH）1 家")
                 expect(mode_field).to_have_value("unregistered")
                 expect(mode_field).to_be_disabled()
-                expect(processing).to_have_value("invited")
+                expect(processing).to_have_value(processing_mode)
+                expect(hint).to_have_js_property("hidden", processing_mode != "reprice_equal_prices")
                 expect(percent).to_have_value("92.75")
                 expect(processing).to_be_disabled()
                 expect(percent).to_be_disabled()
@@ -771,7 +794,7 @@ class CampaignExportFlow(unittest.TestCase):
             for name, site in zip(store_names, ["TH", "PH"]):
                 path = root / name / site / "活动模板.xlsx"
                 expect(self.page.locator("#logBox")).to_contain_text(str(path))
-                self.assertTrue(path.is_file())
+                self.assertEqual(path.read_bytes(), originals[path])
             self.page.locator("#openFolderBtn").click()
             bridge.reveal_path.assert_called_once_with(str(root))
             self.assertEqual(runner.call_count, 2)
@@ -780,6 +803,7 @@ class CampaignExportFlow(unittest.TestCase):
             snapshot = bridge.get_latest_task_status("lazada_campaign_download")
             self.assertNotIn(account.password, str(snapshot))
             self.assertEqual(snapshot["context"]["threshold"], "0.9275")
+            self.assertEqual(snapshot["context"]["processing_mode"], processing_mode)
             saved = snapshot["result"]["processing"]
             self.assertEqual((saved["success_count"], saved["failed_count"]), (2, 0))
             result_dir = Path(saved["output_dir"])
@@ -789,7 +813,7 @@ class CampaignExportFlow(unittest.TestCase):
                 with Path(store["processed_file"]).open("rb") as stream:
                     book = load_workbook(stream, read_only=True)
                     self.assertEqual(book.active["A1"].value, store["store"])
-                    self.assertEqual(list(book.active.values)[2:], [("A", 100, 92.75, 92.75), ("C", 100, 96, 96)])
+                    self.assertEqual(list(book.active.values)[2:], expected_rows)
                     book.close()
             self.page.reload()
             expect(percent).to_have_value("92.75")

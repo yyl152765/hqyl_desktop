@@ -9,6 +9,10 @@
     $("discountThreshold").value = String(Number((Number(ratio) * 100).toFixed(2)));
   }
 
+  function updateRepriceHint() {
+    $("repriceHint").hidden = $("processingMode").value !== "reprice_equal_prices";
+  }
+
   function updateSiteHint() {
     const seen = new Set();
     const counts = new Map();
@@ -80,6 +84,8 @@
       siteAliases = Object.entries(info.site_aliases);
       $("store").addEventListener("input", updateSiteHint);
       updateSiteHint();
+      $("processingMode").addEventListener("change", updateRepriceHint);
+      updateRepriceHint();
       $("outputDir").value = info.output_dir;
       $("timeoutMinutes").value = info.timeout_minutes;
       showThreshold(info.default_threshold ?? "0.95");
@@ -115,6 +121,7 @@
       $("campaign").value = context.campaign;
       $("mode").value = context.mode || "invited";
       $("processingMode").value = context.processing_mode ?? "auto";
+      updateRepriceHint();
       showThreshold(context.threshold ?? "0.95");
       $("scene").value = context.scene;
       $("outputDir").value = context.output_dir;
